@@ -1,0 +1,597 @@
+// Prisma schema — Property Manager (MVP)
+//
+// Principios:
+//  - Multi-tenant: TODAS las tablas de negocio llevan tenantId (excepto Tenant misma).
+//  - Aislamiento: RLS (Row-Level Security) en Postgres complementa el filtrado a nivel app.
+//  - Audit: AuditEntry es append-only (sin UPDATE/DELETE) con hash chaining.
+//  - Dinero: SIEMPRE en centavos enteros (amountCents), nunca float.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// =============================================================================
+// Tenancy & Auth
+// =============================================================================
+
+model Tenant {
+  id        String   @id @default(cuid())
+  name      String
+  province  String   @default("BC") // MVP: BC; nacional excluyendo Quebec
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users              User[]
+  properties         Property[]
+  owners             Owner[]
+  tenants            TenantRecord[]
+  transactions       Transaction[]
+  bills              Bill[]
+  reconciliationBatches ReconciliationBatch[]
+  discrepancies      Discrepancy[]
+  approvalRequests   ApprovalRequest[]
+  auditEntries       AuditEntry[]
+  integrationConfigs IntegrationConfig[]
+  leases             Lease[]
+  leads              Lead[]
+  chatConversations  ChatConversation[]
+  showings           Showing[]
+  listingPhotos      ListingPhoto[]
+
+  @@map("tenants")
+}
+
+model User {
+  id            String   @id @default(cuid())
+  tenantId      String
+  email         String   @unique
+  passwordHash  String
+  firstName     String
+  lastName      String
+  role          UserRole // property_manager | bookkeeper | broker
+  isActive      Boolean  @default(true)
+  lastLoginAt   DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@map("users")
+}
+
+enum UserRole {
+  property_manager
+  bookkeeper
+  broker
+}
+
+// =============================================================================
+// Propiedades y unidades
+// =============================================================================
+
+model Property {
+  id        String   @id @default(cuid())
+  tenantId  String
+  name      String
+  address   String
+  city      String
+  province  String   @default("BC")
+  postalCode String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  units  Unit[]
+
+  @@unique([tenantId, address])
+  @@index([tenantId])
+  @@map("properties")
+}
+
+model Unit {
+  id         String   @id @default(cuid())
+  propertyId String
+  tenantId   String
+  name       String // ej: "Apt 302"
+  rentCents  Int
+  // URL slug única para SEO (Módulo A). Se genera a partir de property + unit.
+  slug       String
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  property Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  leases   Lease[]
+  leads    Lead[]
+  chatConversations ChatConversation[]
+  showings Showing[]
+  listingPhotos ListingPhoto[]
+
+  @@unique([tenantId, slug])
+  @@index([tenantId, propertyId])
+  @@map("units")
+}
+
+// =============================================================================
+// Contratos (RTA-BC), inquilinos, propietarios
+// =============================================================================
+
+model Lease {
+  id           String   @id @default(cuid())
+  tenantId     String
+  unitId       String
+  tenantRecordId String
+  startDate    DateTime
+  endDate      DateTime
+  rentCents    Int
+  depositCents Int?
+  status       LeaseStatus @default(active)
+  // Documento RTA generado (borrador, requiere firma del Broker).
+  rtaDraftDocRef String?
+  signedDocRef   String?
+  // DocuSign — envelope para firma electrónica (Fase 11)
+  docusignEnvelopeId String?
+  docusignStatus     String? // sent | delivered | completed | declined | voided
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  unit        Unit         @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  tenantRecord TenantRecord @relation(fields: [tenantRecordId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, unitId])
+  @@map("leases")
+}
+
+enum LeaseStatus {
+  draft
+  active
+  ended
+  terminated
+}
+
+model TenantRecord {
+  id        String   @id @default(cuid())
+  tenantId  String
+  firstName String
+  lastName  String
+  email     String?
+  phone     String?
+  // FINTRAC: evidencia de identificación capturada (la validación la hace un humano).
+  idVerificationRef String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  leases Lease[]
+
+  @@index([tenantId])
+  @@map("tenant_records")
+}
+
+model Owner {
+  id        String   @id @default(cuid())
+  tenantId  String
+  firstName String
+  lastName  String
+  email     String?
+  phone     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@map("owners")
+}
+
+// =============================================================================
+// Contabilidad — transacciones, facturas, reconciliación
+// =============================================================================
+
+model Transaction {
+  id          String   @id @default(cuid())
+  tenantId    String
+  type        TransactionType
+  source      TransactionSource // buildium | qbo | bank | manual
+  amountCents Int // positivo = entrada, negativo = salida
+  currency    String   @default("CAD")
+  reference   String // ID externo (Buildium/QBO doc id, e-Transfer ref)
+  unitId      String?
+  occurredAt  DateTime
+  // Matching: a qué ReconciliationBatch pertenece, si ya se reconcilió.
+  reconciliationBatchId String?
+  createdAt   DateTime @default(now())
+
+  tenant              Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  reconciliationBatch ReconciliationBatch? @relation(fields: [reconciliationBatchId], references: [id])
+
+  @@unique([tenantId, source, reference])
+  @@index([tenantId, occurredAt])
+  @@index([tenantId, source])
+  @@map("transactions")
+}
+
+enum TransactionType {
+  rent_payment
+  owner_contribution
+  owner_distribution
+  vendor_bill
+  vendor_payment
+  trust_deposit
+  trust_refund
+  internal_transfer
+  fee
+  other
+}
+
+enum TransactionSource {
+  buildium
+  qbo
+  bank
+  manual
+}
+
+model Bill {
+  id              String   @id @default(cuid())
+  tenantId        String
+  vendorName      String
+  billDate        DateTime
+  dueDate         DateTime?
+  totalCents      Int
+  currency        String   @default("CAD")
+  category        String // AccountCategory del core
+  unitId          String?
+  // OCR: datos de extracción
+  ocrConfidence   Float?
+  sourceDocRef    String? // referencia al recibo original (PDF/imagen)
+  // QBO sync
+  qboBillId       String?
+  qboSyncedAt     DateTime?
+  // HITL: si el OCR pidió revisión humana antes de crear en QBO
+  approvalRequestId String?
+  status          BillStatus @default(pending_ocr)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  tenant           Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  approvalRequest  ApprovalRequest? @relation(fields: [approvalRequestId], references: [id])
+
+  @@index([tenantId, status])
+  @@map("bills")
+}
+
+enum BillStatus {
+  pending_ocr
+  pending_review // HITL: confianza baja
+  approved
+  synced_to_qbo
+  rejected
+}
+
+model ReconciliationBatch {
+  id          String   @id @default(cuid())
+  tenantId    String
+  runDate     DateTime // fecha del matching diario
+  status      String   @default("completed") // completed | partial | failed
+  // Resumen del triple balance
+  qboBalanceCents     Int
+  bankBalanceCents    Int
+  buildiumBalanceCents Int
+  balanced   Boolean
+  createdAt   DateTime @default(now())
+
+  tenant       Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  transactions Transaction[]
+  discrepancies Discrepancy[]
+
+  @@index([tenantId, runDate])
+  @@map("reconciliation_batches")
+}
+
+model Discrepancy {
+  id                  String   @id @default(cuid())
+  tenantId            String
+  reconciliationBatchId String
+  kind                String // missing_in_qbo | missing_in_buildium | missing_in_bank | amount_mismatch
+  entryReference      String
+  entryAmountCents    Int
+  relatedReferences   String[] // otros entries del mismo evento
+  resolved            Boolean  @default(false)
+  resolvedByUserId    String?
+  resolvedAt          DateTime?
+  createdAt           DateTime @default(now())
+
+  tenant              Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  reconciliationBatch ReconciliationBatch @relation(fields: [reconciliationBatchId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, resolved])
+  @@map("discrepancies")
+}
+
+// =============================================================================
+// HITL — cola de aprobaciones humanas
+// =============================================================================
+
+model ApprovalRequest {
+  id            String   @id @default(cuid())
+  tenantId      String
+  // Qué acción se quiere ejecutar (namespace.accion)
+  action        String // ej: "qbo.create_bill", "buildium.mark_paid"
+  // Payload propuesto por la IA (lo que haría si se aprueba)
+  proposedPayload Json
+  // Resultado del confidence scoring
+  confidenceScore Float
+  confidenceReasons String[]
+  status        ApprovalStatus @default(pending)
+  decidedByUserId String?
+  decidedAt     DateTime?
+  decisionNote  String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  bills  Bill[]
+
+  @@index([tenantId, status])
+  @@map("approval_requests")
+}
+
+enum ApprovalStatus {
+  pending
+  approved
+  rejected
+  expired
+}
+
+// =============================================================================
+// Audit Trail — append-only, hash chaining, INMUTABLE
+// =============================================================================
+
+model AuditEntry {
+  id          String   @id @default(cuid())
+  tenantId    String
+  actorId     String // userId o agentId
+  actorType   String // user | system | ai_agent
+  action      String // namespace.accion
+  entityType  String
+  entityId    String
+  payload     Json
+  occurredAt  DateTime
+  previousHash String
+  hash        String
+  createdAt   DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, occurredAt])
+  // No hay updatedAt: la entrada nunca se modifica.
+  // La RLS policy + permisos de BD impiden UPDATE/DELETE.
+  @@map("audit_entries")
+}
+
+// =============================================================================
+// Integraciones — credenciales cifradas por tenant
+// =============================================================================
+
+model IntegrationConfig {
+  id             String   @id @default(cuid())
+  tenantId       String
+  provider       String // buildium | qbo | twilio | plaid | stripe
+  // Credenciales cifradas con INTEGRATION_ENCRYPTION_KEY (simétrico AES).
+  encryptedCredentials String
+  // Tokens OAuth (refresh) cuando aplique, también cifrados.
+  encryptedRefreshToken String?
+  status         String   @default("pending") // pending | connected | error
+  lastSyncedAt   DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, provider])
+  @@index([tenantId])
+  @@map("integration_configs")
+}
+
+// =============================================================================
+// Prospección (Módulo A) — Leads, chatbot omnicanal, fotos IA, URLs por unidad
+// =============================================================================
+
+model Lead {
+  id        String   @id @default(cuid())
+  tenantId  String
+  unitId    String?
+  // Datos del prospecto
+  name      String?
+  email     String?
+  phone     String?
+  message   String?
+  // De dónde vino el lead
+  source    LeadSource
+  // Canal de comunicación preferido
+  preferredChannel String?
+  // Estado del funnel
+  status    LeadStatus @default(new_)
+  // Referencia a ShowMojo cuando se agenda una visita (Fase 10)
+  showmojoShowingId String?
+  tourUrl           String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant       Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  unit         Unit?             @relation(fields: [unitId], references: [id])
+  conversations ChatConversation[]
+  showings     Showing[]
+
+  @@index([tenantId, status])
+  @@index([tenantId, source])
+  @@map("leads")
+}
+
+enum LeadSource {
+  unit_url      // llegó por la URL pública de una unidad
+  whatsapp      // chatbot de WhatsApp
+  sms           // chatbot de SMS
+  telegram      // chatbot de Telegram
+  web           // chat web embebido
+  email         // contacto por email
+  showmojo      // registro de visita en ShowMojo
+  manual        // cargado a mano
+}
+
+enum LeadStatus {
+  new_          // @map("new") — "new" es palabra reservada
+  contacted     // primer contacto hecho
+  tour_scheduled // visita agendada
+  qualified     // calificado
+  converted     // se convirtió en inquilino
+  lost          // descartado
+}
+
+model ChatConversation {
+  id           String   @id @default(cuid())
+  tenantId     String
+  // Identificador externo: número de teléfono (WhatsApp/SMS), chat id (Telegram), session id (web)
+  externalId   String
+  channel      ChatChannel
+  // Contexto: sobre qué unidad pregunta (si se identificó)
+  unitId       String?
+  // Estado de la conversación para el chatbot FSM
+  state        String   @default("greeting") // greeting → collecting_budget → collecting_movein → proposing_units → proposing_tour → scheduling → handoff
+  // Slots recolectados por el FSM (budget, move-in date, etc.)
+  slots        ConversationSlot[]
+  // Mensajes intercambiados
+  messages     ChatMessage[]
+  // Lead asociado (nullable hasta que se crea el lead)
+  leadId       String?
+  lead         Lead?     @relation(fields: [leadId], references: [id])
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  tenant Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  unit   Unit?   @relation(fields: [unitId], references: [id])
+
+  @@unique([tenantId, externalId])
+  @@index([tenantId])
+  @@map("chat_conversations")
+}
+
+enum ChatChannel {
+  whatsapp
+  sms
+  telegram
+  web
+  email
+}
+
+model ConversationSlot {
+  id             String   @id @default(cuid())
+  conversationId String
+  key            String   // ej: budget, move_in_date, occupants, pets
+  value          String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  conversation ChatConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@unique([conversationId, key])
+  @@map("conversation_slots")
+}
+
+model ChatMessage {
+  id              String   @id @default(cuid())
+  conversationId  String
+  role            String   // user | assistant | system
+  content         String
+  // URLs de imágenes/media si el mensaje las incluye (MMS, WhatsApp media, etc.)
+  mediaUrls       String[]
+  createdAt       DateTime @default(now())
+
+  conversation ChatConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId])
+  @@map("chat_messages")
+}
+
+// Modelo para visitas agendadas (ShowMojo o manual)
+model Showing {
+  id              String   @id @default(cuid())
+  tenantId        String
+  leadId          String
+  unitId          String?
+  // Referencia externa en ShowMojo
+  showmojoId      String?
+  scheduledAt     DateTime
+  durationMinutes Int      @default(30)
+  // Broker/PM asignado a la visita
+  brokerUserId    String?
+  status          ShowingStatus @default(scheduled)
+  // URL de la visita en ShowMojo (si aplica)
+  showmojoUrl     String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  lead   Lead   @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  unit   Unit?  @relation(fields: [unitId], references: [id])
+
+  @@index([tenantId, status])
+  @@index([tenantId, scheduledAt])
+  @@map("showings")
+}
+
+enum ShowingStatus {
+  scheduled
+  confirmed
+  completed
+  cancelled
+  no_show
+}
+
+// Fotos de unidades para listings (originales + mejoradas con IA)
+model ListingPhoto {
+  id              String   @id @default(cuid())
+  tenantId        String
+  unitId          String
+  // URL de la imagen original subida por el PM
+  originalUrl     String
+  // URL de la imagen mejorada por Autoenhance.ai
+  enhancedUrl     String?
+  // Tipo de mejora solicitada
+  enhancementType EnhancementType @default(none)
+  // Estado del procesamiento
+  status          PhotoStatus @default(uploaded)
+  // ID de orden en Autoenhance (para correlacionar con el webhook)
+  autoenhanceOrderId String?
+  // ¿Es la foto principal del listing?
+  isPrimary       Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  unit   Unit   @relation(fields: [unitId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, unitId])
+  @@map("listing_photos")
+}
+
+enum EnhancementType {
+  none            // sin mejora (foto original)
+  enhance         // HDR, corrección de iluminación, sky replacement
+  object_removal  // quitar muebles, cajas, objetos que estorban
+  virtual_staging // añadir muebles virtuales a habitaciones vacías
+}
+
+enum PhotoStatus {
+  uploaded       // subida, sin procesar
+  processing     // enviada a Autoenhance, esperando webhook
+  enhanced       // procesada, enhancedUrl disponible
+  failed         // el procesamiento falló
+}

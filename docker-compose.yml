@@ -1,0 +1,43 @@
+# Servicios de infraestructura local para desarrollo.
+# Uso: pnpm db:up   (levanta Postgres + Redis)
+#      pnpm db:down (los detiene)
+#
+# Puertos: usamos 5433/6380 para evitar chocar con Postgres/Redis
+# que pudieran estar corriendo en los puertos estándar de tu máquina.
+#
+# Nota: los volúmenes persisten datos entre reinicios.
+# Para resetear por completo: docker compose down -v
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: pm-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: pm_dev
+      POSTGRES_PASSWORD: pm_dev_password
+      POSTGRES_DB: property_manager
+    ports:
+      - "5433:5432"
+    volumes:
+      - ./.postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pm_dev -d property_manager"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: pm-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    ports:
+      - "6380:6379"
+    volumes:
+      - ./.redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
