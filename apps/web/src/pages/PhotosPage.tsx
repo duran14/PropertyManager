@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from '../lib/apiClient';
 import { Icon, type IconName } from '../components/Icon';
@@ -45,6 +45,12 @@ export function PhotosPage({ units }: { units: Unit[] }) {
   const [selectedUnit, setSelectedUnit] = useState<string>(units[0]?.id ?? '');
   const [uploadUrl, setUploadUrl] = useState('');
   const [showBefore, setShowBefore] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    if (!selectedUnit && units[0]) {
+      setSelectedUnit(units[0].id);
+    }
+  }, [selectedUnit, units]);
 
   const { data, isLoading } = useQuery<{ photos: ListingPhoto[] }>({
     queryKey: ['photos', selectedUnit],
