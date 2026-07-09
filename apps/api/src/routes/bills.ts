@@ -11,6 +11,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { getAdapters } from '../config/adapters.js';
 import { prisma } from '../config/db.js';
+import { withTenant } from '../config/tenant-context.js';
 import { requireAuth, requireRole, requireUser } from '../auth/context.js';
 import { approveBill, processReceipt, rejectBill } from '../services/bills.service.js';
 
@@ -54,12 +55,14 @@ billsRouter.get('/', requireAuth, async (req, res, next) => {
   try {
     const user = requireUser(req);
     const status = typeof req.query.status === 'string' ? req.query.status : undefined;
-    const bills = await prisma.bill.findMany({
-      where: { tenantId: user.tenantId, ...(status ? { status: status as never } : {}) },
-      orderBy: { createdAt: 'desc' },
-      take: 100,
-      include: { approvalRequest: true },
-    });
+    const bills = await withTenant(prisma, user.tenantId, (tx) =>
+      tx.bill.findMany({
+        where: { tenantId: user.tenantId, ...(status ? { status: status as never } : {}) },
+        orderBy: { createdAt: 'desc' },
+        take: 100,
+        include: { approvalRequest: true },
+      }),
+    );
     res.json({ bills });
   } catch (err) {
     next(err);
@@ -69,10 +72,12 @@ billsRouter.get('/', requireAuth, async (req, res, next) => {
 billsRouter.get('/:id', requireAuth, async (req, res, next) => {
   try {
     const user = requireUser(req);
-    const bill = await prisma.bill.findFirst({
-      where: { id: req.params.id, tenantId: user.tenantId },
-      include: { approvalRequest: true },
-    });
+    const bill = await withTenant(prisma, user.tenantId, (tx) =>
+      tx.bill.findFirst({
+        where: { id: req.params.id, tenantId: user.tenantId },
+        include: { approvalRequest: true },
+      }),
+    );
     if (!bill) {
       res.status(404).json({ error: 'Bill no encontrado' });
       return;

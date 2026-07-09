@@ -10,6 +10,7 @@ import type { PlaidAdapter, QboAdapter } from '@property-manager/adapters';
 import { reconcile, type LedgerEntry } from '@property-manager/core';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../config/db.js';
+import { withTenant } from '../config/tenant-context.js';
 import { buildAuditCreateInput } from './audit-helpers.js';
 
 export interface ReconcileDeps {
@@ -49,12 +50,14 @@ export async function runReconciliation(
   endOfDay.setHours(23, 59, 59, 999);
 
   // 1. Carga transacciones del día (todas las fuentes ya ingeridas).
-  const txs = await prisma.transaction.findMany({
-    where: {
-      tenantId,
-      occurredAt: { gte: startOfDay, lte: endOfDay },
-    },
-  });
+  const txs = await withTenant(prisma, tenantId, (tx) =>
+    tx.transaction.findMany({
+      where: {
+        tenantId,
+        occurredAt: { gte: startOfDay, lte: endOfDay },
+      },
+    }),
+  );
 
   const ledgerEntries: LedgerEntry[] = txs.map((t) => ({
     id: t.id,
@@ -88,7 +91,7 @@ export async function runReconciliation(
   const balanced = qboBalanceCents === bankBalanceCents && bankBalanceCents === buildiumBalanceCents;
 
   // 4. Persistencia del batch + discrepancias.
-  return prisma.$transaction(async (tx) => {
+  return withTenant(prisma, tenantId, async (tx) => {
     const batch = await tx.reconciliationBatch.create({
       data: {
         tenantId,
@@ -161,15 +164,17 @@ export async function listDiscrepancies(
   tenantId: string,
   opts: { resolved?: boolean; limit?: number } = {},
 ) {
-  return prisma.discrepancy.findMany({
-    where: {
-      tenantId,
-      ...(opts.resolved !== undefined ? { resolved: opts.resolved } : {}),
-    },
-    orderBy: { createdAt: 'desc' },
-    take: opts.limit ?? 50,
-    include: { reconciliationBatch: { select: { runDate: true } } },
-  });
+  return withTenant(prisma, tenantId, (tx) =>
+    tx.discrepancy.findMany({
+      where: {
+        tenantId,
+        ...(opts.resolved !== undefined ? { resolved: opts.resolved } : {}),
+      },
+      orderBy: { createdAt: 'desc' },
+      take: opts.limit ?? 50,
+      include: { reconciliationBatch: { select: { runDate: true } } },
+    }),
+  );
 }
 
 /** Resuelve una discrepancia (bookkeeper la marcó como atendida). */
@@ -178,10 +183,12 @@ export async function resolveDiscrepancy(
   tenantId: string,
   resolvedByUserId: string,
 ): Promise<void> {
-  await prisma.discrepancy.updateMany({
-    where: { id: discrepancyId, tenantId },
-    data: { resolved: true, resolvedByUserId, resolvedAt: new Date() },
-  });
+  await withTenant(prisma, tenantId, (tx) =>
+    tx.discrepancy.updateMany({
+      where: { id: discrepancyId, tenantId },
+      data: { resolved: true, resolvedByUserId, resolvedAt: new Date() },
+    }),
+  );
 }
 
 // Re-export del tipo para conveniencia.

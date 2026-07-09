@@ -9,6 +9,7 @@
 import { Router } from 'express';
 import { getAdapters } from '../config/adapters.js';
 import { prisma } from '../config/db.js';
+import { withTenant } from '../config/tenant-context.js';
 import { requireAuth, requireRole, requireUser } from '../auth/context.js';
 import {
   listDiscrepancies,
@@ -37,11 +38,13 @@ reconciliationRouter.post('/run', requireAuth, requireRole('bookkeeper', 'broker
 reconciliationRouter.get('/batches', requireAuth, async (req, res, next) => {
   try {
     const user = requireUser(req);
-    const batches = await prisma.reconciliationBatch.findMany({
-      where: { tenantId: user.tenantId },
-      orderBy: { runDate: 'desc' },
-      take: 30,
-    });
+    const batches = await withTenant(prisma, user.tenantId, (tx) =>
+      tx.reconciliationBatch.findMany({
+        where: { tenantId: user.tenantId },
+        orderBy: { runDate: 'desc' },
+        take: 30,
+      }),
+    );
     res.json({ batches });
   } catch (err) {
     next(err);

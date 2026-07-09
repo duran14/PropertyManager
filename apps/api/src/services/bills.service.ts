@@ -20,6 +20,7 @@ import { decide } from '@property-manager/core';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../config/db.js';
 import { getEnv } from '../config/env.js';
+import { withTenant } from '../config/tenant-context.js';
 import { buildAuditCreateInput } from './audit-helpers.js';
 
 export interface ProcessReceiptInput {
@@ -93,7 +94,7 @@ export async function processReceipt(
   // 3. Persistencia del Bill con el estado correspondiente.
   const category = pickPrimaryCategory(ocr.lineItems.map((l) => l.suggestedCategory));
 
-  return prisma.$transaction(async (tx) => {
+  return withTenant(prisma, input.tenantId, async (tx) => {
     // Si requiere HITL, creamos el ApprovalRequest primero (lo referenciamos).
     let approvalRequestId: string | null = null;
     let approvalResult: ProcessReceiptResult['approvalRequest'] = null;
@@ -226,10 +227,12 @@ export async function approveBill(
   deps: { qbo: QboAdapter },
   note?: string,
 ): Promise<{ qboBillId: string }> {
-  const bill = await prisma.bill.findFirst({
-    where: { id: billId, tenantId },
-    include: { approvalRequest: true },
-  });
+  const bill = await withTenant(prisma, tenantId, (tx) =>
+    tx.bill.findFirst({
+      where: { id: billId, tenantId },
+      include: { approvalRequest: true },
+    }),
+  );
   if (!bill) throw new Error('Bill no encontrado');
   if (bill.status !== 'pending_review') {
     throw new Error(`Bill no está pendiente de revisión (estado: ${bill.status})`);
@@ -250,7 +253,7 @@ export async function approveBill(
     sourceDocumentRef: bill.sourceDocRef ?? undefined,
   });
 
-  return prisma.$transaction(async (tx) => {
+  return withTenant(prisma, tenantId, async (tx) => {
     await tx.bill.update({
       where: { id: billId },
       data: {
@@ -296,16 +299,18 @@ export async function rejectBill(
   rejecterId: string,
   note?: string,
 ): Promise<void> {
-  const bill = await prisma.bill.findFirst({
-    where: { id: billId, tenantId },
-    include: { approvalRequest: true },
-  });
+  const bill = await withTenant(prisma, tenantId, (tx) =>
+    tx.bill.findFirst({
+      where: { id: billId, tenantId },
+      include: { approvalRequest: true },
+    }),
+  );
   if (!bill) throw new Error('Bill no encontrado');
   if (bill.status !== 'pending_review') {
     throw new Error(`Bill no está pendiente de revisión`);
   }
 
-  return prisma.$transaction(async (tx) => {
+  return withTenant(prisma, tenantId, async (tx) => {
     await tx.bill.update({ where: { id: billId }, data: { status: 'rejected' } });
 
     if (bill.approvalRequestId) {
