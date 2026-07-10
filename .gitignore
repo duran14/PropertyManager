@@ -1,4 +1,4 @@
-# Dependencias
+# Dependencies
 node_modules/
 .pnpm-store/
 
@@ -8,7 +8,7 @@ build/
 *.tsbuildinfo
 .vite/
 
-# Entorno y secretos
+# Environment and secrets
 .env
 .env.local
 .env.*.local
@@ -33,10 +33,12 @@ desktop.ini
 !.vscode/settings.json
 .idea/
 
-# Coverage de tests
+# Test output
 coverage/
 .nyc_output/
+test-results/
+playwright-report/
 
-# Docker volúmenes locales
+# Local Docker volumes
 .postgres-data/
 .redis-data/

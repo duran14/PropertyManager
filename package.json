@@ -2,7 +2,7 @@
   "name": "property-manager",
   "version": "0.1.0",
   "private": true,
-  "description": "Financial Integrity Bridge — SaaS de Property Management para British Columbia (multi-tenant)",
+  "description": "Financial Integrity Bridge SaaS for Property Management in British Columbia",
   "license": "UNLICENSED",
   "packageManager": "pnpm@11.10.0",
   "engines": {
@@ -12,6 +12,8 @@
     "dev": "pnpm -r --parallel --stream run dev",
     "build": "pnpm -r run build",
     "test": "pnpm -r run test",
+    "test:smoke": "playwright test",
+    "test:smoke:headed": "playwright test --headed",
     "lint": "pnpm -r run lint",
     "typecheck": "pnpm -r --filter \"./packages/**\" run typecheck && pnpm -r --filter \"./apps/**\" run typecheck",
     "db:up": "docker compose up -d",
@@ -21,6 +23,7 @@
     "db:studio": "pnpm --filter @property-manager/api exec prisma studio"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.1",
     "prettier": "^3.3.3"
   }
 }

@@ -49,3 +49,13 @@ pnpm db:seed
 ```
 
 The seed rebuilds the deterministic demo tenant and restores the walkthrough data.
+
+## Automated Smoke Test
+
+From the repository root:
+
+```bash
+pnpm test:smoke
+```
+
+The smoke suite starts or reuses the local API and web servers, reseeds the demo data, signs in with the demo roles, and verifies the main walkthrough screens in Chromium.
