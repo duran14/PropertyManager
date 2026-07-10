@@ -163,6 +163,18 @@ Open compliance questions:
 - message retention,
 - Canada-specific SMS rules.
 
+### Twilio MVP implementation note
+
+The first Twilio slice exposes mock-friendly webhook plumbing:
+
+- `POST /webhooks/twilio/sms` for SMS inbound messages.
+- `POST /webhooks/twilio/whatsapp` for WhatsApp inbound messages through Twilio.
+- `POST /webhooks/twilio` remains available as an auto-detect compatibility endpoint.
+- `TWILIO_DEFAULT_TENANT_ID` decides which tenant receives inbound Twilio messages when Twilio cannot send an `x-tenant-id` header.
+- `TWILIO_SMS_FROM` and `TWILIO_WHATSAPP_FROM` keep outbound sender configuration separate.
+
+For local Twilio testing, expose the API with a tunnel and point Twilio Messaging webhooks to the relevant endpoint.
+
 ## Phase 3: WhatsApp
 
 Why third:

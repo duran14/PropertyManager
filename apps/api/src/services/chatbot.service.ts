@@ -378,7 +378,7 @@ async function ensureLead(
       tenantId,
       phone: fromPhone,
       message: firstMessage.slice(0, 500),
-      source: channel === 'telegram' ? 'telegram' : channel === 'web' ? 'web' : channel === 'email' ? 'email' : 'whatsapp',
+      source: getLeadSourceForChannel(channel),
       status: 'new_',
       preferredChannel: channel,
     },
@@ -388,4 +388,12 @@ async function ensureLead(
     data: { leadId: lead.id },
   });
   return true;
+}
+
+function getLeadSourceForChannel(channel: string): 'telegram' | 'web' | 'email' | 'sms' | 'whatsapp' {
+  if (channel === 'telegram') return 'telegram';
+  if (channel === 'web') return 'web';
+  if (channel === 'email') return 'email';
+  if (channel === 'sms') return 'sms';
+  return 'whatsapp';
 }

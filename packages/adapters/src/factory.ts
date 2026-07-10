@@ -59,6 +59,7 @@ export interface Adapters {
  * Cuando se añadan, se importan aquí y se usan si isIntegrationConfigured.
  */
 export function createAdapters(env: Env): Adapters {
+  const twilioAdapter = new TwilioMockAdapter();
   const mockModes: Record<IntegrationKey, boolean> = {
     buildium: !isIntegrationConfigured(env, 'buildium'),
     qbo: !isIntegrationConfigured(env, 'qbo'),
@@ -75,15 +76,15 @@ export function createAdapters(env: Env): Adapters {
   return {
     buildium: new BuildiumMockAdapter(),
     qbo: new QboMockAdapter(),
-    twilio: new TwilioMockAdapter(),
+    twilio: twilioAdapter,
     glm: new GlmMockAdapter(),
     plaid: new PlaidMockAdapter(),
     stripe: new StripeMockAdapter(),
     photoEnhancement: new PhotoEnhancementMockAdapter(),
     showmojo: new ShowMojoMockAdapter(),
     messaging: {
-      whatsapp: new TwilioMessagingWrapper(new TwilioMockAdapter(), 'whatsapp'),
-      sms: new TwilioMessagingWrapper(new TwilioMockAdapter(), 'sms'),
+      whatsapp: new TwilioMessagingWrapper(twilioAdapter, 'whatsapp', env.TWILIO_WHATSAPP_FROM || '+16045550000'),
+      sms: new TwilioMessagingWrapper(twilioAdapter, 'sms', env.TWILIO_SMS_FROM || '+16045550000'),
       telegram: isIntegrationConfigured(env, 'telegram')
         ? new TelegramRealAdapter(env.TELEGRAM_BOT_TOKEN)
         : new TelegramMockAdapter(),
@@ -104,6 +105,7 @@ class TwilioMessagingWrapper implements MessagingAdapter {
   constructor(
     private twilio: TwilioAdapter,
     channel: ChatChannel,
+    private from: string,
   ) {
     this.channel = channel;
   }
@@ -111,7 +113,7 @@ class TwilioMessagingWrapper implements MessagingAdapter {
   async send(message: OutboundMessage): Promise<{ messageId: string }> {
     return this.twilio.send({
       to: message.to,
-      from: process.env.TWILIO_WHATSAPP_FROM || '+16045550000',
+      from: this.from,
       body: message.body,
       channel: this.channel === 'whatsapp' ? 'whatsapp' : 'sms',
     });

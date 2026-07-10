@@ -34,6 +34,7 @@ export function createApp(): express.Application {
     }),
   );
   app.use(express.json({ limit: '2mb' }));
+  app.use(express.urlencoded({ extended: false }));
   app.use(cookieParser());
 
   // Global auth middleware: populates req.user when a valid token is present.

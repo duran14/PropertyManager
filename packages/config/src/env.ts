@@ -56,7 +56,13 @@ const envSchema = z.object({
 
   TWILIO_ACCOUNT_SID: z.string().optional().default(''),
   TWILIO_AUTH_TOKEN: z.string().optional().default(''),
+  TWILIO_SMS_FROM: z.string().optional().default(''),
   TWILIO_WHATSAPP_FROM: z.string().optional().default(''),
+  TWILIO_DEFAULT_TENANT_ID: z
+    .preprocess(
+      (value) => (value === '' ? undefined : value),
+      z.string().min(1).default('tenant_demo_pm'),
+    ),
 
   PLAID_CLIENT_ID: z.string().optional().default(''),
   PLAID_SECRET: z.string().optional().default(''),

@@ -13,6 +13,7 @@ import { Router, type Request } from 'express';
 import { z } from 'zod';
 import { bankNotificationQueue } from '../jobs/queues.js';
 import { getAdapters } from '../config/adapters.js';
+import { getEnv } from '../config/env.js';
 import { handleInboundMessage } from '../services/chatbot.service.js';
 import { createLeadFromShowMojo } from '../services/leads.service.js';
 
@@ -66,25 +67,42 @@ webhooksRouter.post('/buildium', async (req, res, next) => {
 });
 
 // --- Webhook de Twilio (WhatsApp/SMS entrantes) ---
-webhooksRouter.post('/twilio', async (req, res, next) => {
+webhooksRouter.post('/twilio/sms', async (req, res, next) => {
   try {
-    const tenantId = getTenantId(req);
-    const { From, Body, MediaUrl0 } = req.body ?? {};
-    if (!From || !Body) {
-      res.status(400).json({ error: 'From and Body are required' });
+    const result = await processTwilioMessage(req, 'sms');
+    if (!result.ok) {
+      res.status(400).json({ error: result.error });
       return;
     }
-    const adapters = getAdapters();
-    const channel = From.startsWith('whatsapp:') ? 'whatsapp' : 'sms';
-    const from = From.replace('whatsapp:', '');
-    const mediaUrls = MediaUrl0 ? [MediaUrl0] : undefined;
+    res.status(200).json({ status: 'processed', channel: 'sms' });
+  } catch (err) {
+    next(err);
+  }
+});
 
-    const messagingAdapter = channel === 'whatsapp' ? adapters.messaging.whatsapp : adapters.messaging.sms;
-    await handleInboundMessage(
-      { tenantId, from, body: Body, channel, mediaUrls },
-      { glm: adapters.glm, messaging: messagingAdapter, showmojo: adapters.showmojo },
-    );
-    res.status(200).json({ status: 'processed' });
+webhooksRouter.post('/twilio/whatsapp', async (req, res, next) => {
+  try {
+    const result = await processTwilioMessage(req, 'whatsapp');
+    if (!result.ok) {
+      res.status(400).json({ error: result.error });
+      return;
+    }
+    res.status(200).json({ status: 'processed', channel: 'whatsapp' });
+  } catch (err) {
+    next(err);
+  }
+});
+
+webhooksRouter.post('/twilio', async (req, res, next) => {
+  try {
+    const from = typeof req.body?.From === 'string' ? req.body.From : '';
+    const channel = from.startsWith('whatsapp:') ? 'whatsapp' : 'sms';
+    const result = await processTwilioMessage(req, channel);
+    if (!result.ok) {
+      res.status(400).json({ error: result.error });
+      return;
+    }
+    res.status(200).json({ status: 'processed', channel });
   } catch (err) {
     next(err);
   }
@@ -113,3 +131,75 @@ webhooksRouter.post('/showmojo', async (req, res, next) => {
     next(err);
   }
 });
+
+async function processTwilioMessage(
+  req: Request,
+  channel: 'sms' | 'whatsapp',
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!hasRequiredTwilioPayload(req.body)) {
+    return { ok: false, error: 'From and Body are required' };
+  }
+
+  const tenantId = getTwilioTenantId(req);
+  const adapters = getAdapters();
+  const messagingAdapter = channel === 'whatsapp' ? adapters.messaging.whatsapp : adapters.messaging.sms;
+  const inbound = await messagingAdapter.parseWebhook(headersToRecord(req), req.body);
+
+  await handleInboundMessage(
+    {
+      tenantId,
+      from: inbound.from,
+      body: inbound.body,
+      channel,
+      mediaUrls: collectTwilioMediaUrls(req.body),
+    },
+    { glm: adapters.glm, messaging: messagingAdapter, showmojo: adapters.showmojo },
+  );
+  return { ok: true };
+}
+
+function hasRequiredTwilioPayload(body: unknown): boolean {
+  if (!body || typeof body !== 'object') {
+    return false;
+  }
+  const payload = body as Record<string, unknown>;
+  return typeof payload.From === 'string' && payload.From.length > 0
+    && typeof payload.Body === 'string' && payload.Body.length > 0;
+}
+
+function getTwilioTenantId(req: Request): string {
+  const tenantId = req.headers['x-tenant-id'];
+  if (typeof tenantId === 'string' && tenantId) {
+    return tenantId;
+  }
+  return getEnv().TWILIO_DEFAULT_TENANT_ID;
+}
+
+function headersToRecord(req: Request): Record<string, string> {
+  const headers: Record<string, string> = {};
+  for (const [key, value] of Object.entries(req.headers)) {
+    if (typeof value === 'string') {
+      headers[key] = value;
+    }
+  }
+  return headers;
+}
+
+function collectTwilioMediaUrls(body: unknown): string[] | undefined {
+  if (!body || typeof body !== 'object') {
+    return undefined;
+  }
+
+  const payload = body as Record<string, unknown>;
+  const urls = Object.keys(payload)
+    .filter((key) => /^MediaUrl\d+$/.test(key))
+    .sort((a, b) => getTwilioMediaIndex(a) - getTwilioMediaIndex(b))
+    .map((key) => payload[key])
+    .filter((value): value is string => typeof value === 'string' && value.length > 0);
+
+  return urls.length > 0 ? urls : undefined;
+}
+
+function getTwilioMediaIndex(key: string): number {
+  return Number(key.replace('MediaUrl', ''));
+}

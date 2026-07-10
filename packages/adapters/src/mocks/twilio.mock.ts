@@ -1,8 +1,7 @@
 import type { TwilioAdapter, TwilioInbound, TwilioMessage } from '../contracts.js';
 
 /**
- * Mock de Twilio: captura los mensajes "enviados" en memoria para que los tests
- * puedan verificar que el sistema despachó la notificación correcta.
+ * Twilio mock: keeps sent messages in memory and parses Twilio-style inbound payloads.
  */
 export class TwilioMockAdapter implements TwilioAdapter {
   readonly name = 'twilio' as const;
@@ -19,13 +18,21 @@ export class TwilioMockAdapter implements TwilioAdapter {
     body: unknown,
   ): Promise<TwilioInbound> {
     const payload = body as { From?: string; To?: string; Body?: string; MessageSid?: string };
+    const from = payload.From ?? '+16045551234';
+    const to = payload.To ?? '+16045550000';
+    const channel = from.startsWith('whatsapp:') ? 'whatsapp' : 'sms';
+
     return {
-      from: payload.From ?? '+16045551234',
-      to: payload.To ?? '+16045550000',
-      body: payload.Body ?? 'Hola, ¿tienen disponibles?',
-      channel: 'whatsapp',
+      from: stripTwilioChannelPrefix(from),
+      to: stripTwilioChannelPrefix(to),
+      body: payload.Body ?? 'Hi, are there any units available?',
+      channel,
       receivedAt: new Date().toISOString(),
       messageId: payload.MessageSid ?? `SM${Date.now()}`,
     };
   }
+}
+
+function stripTwilioChannelPrefix(value: string): string {
+  return value.replace(/^whatsapp:/, '');
 }
