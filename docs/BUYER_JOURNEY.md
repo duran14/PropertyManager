@@ -40,6 +40,14 @@ The assistant should not proactively cold-call prospects. Voice should be used w
 
 Before the assistant can answer prospects well, the broker or property manager needs an onboarding flow.
 
+The preferred channel rollout order is:
+
+1. Telegram.
+2. WhatsApp.
+3. Voice.
+
+This lets the prospect choose the interaction channel while we keep implementation risk staged.
+
 The onboarding should collect:
 
 - company background,
@@ -51,6 +59,17 @@ The onboarding should collect:
 - showing preferences,
 - compliance requirements,
 - property data.
+
+The onboarding experience likely needs a guided form plus document upload. The client may need to upload:
+
+- logo and brand assets,
+- company documents,
+- service descriptions,
+- pricing sheets,
+- fee schedules,
+- property lists,
+- compliance documents,
+- policies and scripts currently used by staff.
 
 Property data should include:
 
@@ -67,6 +86,13 @@ Property data should include:
 - any information required to comply with Canadian and British Columbia legislation.
 
 This knowledge should feed the bots that respond in chat and voice.
+
+The property upload and management area should be available to:
+
+- bookkeeper,
+- property manager,
+- broker,
+- assistant.
 
 ## Knowledge Base Direction
 
@@ -126,13 +152,13 @@ The existing Leads module is the starting point. It should be enriched with info
 ## Open Questions
 
 1. What should the assistant disclose at the beginning of a voice call versus later in the conversation?
-2. Which channels are required for the first real MVP: website chat, WhatsApp, Telegram, and voice, or a smaller subset?
-3. Should voice calls be real-time only, callback-request only, or both?
-4. What exact human handoff rules should trigger escalation?
-5. What Canadian or BC-specific leasing information must always be included or avoided?
-6. Should Obsidian be integrated directly, or should the app maintain structured data and publish/sync markdown to Obsidian?
-7. How much personality should be configurable per broker/property manager?
-8. What information is mandatory before a property can be published to the assistant?
+2. Should voice calls be real-time only, callback-request only, or both?
+3. What exact human handoff rules should trigger escalation?
+4. What Canadian or BC-specific leasing information must always be included or avoided?
+5. Should Obsidian be integrated directly, or should the app maintain structured data and publish/sync markdown to Obsidian?
+6. How much personality should be configurable per broker/property manager?
+7. What information is mandatory before a property can be published to the assistant?
+8. What should the first version of the onboarding form ask step by step?
 
 ## Suggested Next Product Work
 
@@ -143,3 +169,13 @@ The existing Leads module is the starting point. It should be enriched with info
 5. Add lead enrichment fields driven by onboarding and conversations.
 6. Prototype the first channel end to end, likely website chat.
 7. Evaluate voice providers separately before committing to implementation.
+
+## Updated Channel Decision
+
+The first real channels should be implemented in this order:
+
+1. Telegram.
+2. WhatsApp.
+3. Voice.
+
+Voice provider research is tracked separately in `docs/VOICE_PROVIDER_RESEARCH.md`.
