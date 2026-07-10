@@ -43,8 +43,9 @@ Before the assistant can answer prospects well, the broker or property manager n
 The preferred channel rollout order is:
 
 1. Telegram.
-2. WhatsApp.
-3. Voice.
+2. SMS through Twilio.
+3. WhatsApp.
+4. Voice.
 
 This lets the prospect choose the interaction channel while we keep implementation risk staged.
 
@@ -70,6 +71,10 @@ The onboarding experience likely needs a guided form plus document upload. The c
 - property lists,
 - compliance documents,
 - policies and scripts currently used by staff.
+
+Onboarding is separate from ongoing property management. Onboarding teaches the system about the company, policies, pricing, tone, and operating preferences.
+
+The app also needs a dedicated property management area where brokers, managers, bookkeepers, and assistants can continuously upload and maintain properties after onboarding.
 
 Property data should include:
 
@@ -98,9 +103,13 @@ The property upload and management area should be available to:
 
 The onboarding knowledge should live in or sync with an Obsidian-based knowledge system.
 
-Open design question:
+Decision:
 
-- Should Obsidian be the source of truth, a synced documentation layer, or an export target from the app?
+- The app is the source of truth.
+- The app stores properties, policies, pricing, uploaded documents, and structured knowledge in the database.
+- The app exports or syncs that structured knowledge to Obsidian-compatible markdown.
+- Obsidian becomes a searchable knowledge layer, not the primary system of record.
+- Assistants can query the Obsidian knowledge layer when they need to search stored context.
 
 We need to evaluate how to connect Obsidian:
 
@@ -175,7 +184,17 @@ The existing Leads module is the starting point. It should be enriched with info
 The first real channels should be implemented in this order:
 
 1. Telegram.
-2. WhatsApp.
-3. Voice.
+2. SMS through Twilio.
+3. WhatsApp.
+4. Voice.
 
 Voice provider research is tracked separately in `docs/VOICE_PROVIDER_RESEARCH.md`.
+
+## Accepted Product Decisions
+
+- Onboarding is a guided setup flow for company, policies, pricing, brand voice, documents, and initial knowledge.
+- Ongoing property upload/management is a separate area in the app.
+- The app is the source of truth for structured knowledge.
+- Obsidian is a synced/searchable knowledge layer.
+- Voice provider selection will be based on a prototype comparing Gemini, ElevenLabs, and OpenAI Realtime with the same leasing script.
+- Human handoff rules and legal/compliance limits are required before real deployment.

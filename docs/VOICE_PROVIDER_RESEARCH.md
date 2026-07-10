@@ -11,8 +11,9 @@ The voice assistant should support prospect-initiated calls or voice interaction
 The current channel rollout preference is:
 
 1. Telegram.
-2. WhatsApp.
-3. Voice.
+2. SMS through Twilio.
+3. WhatsApp.
+4. Voice.
 
 ## Important Architecture Note
 
@@ -115,8 +116,9 @@ Do not choose the final voice provider yet.
 Implement channels in this order:
 
 1. Telegram with text-first assistant.
-2. WhatsApp with text-first assistant.
-3. Voice prototype.
+2. SMS through Twilio with text-first assistant.
+3. WhatsApp with text-first assistant.
+4. Voice prototype.
 
 For the voice prototype, test at least:
 
