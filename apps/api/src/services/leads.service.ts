@@ -22,7 +22,7 @@ export async function createLeadFromShowMojo(input: ShowMojoEvent): Promise<{ le
       name: input.name,
       email: input.email,
       phone: input.phone,
-      message: input.tourDate ? `Tour solicitado para ${input.tourDate}` : 'Tour solicitado vía ShowMojo',
+      message: input.tourDate ? `Tour requested for ${input.tourDate}` : 'Tour requested via ShowMojo',
       source: 'showmojo',
       status: 'tour_scheduled',
     },

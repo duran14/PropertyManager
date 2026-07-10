@@ -36,7 +36,7 @@ function LeasesRoute() {
   return <LeasesPage leases={data?.leases ?? []} />;
 }
 
-/** Wrapper que carga las unidades para pasarlas a PhotosPage. */
+/** Wrapper that loads units before rendering PhotosPage. */
 function PhotosRoute() {
   const { data } = useQuery<{ units: Unit[] }>({
     queryKey: ['units'],

@@ -1,6 +1,6 @@
 /**
- * App Express — configuración de middlewares y montaje de rutas.
- * Separado de server.ts para facilitar testing.
+ * Express app with middleware and route mounting.
+ * Kept separate from server.ts to make testing easier.
  */
 import cookieParser from 'cookie-parser';
 import cors from 'cors';
@@ -36,7 +36,7 @@ export function createApp(): express.Application {
   app.use(express.json({ limit: '2mb' }));
   app.use(cookieParser());
 
-  // Auth middleware global: popula req.user si hay token válido.
+  // Global auth middleware: populates req.user when a valid token is present.
   app.use(authMiddleware);
 
   app.use('/health', healthRouter);
@@ -54,16 +54,14 @@ export function createApp(): express.Application {
   app.use('/showings', showingsRouter);
   app.use('/public', publicRouter);
 
-  // 404 handler
   app.use((_req, res) => {
-    res.status(404).json({ error: 'No encontrado' });
+    res.status(404).json({ error: 'Not found' });
   });
 
-  // Error handler — nunca expongas el stack en producción.
   app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-    const message = err instanceof Error ? err.message : 'Error interno';
+    const message = err instanceof Error ? err.message : 'Internal error';
     if (env.NODE_ENV === 'production') {
-      res.status(500).json({ error: 'Error interno' });
+      res.status(500).json({ error: 'Internal error' });
     } else {
       res.status(500).json({ error: message });
     }

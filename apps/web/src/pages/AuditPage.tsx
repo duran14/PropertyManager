@@ -6,9 +6,9 @@ import { Icon } from '../components/Icon';
 import type { AuditEntry, ChainVerification } from '../lib/types';
 
 const ACTOR_STYLES: Record<string, { badge: string; text: string; label: string }> = {
-  user: { badge: 'bg-blue-50', text: 'text-blue-700', label: 'Usuario' },
-  system: { badge: 'bg-slate-100', text: 'text-slate-700', label: 'Sistema' },
-  ai_agent: { badge: 'bg-violet-50', text: 'text-violet-700', label: 'IA' },
+  user: { badge: 'bg-blue-50', text: 'text-blue-700', label: 'User' },
+  system: { badge: 'bg-slate-100', text: 'text-slate-700', label: 'System' },
+  ai_agent: { badge: 'bg-violet-50', text: 'text-violet-700', label: 'AI' },
 };
 
 export function AuditPage() {
@@ -33,7 +33,7 @@ export function AuditPage() {
         <div>
           <h1 className="text-2xl font-bold">Audit Trail</h1>
           <p className="text-sm text-slate-500">
-            Registro inmutable (hash chaining). Toda acción de usuarios e IA queda trazada.
+            Immutable hash-chained log. Every user and AI action is traceable.
           </p>
         </div>
         {canVerify && (
@@ -43,7 +43,7 @@ export function AuditPage() {
             className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-white font-medium shadow-sm shadow-emerald-600/20 hover:bg-emerald-700 disabled:opacity-50"
           >
             <Icon name="audit" size={18} />
-            {verifyMutation.isPending ? 'Verificando...' : 'Verificar cadena'}
+            {verifyMutation.isPending ? 'Verifying...' : 'Verify chain'}
           </button>
         )}
       </div>
@@ -57,14 +57,13 @@ export function AuditPage() {
           }`}
         >
           {verifyMutation.data.intact ? (
-            <>✓ Cadena íntegra: {verifyMutation.data.totalEntries} entradas verificadas. Ninguna alteración detectada.</>
+            <>Chain intact: {verifyMutation.data.totalEntries} entries verified. No tampering detected.</>
           ) : (
-            <>✕ Cadena ROTA en la entrada #{verifyMutation.data.firstBrokenIndex}. Posible alteración del registro.</>
+            <>Broken chain at entry #{verifyMutation.data.firstBrokenIndex}. Possible audit log tampering.</>
           )}
         </div>
       )}
 
-      {/* Filtros por tipo de actor */}
       <div className="mb-4 flex gap-2 text-sm">
         {['', 'user', 'system', 'ai_agent'].map((f) => (
           <button
@@ -74,7 +73,7 @@ export function AuditPage() {
               filter === f ? 'bg-slate-900 text-white' : 'bg-white border border-slate-200 text-slate-600'
             }`}
           >
-            {f === '' ? 'Todos' : ACTOR_STYLES[f]?.label ?? f}
+            {f === '' ? 'All' : ACTOR_STYLES[f]?.label ?? f}
           </button>
         ))}
       </div>
@@ -83,19 +82,19 @@ export function AuditPage() {
         <table className="w-full text-sm">
           <thead className="bg-slate-50 text-slate-600 text-xs uppercase">
             <tr>
-              <th className="text-left px-4 py-3 font-medium">Acción</th>
+              <th className="text-left px-4 py-3 font-medium">Action</th>
               <th className="text-left px-4 py-3 font-medium">Actor</th>
-              <th className="text-left px-4 py-3 font-medium">Entidad</th>
-              <th className="text-left px-4 py-3 font-medium">Fecha</th>
-              <th className="text-left px-4 py-3 font-medium">Hash (primeros 12)</th>
+              <th className="text-left px-4 py-3 font-medium">Entity</th>
+              <th className="text-left px-4 py-3 font-medium">Date</th>
+              <th className="text-left px-4 py-3 font-medium">Hash prefix</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
             {isLoading && (
-              <tr><td colSpan={5} className="px-4 py-8 text-center text-slate-400">Cargando...</td></tr>
+              <tr><td colSpan={5} className="px-4 py-8 text-center text-slate-400">Loading...</td></tr>
             )}
             {!isLoading && entries.length === 0 && (
-              <tr><td colSpan={5} className="px-4 py-8 text-center text-slate-400">Sin entradas de auditoría.</td></tr>
+              <tr><td colSpan={5} className="px-4 py-8 text-center text-slate-400">No audit entries yet.</td></tr>
             )}
             {entries.map((entry) => {
               const style = ACTOR_STYLES[entry.actorType] ?? ACTOR_STYLES.system;
@@ -108,12 +107,12 @@ export function AuditPage() {
                     </span>
                   </td>
                   <td className="px-4 py-3 text-slate-600 text-xs">
-                    {entry.entityType} · {entry.entityId.slice(-8)}
+                    {entry.entityType} / {entry.entityId.slice(-8)}
                   </td>
                   <td className="px-4 py-3 text-slate-600">
                     {new Date(entry.occurredAt).toLocaleString('en-CA')}
                   </td>
-                  <td className="px-4 py-3 font-mono text-xs text-slate-400">{entry.hash.slice(0, 12)}…</td>
+                  <td className="px-4 py-3 font-mono text-xs text-slate-400">{entry.hash.slice(0, 12)}...</td>
                 </tr>
               );
             })}
@@ -122,7 +121,7 @@ export function AuditPage() {
       </div>
       {entries.length > 0 && (
         <p className="text-xs text-slate-400 mt-3">
-          Mostrando {entries.length} entradas más recientes. Las entradas son append-only (sin UPDATE/DELETE).
+          Showing the {entries.length} most recent entries. Entries are append-only with no update or delete path.
         </p>
       )}
     </div>

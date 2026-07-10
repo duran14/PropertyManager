@@ -1,13 +1,5 @@
 /**
- * Servicio de Scheduling — conecta el chatbot con ShowMojo.
- *
- * Cuando el FSM llega a 'scheduling':
- *  1. Obtiene horarios disponibles de ShowMojo para la unidad.
- *  2. El bot los propone al prospecto.
- *  3. El prospecto elige → se crea la visita en ShowMojo.
- *  4. Se crea un registro `Showing` en la BD.
- *  5. Se notifica al broker/PM asignado.
- *  6. El lead avanza a `tour_scheduled`.
+ * Scheduling service connecting the chatbot to ShowMojo.
  */
 import type { ShowMojoAdapter, ShowMojoSlot } from '@property-manager/adapters';
 import { prisma } from '../config/db.js';
@@ -20,14 +12,10 @@ export interface AvailableSlotsResult {
     startAt: string;
     endAt: string;
     brokerName?: string;
-    label: string; // texto legible para mostrar al prospecto
+    label: string;
   }>;
 }
 
-/**
- * Obtiene horarios disponibles para una unidad y los formatea
- * para que el chatbot los presente al prospecto.
- */
 export async function getAvailableSlots(
   tenantId: string,
   unitId: string,
@@ -37,7 +25,7 @@ export async function getAvailableSlots(
     where: { id: unitId, tenantId },
     include: { property: true },
   });
-  if (!unit) throw new Error('Unidad no encontrada');
+  if (!unit) throw new Error('Unit not found');
 
   const from = new Date();
   const to = new Date();
@@ -57,9 +45,6 @@ export async function getAvailableSlots(
   };
 }
 
-/**
- * Agenda una visita: crea el showing en ShowMojo + en la BD.
- */
 export async function scheduleTour(input: {
   tenantId: string;
   unitId: string;
@@ -81,18 +66,16 @@ export async function scheduleTour(input: {
   const unit = await prisma.unit.findFirst({
     where: { id: unitId, tenantId },
   });
-  if (!unit) throw new Error('Unidad no encontrada');
+  if (!unit) throw new Error('Unit not found');
 
-  // Obtiene los slots de nuevo para seleccionar el elegido.
   const from = new Date();
   const to = new Date();
   to.setDate(to.getDate() + 14);
   const listingCode = `unit_${unit.slug}`;
   const slots = await adapter.getAvailableSlots(listingCode, from.toISOString(), to.toISOString());
   const slot = slots[slotIndex];
-  if (!slot) throw new Error(`Slot ${slotIndex} no disponible`);
+  if (!slot) throw new Error(`Slot ${slotIndex} is not available`);
 
-  // Crea la visita en ShowMojo.
   const { showing } = await adapter.createShowing({
     listingCode,
     slot,
@@ -101,7 +84,6 @@ export async function scheduleTour(input: {
     prospectEmail: input.prospectEmail,
   });
 
-  // Persiste en la BD.
   const dbShowing = await prisma.showing.create({
     data: {
       tenantId,
@@ -114,7 +96,6 @@ export async function scheduleTour(input: {
     },
   });
 
-  // Actualiza el lead.
   await prisma.lead.update({
     where: { id: leadId },
     data: {
@@ -139,7 +120,6 @@ export async function scheduleTour(input: {
     },
   });
 
-  // Notifica al broker/PM.
   await notifyBroker(tenantId, dbShowing.id, slot, input.prospectName);
 
   return {
@@ -150,10 +130,6 @@ export async function scheduleTour(input: {
   };
 }
 
-/**
- * Notifica al broker/PM que hay una visita nueva.
- * En MVP: log + auditoría. Con Twilio/email real: mandaría mensaje.
- */
 async function notifyBroker(
   tenantId: string,
   showingId: string,
@@ -161,16 +137,14 @@ async function notifyBroker(
   prospectName: string,
 ): Promise<void> {
   const message =
-    `🗓️ Nueva visita agendada:\n` +
-    `Prospecto: ${prospectName}\n` +
-    `Fecha: ${formatSlotLabel(slot)}\n` +
-    `Broker: ${slot.brokerName ?? 'Por asignar'}\n` +
-    `Confirma la visita en el panel.`;
+    `New showing scheduled:\n` +
+    `Prospect: ${prospectName}\n` +
+    `Date: ${formatSlotLabel(slot)}\n` +
+    `Broker: ${slot.brokerName ?? 'Unassigned'}\n` +
+    `Confirm the showing in the dashboard.`;
 
-  console.log(`[Scheduling] Notificación al broker:\n${message}\n`);
+  console.log(`[Scheduling] Broker notification:\n${message}\n`);
 
-  // En el futuro: buscar el broker asignado y mandarle WhatsApp/email.
-  // Por ahora, solo auditoría.
   await writeAudit({
     tenantId,
     actorId: 'scheduling_service',
@@ -182,7 +156,6 @@ async function notifyBroker(
   });
 }
 
-/** El broker confirma que está disponible para la visita. */
 export async function confirmShowing(
   showingId: string,
   tenantId: string,
@@ -192,7 +165,7 @@ export async function confirmShowing(
   const showing = await prisma.showing.findFirst({
     where: { id: showingId, tenantId },
   });
-  if (!showing) throw new Error('Visita no encontrada');
+  if (!showing) throw new Error('Showing not found');
 
   if (showing.showmojoId) {
     await adapters.showmojo.confirmShowing(showing.showmojoId);
@@ -214,7 +187,6 @@ export async function confirmShowing(
   });
 }
 
-/** Cancela una visita. */
 export async function cancelShowing(
   showingId: string,
   tenantId: string,
@@ -225,7 +197,7 @@ export async function cancelShowing(
   const showing = await prisma.showing.findFirst({
     where: { id: showingId, tenantId },
   });
-  if (!showing) throw new Error('Visita no encontrada');
+  if (!showing) throw new Error('Showing not found');
 
   if (showing.showmojoId) {
     await adapters.showmojo.cancelShowing(showing.showmojoId, reason);
@@ -247,7 +219,6 @@ export async function cancelShowing(
   });
 }
 
-/** Lista las visitas de un tenant. */
 export async function listShowings(
   tenantId: string,
   opts: { status?: string; leadId?: string } = {},
@@ -270,5 +241,5 @@ function formatSlotLabel(slot: ShowMojoSlot): string {
   const start = new Date(slot.startAt);
   const dayName = start.toLocaleDateString('en-CA', { weekday: 'short', month: 'short', day: 'numeric' });
   const time = start.toLocaleTimeString('en-CA', { hour: 'numeric', minute: '2-digit', hour12: true });
-  return `${dayName} a las ${time}${slot.brokerName ? ` (${slot.brokerName})` : ''}`;
+  return `${dayName} at ${time}${slot.brokerName ? ` (${slot.brokerName})` : ''}`;
 }

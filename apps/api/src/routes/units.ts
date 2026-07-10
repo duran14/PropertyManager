@@ -1,7 +1,7 @@
 /**
- * Rutas de Unidades y Propiedades.
+ * Unit and property routes.
  *
- *  GET /units          — lista unidades del tenant (con propiedad)
+ *  GET /units          - list tenant units with property data
  *  GET /units/:id      — detalle de una unidad
  */
 import { Router } from 'express';
@@ -32,7 +32,7 @@ unitsRouter.get('/:id', requireAuth, async (req, res, next) => {
       include: { property: true },
     });
     if (!unit) {
-      res.status(404).json({ error: 'Unidad no encontrada' });
+      res.status(404).json({ error: 'Unit not found' });
       return;
     }
     res.json({ unit });

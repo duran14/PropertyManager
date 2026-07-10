@@ -49,7 +49,7 @@ sentinelRouter.post('/process-payment', requireAuth, requireRole('bookkeeper', '
     const user = requireUser(req);
     const parsed = paymentSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: 'Payload inválido', details: parsed.error.flatten() });
+      res.status(400).json({ error: 'Invalid payload', details: parsed.error.flatten() });
       return;
     }
     const job = await bankNotificationQueue.add('e-transfer', {

@@ -29,7 +29,7 @@ billsRouter.post('/process-receipt', requireAuth, async (req, res, next) => {
     const user = requireUser(req);
     const parsed = receiptSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: 'Recibo inválido', details: parsed.error.flatten() });
+      res.status(400).json({ error: 'Invalid receipt', details: parsed.error.flatten() });
       return;
     }
 
@@ -79,7 +79,7 @@ billsRouter.get('/:id', requireAuth, async (req, res, next) => {
       }),
     );
     if (!bill) {
-      res.status(404).json({ error: 'Bill no encontrado' });
+      res.status(404).json({ error: 'Bill not found' });
       return;
     }
     res.json({ bill });

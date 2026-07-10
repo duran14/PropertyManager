@@ -5,9 +5,9 @@ import { ApiError } from '../lib/apiClient';
 import { Icon } from '../components/Icon';
 
 const DEMO_ACCOUNTS = [
-  { email: 'pm@pacificridge.ca', label: 'Property Manager', desc: 'admin del tenant' },
-  { email: 'books@pacificridge.ca', label: 'Bookkeeper', desc: 'contabilidad / HITL' },
-  { email: 'broker@pacificridge.ca', label: 'Broker', desc: 'supervisión legal' },
+  { email: 'pm@pacificridge.ca', label: 'Property Manager', desc: 'leasing and operations' },
+  { email: 'books@pacificridge.ca', label: 'Bookkeeper', desc: 'accounting and HITL review' },
+  { email: 'broker@pacificridge.ca', label: 'Broker', desc: 'compliance and approvals' },
 ];
 
 export function LoginPage() {
@@ -26,7 +26,7 @@ export function LoginPage() {
       await login(email, password);
       navigate('/');
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Error al iniciar sesión');
+      setError(err instanceof ApiError ? err.message : 'Unable to sign in');
     } finally {
       setLoading(false);
     }
@@ -40,7 +40,7 @@ export function LoginPage() {
             <Icon name="home" size={28} />
           </div>
           <h1 className="text-2xl font-bold text-slate-900">Property Manager</h1>
-          <p className="text-sm text-slate-500">Financial Integrity Bridge · British Columbia</p>
+          <p className="text-sm text-slate-500">Financial Integrity Bridge / British Columbia</p>
         </div>
 
         <form onSubmit={handleSubmit} className="bg-white rounded-lg shadow-sm border border-slate-200 p-6 space-y-4">
@@ -55,7 +55,7 @@ export function LoginPage() {
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">Contraseña</label>
+            <label className="block text-sm font-medium text-slate-700 mb-1">Password</label>
             <input
               type="password"
               value={password}
@@ -76,12 +76,12 @@ export function LoginPage() {
             disabled={loading}
             className="w-full rounded-md bg-brand-600 px-4 py-2 text-white font-medium hover:bg-brand-700 disabled:opacity-50"
           >
-            {loading ? 'Iniciando...' : 'Iniciar sesión'}
+            {loading ? 'Signing in...' : 'Sign in'}
           </button>
         </form>
 
         <div className="mt-6 text-xs text-slate-500 space-y-2">
-          <p className="font-medium text-slate-600">Cuentas de demo (password: Password123!):</p>
+          <p className="font-medium text-slate-600">Demo accounts (password: Password123!):</p>
           {DEMO_ACCOUNTS.map((acc) => (
             <button
               key={acc.email}
@@ -91,7 +91,7 @@ export function LoginPage() {
               }}
               className="block w-full text-left hover:text-brand-600"
             >
-              <span className="font-mono">{acc.email}</span> — {acc.label} ({acc.desc})
+              <span className="font-mono">{acc.email}</span> - {acc.label} ({acc.desc})
             </button>
           ))}
         </div>

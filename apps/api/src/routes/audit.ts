@@ -51,7 +51,7 @@ auditRouter.post('/rta/draft', requireAuth, requireRole('property_manager', 'bro
     const user = requireUser(req);
     const parsed = draftSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: 'leaseId requerido' });
+      res.status(400).json({ error: 'leaseId is required' });
       return;
     }
     const draft = await generateRtaDraft({
@@ -72,7 +72,7 @@ auditRouter.post('/rta/sign', requireAuth, requireRole('broker'), async (req, re
     const user = requireUser(req);
     const parsed = signSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: 'leaseId y signedDocRef requeridos' });
+      res.status(400).json({ error: 'leaseId and signedDocRef are required' });
       return;
     }
     await signRtaDraft(parsed.data.leaseId, user.tenantId, user.userId, parsed.data.signedDocRef);

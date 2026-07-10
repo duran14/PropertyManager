@@ -78,11 +78,11 @@ export const ICON_COLORS: Record<IconName, IconColor> = {
   dashboard: { badge: 'bg-blue-50', text: 'text-blue-600' },
   home: { badge: 'bg-blue-50', text: 'text-blue-600' },
 
-  // Facturas — indigo
+  // Bills - indigo
   bills: { badge: 'bg-indigo-50', text: 'text-indigo-600' },
   receipt: { badge: 'bg-indigo-50', text: 'text-indigo-600' },
 
-  // Reconciliación — teal
+  // Reconciliation - teal
   reconciliation: { badge: 'bg-teal-50', text: 'text-teal-600' },
 
   // Auditoría — esmeralda
@@ -101,7 +101,7 @@ export const ICON_COLORS: Record<IconName, IconColor> = {
   // QuickBooks — cyan
   qbo: { badge: 'bg-cyan-50', text: 'text-cyan-600' },
 
-  // Acciones
+  // Actions
   upload: { badge: 'bg-blue-50', text: 'text-blue-600' },
   approve: { badge: 'bg-green-50', text: 'text-green-600' },
   reject: { badge: 'bg-red-50', text: 'text-red-600' },

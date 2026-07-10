@@ -233,7 +233,7 @@ export async function approveBill(
       include: { approvalRequest: true },
     }),
   );
-  if (!bill) throw new Error('Bill no encontrado');
+  if (!bill) throw new Error('Bill not found');
   if (bill.status !== 'pending_review') {
     throw new Error(`Bill no está pendiente de revisión (estado: ${bill.status})`);
   }
@@ -305,7 +305,7 @@ export async function rejectBill(
       include: { approvalRequest: true },
     }),
   );
-  if (!bill) throw new Error('Bill no encontrado');
+  if (!bill) throw new Error('Bill not found');
   if (bill.status !== 'pending_review') {
     throw new Error(`Bill no está pendiente de revisión`);
   }

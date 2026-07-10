@@ -1,8 +1,8 @@
 /**
- * Cliente HTTP base para la API.
+ * Base HTTP client for the API.
  *
- * En desarrollo, las llamadas van a /api/* que Vite proxya a localhost:4000.
- * El access token se guarda en memoria (no localStorage — mitigación XSS).
+ * In development, calls go to /api/* and Vite proxies them to localhost:4000.
+ * The access token stays in memory instead of localStorage to reduce XSS risk.
  */
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? '/api';
@@ -50,7 +50,7 @@ export async function apiFetch<T>(
   const data = await res.json().catch(() => null);
 
   if (!res.ok) {
-    throw new ApiError(res.status, data?.error ?? 'Error de red', data?.details);
+    throw new ApiError(res.status, data?.error ?? 'Network error', data?.details);
   }
   return data as T;
 }

@@ -12,14 +12,14 @@ interface NavItem {
 
 const NAV: NavItem[] = [
   { to: '/', label: 'Dashboard', icon: 'dashboard', roles: ['property_manager', 'bookkeeper', 'broker'] },
-  { to: '/photos', label: 'Fotos IA', icon: 'sparkles', roles: ['property_manager', 'broker'] },
+  { to: '/photos', label: 'AI Photos', icon: 'sparkles', roles: ['property_manager', 'broker'] },
   { to: '/leads', label: 'Leads', icon: 'leads', roles: ['property_manager', 'bookkeeper', 'broker'] },
   { to: '/showings', label: 'Showings', icon: 'showings', roles: ['property_manager', 'broker'] },
   { to: '/conversations', label: 'Conversations', icon: 'chat', roles: ['property_manager', 'bookkeeper', 'broker'] },
   { to: '/sentinel', label: 'Financial Sentinel', icon: 'sentinel', roles: ['property_manager', 'bookkeeper', 'broker'] },
-  { to: '/bills', label: 'Facturas / OCR', icon: 'bills', roles: ['property_manager', 'bookkeeper', 'broker'] },
-  { to: '/leases', label: 'Contratos · RTA', icon: 'rta', roles: ['property_manager', 'bookkeeper', 'broker'] },
-  { to: '/reconciliation', label: 'Reconciliación', icon: 'reconciliation', roles: ['bookkeeper', 'broker'] },
+  { to: '/bills', label: 'Bills / OCR', icon: 'bills', roles: ['property_manager', 'bookkeeper', 'broker'] },
+  { to: '/leases', label: 'Leases / RTA', icon: 'rta', roles: ['property_manager', 'bookkeeper', 'broker'] },
+  { to: '/reconciliation', label: 'Reconciliation', icon: 'reconciliation', roles: ['bookkeeper', 'broker'] },
   { to: '/audit', label: 'Audit Trail', icon: 'audit', roles: ['bookkeeper', 'broker'] },
 ];
 
@@ -31,7 +31,6 @@ export function Layout({ children }: { children: ReactNode }) {
 
   return (
     <div className="min-h-screen flex">
-      {/* Sidebar */}
       <aside className="w-64 bg-slate-900 text-slate-300 flex flex-col">
         <div className="p-4 border-b border-slate-700 flex items-center gap-2.5">
           <span className="inline-flex items-center justify-center w-8 h-8 rounded-lg bg-brand-600">
@@ -82,12 +81,11 @@ export function Layout({ children }: { children: ReactNode }) {
             onClick={logout}
             className="text-xs text-slate-400 hover:text-white"
           >
-            Cerrar sesión
+            Sign out
           </button>
         </div>
       </aside>
 
-      {/* Contenido */}
       <main className="flex-1 overflow-auto">
         <div className="p-8 max-w-7xl mx-auto">{children}</div>
       </main>

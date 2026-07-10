@@ -13,11 +13,11 @@ const STATUS_STYLES: Record<string, string> = {
 };
 
 const STATUS_LABELS: Record<string, string> = {
-  pending_ocr: 'OCR pendiente',
-  pending_review: 'Revisión humana',
-  approved: 'Aprobado',
-  synced_to_qbo: 'Sincronizado QBO',
-  rejected: 'Rechazado',
+  pending_ocr: 'OCR pending',
+  pending_review: 'Human review',
+  approved: 'Approved',
+  synced_to_qbo: 'Synced to QBO',
+  rejected: 'Rejected',
 };
 
 function formatMoney(cents: number, currency: string): string {
@@ -65,9 +65,9 @@ export function BillsPage() {
     <div>
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold">Facturas / OCR</h1>
+          <h1 className="text-2xl font-bold">Bills / OCR</h1>
           <p className="text-sm text-slate-500">
-            Sube recibos de proveedores. La IA extrae los datos y los sincroniza con QuickBooks.
+            Upload vendor receipts. The AI extracts the bill data and prepares QuickBooks sync.
           </p>
         </div>
         <button
@@ -76,7 +76,7 @@ export function BillsPage() {
           className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-white font-medium shadow-sm shadow-blue-600/20 hover:bg-blue-700 disabled:opacity-50"
         >
           <Icon name="upload" size={18} />
-          {uploadMutation.isPending ? 'Procesando...' : 'Subir recibo'}
+          {uploadMutation.isPending ? 'Processing...' : 'Upload receipt'}
         </button>
         <input
           ref={fileInput}
@@ -93,16 +93,15 @@ export function BillsPage() {
 
       {uploadMutation.isError && (
         <div className="mb-4 rounded-md bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">
-          Error al procesar el recibo. Verifica que sea un PDF o imagen válido.
+          Unable to process the receipt. Upload a valid PDF or image file.
         </div>
       )}
       {uploadMutation.isSuccess && (
         <div className="mb-4 rounded-md bg-green-50 border border-green-200 px-3 py-2 text-sm text-green-700">
-          ✅ Recibo procesado: {uploadMutation.data.bill.vendorName} — {formatMoney(uploadMutation.data.bill.totalCents, 'CAD')} ({STATUS_LABELS[uploadMutation.data.bill.status] ?? uploadMutation.data.bill.status})
+          Receipt processed: {uploadMutation.data.bill.vendorName} - {formatMoney(uploadMutation.data.bill.totalCents, 'CAD')} ({STATUS_LABELS[uploadMutation.data.bill.status] ?? uploadMutation.data.bill.status})
         </div>
       )}
 
-      {/* Filtros */}
       <div className="mb-4 flex gap-2 text-sm">
         {['', 'pending_review', 'synced_to_qbo', 'rejected'].map((f) => (
           <button
@@ -112,31 +111,34 @@ export function BillsPage() {
               filter === f ? 'bg-slate-900 text-white' : 'bg-white border border-slate-200 text-slate-600'
             }`}
           >
-            {f === '' ? 'Todos' : STATUS_LABELS[f] ?? f}
+            {f === '' ? 'All bills' : STATUS_LABELS[f] ?? f}
           </button>
         ))}
       </div>
 
-      {/* Tabla */}
       <div className="bg-white rounded-lg border border-slate-200 overflow-hidden">
         <table className="w-full text-sm">
           <thead className="bg-slate-50 text-slate-600 text-xs uppercase">
             <tr>
-              <th className="text-left px-4 py-3 font-medium">Proveedor</th>
-              <th className="text-left px-4 py-3 font-medium">Fecha</th>
-              <th className="text-right px-4 py-3 font-medium">Monto</th>
-              <th className="text-left px-4 py-3 font-medium">Categoría</th>
-              <th className="text-center px-4 py-3 font-medium">Confianza OCR</th>
-              <th className="text-center px-4 py-3 font-medium">Estado</th>
-              <th className="text-center px-4 py-3 font-medium">Acciones</th>
+              <th className="text-left px-4 py-3 font-medium">Vendor</th>
+              <th className="text-left px-4 py-3 font-medium">Date</th>
+              <th className="text-right px-4 py-3 font-medium">Amount</th>
+              <th className="text-left px-4 py-3 font-medium">Category</th>
+              <th className="text-center px-4 py-3 font-medium">OCR confidence</th>
+              <th className="text-center px-4 py-3 font-medium">Status</th>
+              <th className="text-center px-4 py-3 font-medium">Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
             {isLoading && (
-              <tr><td colSpan={7} className="px-4 py-8 text-center text-slate-400">Cargando...</td></tr>
+              <tr><td colSpan={7} className="px-4 py-8 text-center text-slate-400">Loading bills...</td></tr>
             )}
             {!isLoading && bills.length === 0 && (
-              <tr><td colSpan={7} className="px-4 py-8 text-center text-slate-400">No hay facturas. Sube un recibo para empezar.</td></tr>
+              <tr>
+                <td colSpan={7} className="px-4 py-8 text-center text-slate-400">
+                  No bills match this filter. Upload a receipt or switch filters to continue the demo.
+                </td>
+              </tr>
             )}
             {bills.map((bill) => (
               <tr key={bill.id} className="hover:bg-slate-50">
@@ -165,7 +167,7 @@ export function BillsPage() {
                         className="inline-flex items-center gap-1 rounded-md bg-green-50 px-2 py-1 text-xs font-medium text-green-700 hover:bg-green-100"
                       >
                         <Icon name="approve" size={14} />
-                        Aprobar
+                        Approve
                       </button>
                       <button
                         onClick={() => rejectMutation.mutate(bill.id)}
@@ -173,7 +175,7 @@ export function BillsPage() {
                         className="inline-flex items-center gap-1 rounded-md bg-red-50 px-2 py-1 text-xs font-medium text-red-700 hover:bg-red-100"
                       >
                         <Icon name="reject" size={14} />
-                        Rechazar
+                        Reject
                       </button>
                     </div>
                   )}
@@ -198,7 +200,6 @@ function fileToBase64(file: File): Promise<string> {
     const reader = new FileReader();
     reader.onload = () => {
       const result = reader.result as string;
-      // Quita el prefijo data:...;base64,
       const base64 = result.split(',')[1] ?? '';
       resolve(base64);
     };

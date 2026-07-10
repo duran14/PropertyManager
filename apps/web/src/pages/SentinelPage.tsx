@@ -17,7 +17,7 @@ export function SentinelPage() {
   const { data: status, isLoading } = useQuery<SentinelStatus>({
     queryKey: ['sentinel-status'],
     queryFn: () => apiFetch('/sentinel/status'),
-    refetchInterval: 5000, // refresh para ver jobs procesándose
+    refetchInterval: 5000,
   });
 
   const paymentMutation = useMutation({
@@ -54,25 +54,24 @@ export function SentinelPage() {
           Financial Sentinel
         </h1>
         <p className="text-sm text-slate-500">
-          El agente IA procesa e-Transfers bancarios: identifica el inquilino, calcula confianza y decide auto-aprobar o pedir revisión humana.
+          The AI agent processes bank e-Transfers, identifies tenants, scores confidence, and decides whether to auto-approve or request human review.
         </p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Panel izquierdo: simular e-Transfer */}
         <div className="space-y-6">
           <div className="bg-white rounded-lg border border-slate-200 p-5">
             <h2 className="font-medium mb-1 flex items-center gap-2">
               <Icon name="etransfer" size={18} className="text-teal-600" />
-              Procesar e-Transfer
+              Process e-Transfer
             </h2>
             <p className="text-xs text-slate-500 mb-4">
-              Simula un aviso bancario entrante. El Sentinel lo procesará en background.
+              Simulate an incoming bank notification. Sentinel will process it in the background.
             </p>
 
             <form onSubmit={handleSubmit} className="space-y-3">
               <div>
-                <label className="block text-xs font-medium text-slate-600 mb-1">Monto (CAD)</label>
+                <label className="block text-xs font-medium text-slate-600 mb-1">Amount (CAD)</label>
                 <input
                   type="number"
                   step="0.01"
@@ -84,7 +83,7 @@ export function SentinelPage() {
                 />
               </div>
               <div>
-                <label className="block text-xs font-medium text-slate-600 mb-1">Referencia</label>
+                <label className="block text-xs font-medium text-slate-600 mb-1">Reference</label>
                 <input
                   type="text"
                   value={reference}
@@ -95,7 +94,7 @@ export function SentinelPage() {
                 />
               </div>
               <div>
-                <label className="block text-xs font-medium text-slate-600 mb-1">Remitente (opcional)</label>
+                <label className="block text-xs font-medium text-slate-600 mb-1">Sender (optional)</label>
                 <input
                   type="text"
                   value={sender}
@@ -105,10 +104,10 @@ export function SentinelPage() {
                 />
               </div>
               {paymentMutation.isError && (
-                <p className="text-xs text-red-600">Error al encolar el e-Transfer.</p>
+                <p className="text-xs text-red-600">Unable to queue the e-Transfer.</p>
               )}
               {paymentMutation.isSuccess && (
-                <p className="text-xs text-green-600">✓ e-Transfer encolado. El worker lo procesará en segundos.</p>
+                <p className="text-xs text-green-600">e-Transfer queued. The worker will process it shortly.</p>
               )}
               <button
                 type="submit"
@@ -116,28 +115,19 @@ export function SentinelPage() {
                 className="inline-flex items-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-white font-medium shadow-sm shadow-violet-600/20 hover:bg-violet-700 disabled:opacity-50"
               >
                 <Icon name="etransfer" size={16} />
-                {paymentMutation.isPending ? 'Encolando...' : 'Procesar e-Transfer'}
+                {paymentMutation.isPending ? 'Queueing...' : 'Process e-Transfer'}
               </button>
             </form>
           </div>
 
-          {/* Estado de colas */}
           <div className="bg-white rounded-lg border border-slate-200 p-5">
-            <h2 className="font-medium mb-3">Estado de colas (BullMQ)</h2>
+            <h2 className="font-medium mb-3">Queue status (BullMQ)</h2>
             {isLoading ? (
-              <p className="text-sm text-slate-400">Cargando...</p>
+              <p className="text-sm text-slate-400">Loading...</p>
             ) : (
               <div className="grid grid-cols-2 gap-3">
-                <QueueCard
-                  title="Reconciliación"
-                  counts={status?.queues.reconciliation}
-                  color="text-teal-600"
-                />
-                <QueueCard
-                  title="e-Transfer"
-                  counts={bankQueue}
-                  color="text-violet-600"
-                />
+                <QueueCard title="Reconciliation" counts={status?.queues.reconciliation} color="text-teal-600" />
+                <QueueCard title="e-Transfer" counts={bankQueue} color="text-violet-600" />
               </div>
             )}
             <button
@@ -146,17 +136,16 @@ export function SentinelPage() {
               className="mt-4 inline-flex items-center gap-2 rounded-lg bg-teal-600 px-4 py-2 text-white text-sm font-medium hover:bg-teal-700 disabled:opacity-50"
             >
               <Icon name="refresh" size={16} />
-              {reconcileMutation.isPending ? 'Encolando...' : 'Ejecutar reconciliación'}
+              {reconcileMutation.isPending ? 'Queueing...' : 'Run reconciliation'}
             </button>
           </div>
         </div>
 
-        {/* Panel derecho: actividad reciente del Sentinel */}
         <div className="bg-white rounded-lg border border-slate-200 p-5">
-          <h2 className="font-medium mb-3">Actividad reciente del agente IA</h2>
+          <h2 className="font-medium mb-3">Recent AI agent activity</h2>
           {recentActions.length === 0 ? (
             <p className="text-sm text-slate-400 py-8 text-center">
-              Sin actividad. Procesa un e-Transfer para ver al Sentinel en acción.
+              No activity yet. Process an e-Transfer to see Sentinel in action.
             </p>
           ) : (
             <div className="space-y-3 max-h-[500px] overflow-y-auto">
@@ -174,9 +163,7 @@ export function SentinelPage() {
                         {new Date(action.occurredAt).toLocaleTimeString('en-CA')}
                       </span>
                     </div>
-                    {amtCents !== undefined && (
-                      <div className="text-sm font-medium">{formatCents(amtCents)}</div>
-                    )}
+                    {amtCents !== undefined && <div className="text-sm font-medium">{formatCents(amtCents)}</div>}
                     {decision && (
                       <div className="flex items-center gap-2 mt-1">
                         <span
@@ -188,11 +175,11 @@ export function SentinelPage() {
                                 : 'bg-red-100 text-red-700'
                           }`}
                         >
-                          {decision === 'auto_approve' ? 'Auto-aprobado' : decision === 'review' ? 'Revisión humana' : 'Rechazado'}
+                          {decision === 'auto_approve' ? 'Auto-approved' : decision === 'review' ? 'Human review' : 'Rejected'}
                         </span>
                         {score !== undefined && (
                           <span className="text-xs text-slate-500">
-                            confianza {(score * 100).toFixed(0)}%
+                            confidence {(score * 100).toFixed(0)}%
                           </span>
                         )}
                       </div>
@@ -230,10 +217,10 @@ function QueueCard({
     <div className="rounded-lg bg-slate-50 p-3">
       <div className={`text-xs font-medium ${color}`}>{title}</div>
       <div className="mt-2 grid grid-cols-2 gap-1 text-xs">
-        <Stat label="Espera" value={counts?.waiting ?? 0} />
-        <Stat label="Activos" value={counts?.active ?? 0} />
-        <Stat label="Hechos" value={counts?.completed ?? 0} color="text-green-600" />
-        <Stat label="Fallidos" value={counts?.failed ?? 0} color={counts?.failed ? 'text-red-600' : ''} />
+        <Stat label="Waiting" value={counts?.waiting ?? 0} />
+        <Stat label="Active" value={counts?.active ?? 0} />
+        <Stat label="Done" value={counts?.completed ?? 0} color="text-green-600" />
+        <Stat label="Failed" value={counts?.failed ?? 0} color={counts?.failed ? 'text-red-600' : ''} />
       </div>
     </div>
   );

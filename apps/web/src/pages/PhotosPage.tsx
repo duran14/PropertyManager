@@ -21,9 +21,9 @@ interface Unit {
 }
 
 const ENHANCEMENT_OPTIONS: Array<{ type: 'enhance' | 'object_removal' | 'virtual_staging'; label: string; icon: IconName; desc: string }> = [
-  { type: 'enhance', label: 'Mejorar', icon: 'sparkles', desc: 'HDR, iluminación, cielo' },
-  { type: 'object_removal', label: 'Quitar objetos', icon: 'document', desc: 'Muebles, cajas, desorden' },
-  { type: 'virtual_staging', label: 'Staging virtual', icon: 'home', desc: 'Añadir muebles IA' },
+  { type: 'enhance', label: 'Enhance', icon: 'sparkles', desc: 'HDR, lighting, sky replacement' },
+  { type: 'object_removal', label: 'Clean up', icon: 'document', desc: 'Remove furniture, boxes, or clutter' },
+  { type: 'virtual_staging', label: 'Stage', icon: 'home', desc: 'Add AI-generated furniture' },
 ];
 
 const STATUS_STYLES: Record<string, string> = {
@@ -34,10 +34,10 @@ const STATUS_STYLES: Record<string, string> = {
 };
 
 const STATUS_LABELS: Record<string, string> = {
-  uploaded: 'Subida',
-  processing: 'Procesando',
-  enhanced: 'Mejorada',
-  failed: 'Falló',
+  uploaded: 'Uploaded',
+  processing: 'Processing',
+  enhanced: 'Enhanced',
+  failed: 'Failed',
 };
 
 export function PhotosPage({ units }: { units: Unit[] }) {
@@ -57,7 +57,6 @@ export function PhotosPage({ units }: { units: Unit[] }) {
     queryFn: () => apiFetch(`/photos/units/${selectedUnit}/photos`),
     enabled: !!selectedUnit,
     refetchInterval: (query) => {
-      // Auto-refresh si hay fotos procesándose.
       const photos = query.state.data?.photos ?? [];
       return photos.some((p) => p.status === 'processing') ? 3000 : false;
     },
@@ -89,15 +88,14 @@ export function PhotosPage({ units }: { units: Unit[] }) {
   return (
     <div>
       <div className="mb-6">
-        <h1 className="text-2xl font-bold">Galería de Fotos IA</h1>
+        <h1 className="text-2xl font-bold">AI Photo Gallery</h1>
         <p className="text-sm text-slate-500">
-          Sube fotos del inmueble y mejóralas con IA: HDR, remoción de objetos, staging virtual.
+          Upload listing photos and enhance them with AI: HDR, object removal, and virtual staging.
         </p>
       </div>
 
-      {/* Selector de unidad */}
       <div className="mb-6 flex items-center gap-3">
-        <label className="text-sm font-medium text-slate-600">Unidad:</label>
+        <label className="text-sm font-medium text-slate-600">Unit:</label>
         <select
           value={selectedUnit}
           onChange={(e) => setSelectedUnit(e.target.value)}
@@ -105,21 +103,20 @@ export function PhotosPage({ units }: { units: Unit[] }) {
         >
           {units.map((u) => (
             <option key={u.id} value={u.id}>
-              {u.name} · {u.property.name}
+              {u.name} / {u.property.name}
             </option>
           ))}
         </select>
       </div>
 
-      {/* Subir foto */}
       <div className="mb-6 bg-white rounded-lg border border-slate-200 p-4">
-        <h2 className="font-medium mb-3 text-sm">Subir foto</h2>
+        <h2 className="font-medium mb-3 text-sm">Upload photo</h2>
         <div className="flex gap-2">
           <input
             type="url"
             value={uploadUrl}
             onChange={(e) => setUploadUrl(e.target.value)}
-            placeholder="https://ejemplo.com/foto-original.jpg"
+            placeholder="https://example.com/original-photo.jpg"
             className="flex-1 rounded-md border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500"
           />
           <button
@@ -128,20 +125,17 @@ export function PhotosPage({ units }: { units: Unit[] }) {
             className="inline-flex items-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-white text-sm font-medium hover:bg-violet-700 disabled:opacity-50"
           >
             <Icon name="upload" size={16} />
-            Subir
+            Upload
           </button>
         </div>
-        {uploadMutation.isError && (
-          <p className="text-xs text-red-600 mt-2">Error al subir la foto.</p>
-        )}
+        {uploadMutation.isError && <p className="text-xs text-red-600 mt-2">Unable to upload the photo.</p>}
       </div>
 
-      {/* Galería */}
       {isLoading ? (
-        <p className="text-slate-400">Cargando fotos...</p>
+        <p className="text-slate-400">Loading photos...</p>
       ) : photos.length === 0 ? (
         <div className="bg-white rounded-lg border border-dashed border-slate-300 p-12 text-center">
-          <p className="text-slate-400">Sin fotos. Sube una URL arriba para empezar.</p>
+          <p className="text-slate-400">No photos yet. Add a URL above to start.</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -150,7 +144,6 @@ export function PhotosPage({ units }: { units: Unit[] }) {
             const displayUrl = photo.enhancedUrl && !showOriginal ? photo.enhancedUrl : photo.originalUrl;
             return (
               <div key={photo.id} className="bg-white rounded-lg border border-slate-200 overflow-hidden">
-                {/* Imagen */}
                 <div className="relative aspect-[4/3] bg-slate-100">
                   <img
                     src={displayUrl}
@@ -160,27 +153,24 @@ export function PhotosPage({ units }: { units: Unit[] }) {
                       (e.target as HTMLImageElement).style.display = 'none';
                     }}
                   />
-                  {/* Badge de estado */}
                   <span className={`absolute top-2 left-2 rounded-full px-2 py-0.5 text-xs font-medium ${STATUS_STYLES[photo.status] ?? 'bg-slate-100'}`}>
                     {STATUS_LABELS[photo.status] ?? photo.status}
                   </span>
                   {photo.isPrimary && (
                     <span className="absolute top-2 right-2 rounded-full bg-blue-600 px-2 py-0.5 text-xs font-medium text-white">
-                      Principal
+                      Primary
                     </span>
                   )}
-                  {/* Toggle before/after */}
                   {photo.enhancedUrl && (
                     <button
                       onClick={() => setShowBefore((s) => ({ ...s, [photo.id]: !s[photo.id] }))}
                       className="absolute bottom-2 left-2 rounded-md bg-black/60 px-2 py-1 text-xs text-white hover:bg-black/80"
                     >
-                      {showOriginal ? 'Ver mejorada' : 'Ver original'}
+                      {showOriginal ? 'View enhanced' : 'View original'}
                     </button>
                   )}
                 </div>
 
-                {/* Acciones */}
                 <div className="p-3">
                   {photo.status === 'uploaded' && (
                     <div className="flex gap-1.5">
@@ -199,11 +189,11 @@ export function PhotosPage({ units }: { units: Unit[] }) {
                     </div>
                   )}
                   {photo.status === 'processing' && (
-                    <p className="text-xs text-amber-600 text-center py-1">⏳ Procesando con IA...</p>
+                    <p className="text-xs text-amber-600 text-center py-1">Processing with AI...</p>
                   )}
                   {photo.status === 'enhanced' && (
                     <p className="text-xs text-green-600 text-center py-1">
-                      ✓ {photo.enhancementType.replace('_', ' ')}
+                      {photo.enhancementType.replace('_', ' ')}
                     </p>
                   )}
                 </div>

@@ -61,7 +61,7 @@ export async function generateRtaDraft(input: RtaDraftInput): Promise<RtaDraft> 
       tenantRecord: true,
     },
   });
-  if (!lease) throw new Error('Lease no encontrado');
+  if (!lease) throw new Error('Lease not found');
 
   const tenant = await prisma.tenant.findFirst({
     where: { id: input.tenantId },
@@ -121,7 +121,7 @@ export async function signRtaDraft(
   signedDocRef: string,
 ): Promise<void> {
   const lease = await prisma.lease.findFirst({ where: { id: leaseId, tenantId } });
-  if (!lease) throw new Error('Lease no encontrado');
+  if (!lease) throw new Error('Lease not found');
 
   await prisma.lease.update({
     where: { id: leaseId },

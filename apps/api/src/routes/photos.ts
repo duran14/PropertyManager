@@ -30,7 +30,7 @@ photosRouter.post('/units/:unitId/photos', requireAuth, async (req, res, next) =
     const user = requireUser(req);
     const parsed = uploadSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: 'URL inválida', details: parsed.error.flatten() });
+      res.status(400).json({ error: 'Invalid URL', details: parsed.error.flatten() });
       return;
     }
     // Verificar que la unidad pertenece al tenant.
@@ -38,7 +38,7 @@ photosRouter.post('/units/:unitId/photos', requireAuth, async (req, res, next) =
       where: { id: req.params.unitId, tenantId: user.tenantId },
     });
     if (!unit) {
-      res.status(404).json({ error: 'Unidad no encontrada' });
+      res.status(404).json({ error: 'Unit not found' });
       return;
     }
     const photo = await uploadPhoto({
@@ -74,7 +74,7 @@ photosRouter.post('/photos/:photoId/enhance', requireAuth, async (req, res, next
     const user = requireUser(req);
     const parsed = enhanceSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: 'Tipo de mejora inválido', details: parsed.error.flatten() });
+      res.status(400).json({ error: 'Invalid enhancement type', details: parsed.error.flatten() });
       return;
     }
     const adapters = getAdapters();
@@ -99,7 +99,7 @@ photosRouter.post('/webhooks/autoenhance', async (req, res, next) => {
   try {
     const tenantId = req.headers['x-tenant-id'];
     if (typeof tenantId !== 'string') {
-      res.status(400).json({ error: 'Header x-tenant-id requerido' });
+      res.status(400).json({ error: 'x-tenant-id header is required' });
       return;
     }
     const adapters = getAdapters();

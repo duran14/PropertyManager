@@ -27,7 +27,7 @@ publicRouter.get('/units/:slug', async (req, res, next) => {
   try {
     const tenantId = req.headers['x-tenant-id'];
     if (typeof tenantId !== 'string') {
-      res.status(400).json({ error: 'Header x-tenant-id requerido' });
+      res.status(400).json({ error: 'x-tenant-id header is required' });
       return;
     }
     const unit = await prisma.unit.findFirst({
@@ -35,7 +35,7 @@ publicRouter.get('/units/:slug', async (req, res, next) => {
       include: { property: true },
     });
     if (!unit) {
-      res.status(404).json({ error: 'Unidad no encontrada' });
+      res.status(404).json({ error: 'Unit not found' });
       return;
     }
     res.json({
@@ -67,7 +67,7 @@ publicRouter.post('/units/:slug/contact', async (req, res, next) => {
   try {
     const tenantId = req.headers['x-tenant-id'];
     if (typeof tenantId !== 'string') {
-      res.status(400).json({ error: 'Header x-tenant-id requerido' });
+      res.status(400).json({ error: 'x-tenant-id header is required' });
       return;
     }
     const unit = await prisma.unit.findFirst({
@@ -75,12 +75,12 @@ publicRouter.post('/units/:slug/contact', async (req, res, next) => {
       select: { id: true },
     });
     if (!unit) {
-      res.status(404).json({ error: 'Unidad no encontrada' });
+      res.status(404).json({ error: 'Unit not found' });
       return;
     }
     const parsed = contactSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: 'Datos inválidos', details: parsed.error.flatten() });
+      res.status(400).json({ error: 'Invalid data', details: parsed.error.flatten() });
       return;
     }
     const result = await createLeadFromUnitUrl({
@@ -116,7 +116,7 @@ leadsRouter.patch('/:id/status', requireAuth, async (req, res, next) => {
     const user = requireUser(req);
     const parsed = statusSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: 'status requerido' });
+      res.status(400).json({ error: 'status is required' });
       return;
     }
     await updateLeadStatus(req.params.id, user.tenantId, parsed.data.status);
@@ -132,7 +132,7 @@ leadsRouter.post('/simulate-chat', requireAuth, async (req, res, next) => {
     const user = requireUser(req);
     const { from, body, channel } = req.body as { from?: string; body?: string; channel?: string };
     if (!from || !body) {
-      res.status(400).json({ error: 'from y body requeridos' });
+      res.status(400).json({ error: 'from and body are required' });
       return;
     }
     const adapters = getAdapters();

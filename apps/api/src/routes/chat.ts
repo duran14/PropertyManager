@@ -24,7 +24,7 @@ chatRouter.post('/webhooks/telegram', async (req, res, next) => {
   try {
     const tenantId = req.headers['x-tenant-id'];
     if (typeof tenantId !== 'string') {
-      res.status(400).json({ error: 'Header x-tenant-id requerido' });
+      res.status(400).json({ error: 'x-tenant-id header is required' });
       return;
     }
     const adapters = getAdapters();
@@ -64,12 +64,12 @@ chatRouter.post('/messages', async (req, res, next) => {
   try {
     const tenantId = req.headers['x-tenant-id'];
     if (typeof tenantId !== 'string') {
-      res.status(400).json({ error: 'Header x-tenant-id requerido' });
+      res.status(400).json({ error: 'x-tenant-id header is required' });
       return;
     }
     const parsed = webChatSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: 'Payload inválido', details: parsed.error.flatten() });
+      res.status(400).json({ error: 'Invalid payload', details: parsed.error.flatten() });
       return;
     }
     const adapters = getAdapters();
@@ -121,7 +121,7 @@ chatRouter.get('/conversations/:id', requireAuth, async (req, res, next) => {
       },
     });
     if (!conversation) {
-      res.status(404).json({ error: 'Conversación no encontrada' });
+      res.status(404).json({ error: 'Conversation not found' });
       return;
     }
     res.json({ conversation });
@@ -141,14 +141,14 @@ chatRouter.post('/conversations/:id/reply', requireAuth, async (req, res, next) 
     const user = requireUser(req);
     const parsed = manualReplySchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: 'Mensaje requerido' });
+      res.status(400).json({ error: 'Message is required' });
       return;
     }
     const conversation = await prisma.chatConversation.findFirst({
       where: { id: req.params.id, tenantId: user.tenantId },
     });
     if (!conversation) {
-      res.status(404).json({ error: 'Conversación no encontrada' });
+      res.status(404).json({ error: 'Conversation not found' });
       return;
     }
 
@@ -167,7 +167,7 @@ chatRouter.post('/conversations/:id/reply', requireAuth, async (req, res, next) 
       data: { updatedAt: new Date() },
     });
 
-    // Enviar por el canal correspondiente.
+    // Send through the matching channel.
     const adapters = getAdapters();
     const messagingAdapter = adapters.messaging[conversation.channel as 'whatsapp' | 'sms' | 'telegram' | 'web' | 'email'];
     if (messagingAdapter) {

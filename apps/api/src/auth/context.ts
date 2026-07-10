@@ -1,9 +1,9 @@
 /**
- * Contexto de autenticación: quién es el usuario y a qué tenant pertenece.
+ * Authentication context: who the user is and which tenant they belong to.
  *
- * Se adjunta a req.user tras verificar el JWT. Toda consulta a la BD DEBE
- * filtrar por req.user.tenantId — esto es la primera capa de aislamiento
- * multi-tenant. La segunda capa es RLS en Postgres.
+ * Attached to req.user after JWT verification. Every DB query must filter by
+ * req.user.tenantId; this is the first layer of tenant isolation. RLS in
+ * Postgres is the second layer.
  */
 import type { UserRole } from '@prisma/client';
 import type { NextFunction, Request, Response } from 'express';
@@ -16,40 +16,40 @@ export interface AuthUser {
 }
 
 /**
- * Request autenticada: garantiza que req.user está presente.
- * Úsalo en los handlers que ya pasaron por requireAuth.
+ * Authenticated request: guarantees req.user is present.
+ * Use this in handlers that already passed through requireAuth.
  */
 export type AuthedRequest = Request & { user: AuthUser };
 
-/** Type guard: ¿la petición está autenticada? Lanza si no. */
+/** Type guard: is the request authenticated? Throws when it is not. */
 export function requireUser(req: Request): AuthUser {
   const user = (req as Request & { user?: AuthUser }).user;
   if (!user) {
-    throw new Error('req.user no definido — falta middleware de auth');
+    throw new Error('req.user is not defined; auth middleware is missing');
   }
   return user;
 }
 
-/** Middleware: la ruta requiere usuario autenticado. */
+/** Middleware: the route requires an authenticated user. */
 export function requireAuth(req: Request, res: Response, next: NextFunction): void {
   const user = (req as Request & { user?: AuthUser }).user;
   if (!user) {
-    res.status(401).json({ error: 'No autenticado' });
+    res.status(401).json({ error: 'Not authenticated' });
     return;
   }
   next();
 }
 
-/** Middleware factory: la ruta requiere uno de los roles indicados. */
+/** Middleware factory: the route requires one of the provided roles. */
 export function requireRole(...roles: UserRole[]) {
   return (req: Request, res: Response, next: NextFunction): void => {
     const user = (req as Request & { user?: AuthUser }).user;
     if (!user) {
-      res.status(401).json({ error: 'No autenticado' });
+      res.status(401).json({ error: 'Not authenticated' });
       return;
     }
     if (!roles.includes(user.role)) {
-      res.status(403).json({ error: 'Permisos insuficientes' });
+      res.status(403).json({ error: 'Insufficient permissions' });
       return;
     }
     next();

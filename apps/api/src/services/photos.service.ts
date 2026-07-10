@@ -73,7 +73,7 @@ export async function requestEnhancement(
   const photo = await prisma.listingPhoto.findFirst({
     where: { id: input.photoId, tenantId: input.tenantId },
   });
-  if (!photo) throw new Error('Foto no encontrada');
+  if (!photo) throw new Error('Photo not found');
 
   const result = await adapter.requestEnhancement({
     imageUrl: photo.originalUrl,

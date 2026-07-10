@@ -36,17 +36,22 @@ export function DashboardPage() {
   const newLeads = leads.filter((l) => l.status === 'new_').length;
 
   const stats = [
-    { label: 'Leads nuevos', value: newLeads, icon: 'leads' as IconName, link: '/leads' },
-    { label: 'Facturas en revisión', value: pendingReview, icon: 'pending' as IconName, link: '/bills' },
-    { label: 'Sincronizadas a QBO', value: synced, icon: 'approve' as IconName, link: '/bills' },
-    { label: 'Discrepancias abiertas', value: discrepancies.filter((d) => !d.resolved).length, icon: 'warning' as IconName, link: '/reconciliation' },
+    { label: 'New leads', value: newLeads, icon: 'leads' as IconName, link: '/leads' },
+    { label: 'Bills in review', value: pendingReview, icon: 'pending' as IconName, link: '/bills' },
+    { label: 'Synced to QBO', value: synced, icon: 'approve' as IconName, link: '/bills' },
+    {
+      label: 'Open discrepancies',
+      value: discrepancies.filter((d) => !d.resolved).length,
+      icon: 'warning' as IconName,
+      link: '/reconciliation',
+    },
   ];
 
   return (
     <div>
       <div className="mb-8">
-        <h1 className="text-2xl font-bold">Hola, {user?.firstName}</h1>
-        <p className="text-sm text-slate-500">{user?.tenantName} · Resumen del Puente Contable</p>
+        <h1 className="text-2xl font-bold">Welcome, {user?.firstName}</h1>
+        <p className="text-sm text-slate-500">{user?.tenantName} · Financial Integrity Bridge overview</p>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
@@ -68,37 +73,35 @@ export function DashboardPage() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Flujo del Puente Contable */}
         <div className="bg-white rounded-lg border border-slate-200 p-5">
-          <h2 className="font-medium mb-4">Flujo del Puente Contable</h2>
+          <h2 className="font-medium mb-4">Accounting Bridge Flow</h2>
           <div className="flex items-center gap-3 text-xs text-slate-600 overflow-x-auto pb-2">
-            <FlowStep icon="receipt" label="Recibo" />
+            <FlowStep icon="receipt" label="Receipt" />
             <Arrow />
-            <FlowStep icon="ocr" label="OCR · GLM" sub="extracción IA" />
+            <FlowStep icon="ocr" label="OCR · GLM" sub="AI extraction" />
             <Arrow />
             <FlowStep icon="confidence" label="Confidence" />
             <Arrow />
-            <FlowStep icon="hitl" label="HITL" sub="si confianza baja" />
+            <FlowStep icon="hitl" label="HITL" sub="low confidence" />
             <Arrow />
             <FlowStep icon="qbo" label="QuickBooks" />
           </div>
           <p className="text-xs text-slate-400 mt-4 flex items-center gap-1.5">
             <Icon name="warning" size={14} className="text-amber-500" />
-            El sistema nunca mueve dinero (Regla de Oro). Solo genera instrucciones contables.
+            The system never moves money. It only prepares accounting instructions.
           </p>
         </div>
 
-        {/* Actividad reciente del Sentinel */}
         <div className="bg-white rounded-lg border border-slate-200 p-5">
           <div className="flex items-center justify-between mb-3">
             <h2 className="font-medium flex items-center gap-2">
               <Icon name="sentinel" size={18} className="text-violet-600" />
-              Actividad del Sentinel
+              Sentinel Activity
             </h2>
-            <Link to="/sentinel" className="text-xs text-brand-600 hover:underline">Ver todo →</Link>
+            <Link to="/sentinel" className="text-xs text-brand-600 hover:underline">View all</Link>
           </div>
           {sentinelActions.length === 0 ? (
-            <p className="text-sm text-slate-400 py-4 text-center">Sin actividad reciente.</p>
+            <p className="text-sm text-slate-400 py-4 text-center">No recent activity yet.</p>
           ) : (
             <div className="space-y-2">
               {sentinelActions.slice(0, 4).map((a, i) => {
@@ -158,10 +161,6 @@ function FlowStep({
   );
 }
 
-/**
- * Glifo de IA: robot con un cerebro superpuesto, en tonos violeta.
- * El cuerpo del robot es violeta-600 y el cerebro violeta-300 con relleno.
- */
 function AiGlyph() {
   return (
     <span className="relative inline-flex items-center justify-center">

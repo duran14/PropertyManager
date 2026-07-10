@@ -1,18 +1,8 @@
 /**
- * Chatbot omnicanal con FSM conversacional.
+ * Omnichannel chatbot with a conversation state machine.
  *
- * Diferencias clave vs la versión anterior:
- *  1. Usa GLM con responseSchema → el modelo devuelve JSON estructurado
- *     {intent, reply, slots, next_state} en vez de texto libre.
- *  2. Pasa el historial completo de la conversación (no solo el último mensaje).
- *  3. Recolecta slots (budget, move-in date, occupants, pets) que alimentan
- *     la propuesta de unidades y el agendamiento.
- *  4. Es canal-agnóstico: funciona igual por WhatsApp, Telegram o web chat.
- *  5. Cuando llega a 'scheduling', deriva a ShowMojo (Fase 10).
- *
- * Estados del FSM:
- *  greeting → collecting_budget → collecting_movein → proposing_units
- *           → proposing_tour → scheduling → handoff
+ * The bot uses structured GLM output, keeps conversation history, collects
+ * prospect slots, proposes units, and hands scheduling off to ShowMojo.
  */
 import type { GlmAdapter, MessagingAdapter, ShowMojoAdapter } from '@property-manager/adapters';
 import { prisma } from '../config/db.js';
@@ -30,7 +20,7 @@ export type ConversationState =
 
 export interface InboundChatMessage {
   tenantId: string;
-  from: string; // teléfono, chat id, o session id
+  from: string;
   body: string;
   channel: 'whatsapp' | 'sms' | 'telegram' | 'web' | 'email';
   mediaUrls?: string[];
@@ -41,20 +31,14 @@ export interface BotReply {
   newState: ConversationState;
   leadCreated: boolean;
   handoff: boolean;
-  /** Slots recolectados en este turno. */
   extractedSlots?: Record<string, string>;
-  /** Unidades propuestas (si aplica). */
   proposedUnits?: Array<{ id: string; name: string; rent: number }>;
 }
 
-/**
- * Procesa un mensaje entrante y genera la respuesta del bot.
- */
 export async function handleInboundMessage(
   input: InboundChatMessage,
   deps: { glm: GlmAdapter; messaging: MessagingAdapter; showmojo: ShowMojoAdapter },
 ): Promise<BotReply> {
-  // 1. Recuperar o crear conversación.
   const conversation = await prisma.chatConversation.upsert({
     where: {
       tenantId_externalId: { tenantId: input.tenantId, externalId: input.from },
@@ -72,7 +56,6 @@ export async function handleInboundMessage(
     },
   });
 
-  // 2. Guardar el mensaje del usuario.
   await prisma.chatMessage.create({
     data: {
       conversationId: conversation.id,
@@ -82,15 +65,13 @@ export async function handleInboundMessage(
     },
   });
 
-  // 3. Cargar contexto: slots existentes + unidades disponibles.
   const existingSlots: Record<string, string> = {};
-  for (const s of conversation.slots) {
-    existingSlots[s.key] = s.value;
+  for (const slot of conversation.slots) {
+    existingSlots[slot.key] = slot.value;
   }
   const availableUnits = await getAvailableUnits(input.tenantId, existingSlots);
   const currentState = conversation.state as ConversationState;
 
-  // 4. Llamar a GLM con el historial completo y responseSchema estructurado.
   const glmResult = await callGlm(deps.glm, {
     currentState,
     userMessage: input.body,
@@ -99,7 +80,6 @@ export async function handleInboundMessage(
     availableUnits,
   });
 
-  // 5. Persistir slots extraídos.
   if (glmResult.slots) {
     for (const [key, value] of Object.entries(glmResult.slots)) {
       if (value) {
@@ -112,20 +92,14 @@ export async function handleInboundMessage(
     }
   }
 
-  // 6. Actualizar estado de la conversación.
   let newState = glmResult.next_state ?? currentState;
   let finalReply = glmResult.reply;
 
-  // === Lógica de scheduling integrada con ShowMojo ===
-  // Si entramos en scheduling, presentamos los slots disponibles.
-  // Si ya estábamos en scheduling y el usuario eligió un número, agendamos.
   if (newState === 'scheduling' && currentState !== 'scheduling') {
-    // Primera vez en scheduling: obtener y presentar slots.
     const unitId = conversation.unitId ?? (await inferUnitFromSlots(input.tenantId, existingSlots));
     if (unitId) {
       const slotsResult = await getAvailableSlots(input.tenantId, unitId, deps.showmojo);
       if (slotsResult.slots.length > 0) {
-        // Guardar los slots en la conversación para referencia.
         await prisma.conversationSlot.upsert({
           where: { conversationId_key: { conversationId: conversation.id, key: 'pending_slots' } },
           update: { value: JSON.stringify(slotsResult.slots) },
@@ -137,17 +111,14 @@ export async function handleInboundMessage(
           create: { conversationId: conversation.id, key: 'scheduling_unit_id', value: unitId },
         });
 
-        const slotsText = slotsResult.slots
-          .map((s) => `${s.index + 1}. ${s.label}`)
-          .join('\n');
+        const slotsText = slotsResult.slots.map((slot) => `${slot.index + 1}. ${slot.label}`).join('\n');
         finalReply =
-          `¡Perfecto! Estos son los horarios disponibles para visitar la propiedad:\n\n` +
+          `Perfect. These are the available tour times:\n\n` +
           `${slotsText}\n\n` +
-          `Responde con el número de la opción que prefieras (1-${slotsResult.slots.length}).`;
+          `Reply with the number of the option you prefer (1-${slotsResult.slots.length}).`;
       }
     }
   } else if (currentState === 'scheduling') {
-    // Ya estábamos en scheduling: ¿el usuario eligió un número?
     const slotChoice = parseInt(input.body.trim(), 10);
     const pendingSlotsRaw = existingSlots['pending_slots'];
     const schedulingUnitId = existingSlots['scheduling_unit_id'];
@@ -159,9 +130,8 @@ export async function handleInboundMessage(
         endAt: string;
         brokerName?: string;
       }>;
-      const chosen = pendingSlots.find((s) => s.index === slotChoice - 1);
+      const chosen = pendingSlots.find((slot) => slot.index === slotChoice - 1);
       if (chosen) {
-        // Obtener el lead de esta conversación.
         const lead = await prisma.lead.findFirst({
           where: { phone: input.from },
         });
@@ -172,23 +142,27 @@ export async function handleInboundMessage(
               unitId: schedulingUnitId,
               leadId: lead.id,
               slotIndex: chosen.index,
-              prospectName: lead.name ?? lead.phone ?? 'Prospecto',
+              prospectName: lead.name ?? lead.phone ?? 'Prospect',
               prospectPhone: lead.phone ?? undefined,
               prospectEmail: lead.email ?? undefined,
               conversationId: conversation.id,
               adapter: deps.showmojo,
             });
             finalReply =
-              `¡Visita agendada! 🗓️\n\n` +
+              `Tour scheduled.\n\n` +
               `${new Date(result.scheduledAt).toLocaleDateString('en-CA', {
-                weekday: 'long', month: 'long', day: 'numeric',
-              })} a las ${new Date(result.scheduledAt).toLocaleTimeString('en-CA', {
-                hour: 'numeric', minute: '2-digit', hour12: true,
+                weekday: 'long',
+                month: 'long',
+                day: 'numeric',
+              })} at ${new Date(result.scheduledAt).toLocaleTimeString('en-CA', {
+                hour: 'numeric',
+                minute: '2-digit',
+                hour12: true,
               })}\n\n` +
-              `El broker confirmará la disponibilidad en breve. ¿Te envío la confirmación por aquí o prefieres otro canal?`;
-            newState = 'handoff'; // visita agendada, fin del funnel del bot.
-          } catch (err) {
-            finalReply = 'Hubo un problema al agendar la visita. ¿Probamos con otro horario?';
+              `The broker will confirm availability shortly. Should I send the confirmation here or through another channel?`;
+            newState = 'handoff';
+          } catch {
+            finalReply = 'There was a problem scheduling the tour. Would you like to try another time?';
             newState = 'scheduling';
           }
         }
@@ -201,22 +175,18 @@ export async function handleInboundMessage(
     data: { state: newState },
   });
 
-  // 7. Guardar respuesta del bot.
   await prisma.chatMessage.create({
     data: { conversationId: conversation.id, role: 'assistant', content: finalReply },
   });
 
-  // 8. Crear/actualizar Lead.
   const leadCreated = await ensureLead(input.tenantId, conversation.id, input.from, input.body, input.channel);
 
-  // 9. Enviar respuesta por el canal correspondiente.
   await deps.messaging.send({
     to: input.from,
     body: finalReply,
     channel: input.channel,
   });
 
-  // 10. Auditoría.
   await writeAudit({
     tenantId: input.tenantId,
     actorId: 'chatbot_agent',
@@ -240,18 +210,16 @@ export async function handleInboundMessage(
     leadCreated,
     handoff: newState === 'handoff',
     extractedSlots: glmResult.slots,
-    proposedUnits: newState === 'proposing_tour' ? availableUnits.slice(0, 3).map((u) => ({
-      id: u.id,
-      name: u.name,
-      rent: u.rentCents,
-    })) : undefined,
+    proposedUnits: newState === 'proposing_tour'
+      ? availableUnits.slice(0, 3).map((unit) => ({
+        id: unit.id,
+        name: unit.name,
+        rent: unit.rentCents,
+      }))
+      : undefined,
   };
 }
 
-/**
- * Llama a GLM con un prompt estructurado y responseSchema.
- * El modelo devuelve JSON con: intent, reply, slots extraídos, próximo estado.
- */
 async function callGlm(
   glm: GlmAdapter,
   ctx: {
@@ -268,21 +236,21 @@ async function callGlm(
 }> {
   const systemPrompt = buildSystemPrompt(ctx.currentState, ctx.availableUnits, ctx.existingSlots);
   const historyText = ctx.history
-    .slice(-10) // últimos 10 turnos para no exceder contexto
-    .map((m) => `${m.role}: ${m.content}`)
+    .slice(-10)
+    .map((message) => `${message.role}: ${message.content}`)
     .join('\n');
 
   try {
     const res = await glm.reason({
       systemPrompt,
-      userPrompt: `Historial:\n${historyText}\n\nMensaje actual del usuario: ${ctx.userMessage}`,
+      userPrompt: `History:\n${historyText}\n\nCurrent user message: ${ctx.userMessage}`,
       responseSchema: {
         type: 'object',
         properties: {
-          reply: { type: 'string', description: 'Respuesta del bot al usuario (máx 2-3 frases)' },
+          reply: { type: 'string', description: 'Bot reply to the user (max 2-3 sentences)' },
           slots: {
             type: 'object',
-            description: 'Información extraída del mensaje (budget, move_in_date, occupants, pets, etc.)',
+            description: 'Information extracted from the message (budget, move_in_date, occupants, pets, etc.)',
             properties: {
               budget: { type: 'string' },
               move_in_date: { type: 'string' },
@@ -307,14 +275,13 @@ async function callGlm(
       next_state?: ConversationState;
     };
     return {
-      reply: parsed.reply ?? '¿En qué más puedo ayudarte?',
+      reply: parsed.reply ?? 'What else can I help with?',
       slots: parsed.slots,
       next_state: parsed.next_state,
     };
   } catch {
-    // Fallback: si GLM falla o no devuelve JSON válido, respuesta genérica.
     return {
-      reply: 'Gracias por tu mensaje. ¿Podrías decirme cuál es tu presupuesto mensual y cuándo te gustaría mudarte?',
+      reply: 'Thanks for your message. What is your monthly budget, and when would you like to move in?',
       next_state: ctx.currentState === 'greeting' ? 'collecting_budget' : ctx.currentState,
     };
   }
@@ -326,41 +293,38 @@ function buildSystemPrompt(
   slots: Record<string, string>,
 ): string {
   const unitsText = availableUnits.length > 0
-    ? availableUnits.map((u) => `- ${u.name} en ${u.city}: $${(u.rentCents / 100).toFixed(0)}/mes`).join('\n')
-    : 'No hay unidades disponibles actualmente.';
+    ? availableUnits.map((unit) => `- ${unit.name} in ${unit.city}: $${(unit.rentCents / 100).toFixed(0)}/month`).join('\n')
+    : 'There are no available units right now.';
 
   const slotsText = Object.keys(slots).length > 0
-    ? '\nInformación ya conocida del usuario:\n' + Object.entries(slots).map(([k, v]) => `  ${k}: ${v}`).join('\n')
+    ? '\nKnown user information:\n' + Object.entries(slots).map(([key, value]) => `  ${key}: ${value}`).join('\n')
     : '';
 
   return [
-    'Eres el asistente virtual de una empresa de Property Management en British Columbia, Canadá.',
-    'Atiendes consultas de personas interesadas en alquilar propiedades.',
-    'Responde de forma amable, concisa y profesional. Máximo 2-3 frases por mensaje.',
-    'NO des información legal ni financiera — deriva esas consultas a un humano.',
-    'Tu objetivo es calificar al prospecto y agendar una visita a la propiedad.',
+    'You are the virtual assistant for a Property Management company in British Columbia, Canada.',
+    'You answer inquiries from people interested in renting properties.',
+    'Reply in a friendly, concise, professional tone. Use at most 2-3 sentences per message.',
+    'Do not provide legal or financial advice; hand those questions off to a human.',
+    'Your goal is to qualify the prospect and schedule a property tour.',
     '',
-    `Estado actual de la conversación: ${state}`,
-    'Estados del funnel: greeting → collecting_budget → collecting_movein → proposing_units → proposing_tour → scheduling → handoff',
-    '- greeting: saludo inicial, preguntar qué busca',
-    '- collecting_budget: preguntar presupuesto mensual',
-    '- collecting_movein: preguntar fecha de mudanza',
-    '- proposing_units: sugerir unidades que coincidan',
-    '- proposing_tour: ofrecer agendar una visita',
-    '- scheduling: derivar a agendamiento (ShowMojo)',
-    '- handoff: pasar a humano (consulta fuera de alcance)',
+    `Current conversation state: ${state}`,
+    'Funnel states: greeting -> collecting_budget -> collecting_movein -> proposing_units -> proposing_tour -> scheduling -> handoff',
+    '- greeting: initial greeting, ask what the prospect is looking for',
+    '- collecting_budget: ask for monthly budget',
+    '- collecting_movein: ask for move-in date',
+    '- proposing_units: suggest matching units',
+    '- proposing_tour: offer to schedule a tour',
+    '- scheduling: move into tour scheduling through ShowMojo',
+    '- handoff: hand off to a human when the question is out of scope',
     '',
-    'Unidades disponibles:',
+    'Available units:',
     unitsText,
     slotsText,
     '',
-    'Responde en JSON con: reply (tu mensaje), slots (info extraída), next_state (próximo estado).',
+    'Reply in JSON with: reply (your message), slots (extracted info), next_state (next state).',
   ].join('\n');
 }
 
-/**
- * Obtiene unidades disponibles, filtrando por budget si se conoce.
- */
 async function getAvailableUnits(
   tenantId: string,
   slots: Record<string, string>,
@@ -375,18 +339,14 @@ async function getAvailableUnits(
     include: { property: { select: { city: true } } },
     take: 5,
   });
-  return units.map((u) => ({
-    id: u.id,
-    name: u.name,
-    rentCents: u.rentCents,
-    city: u.property.city,
+  return units.map((unit) => ({
+    id: unit.id,
+    name: unit.name,
+    rentCents: unit.rentCents,
+    city: unit.property.city,
   }));
 }
 
-/**
- * Infiere qué unidad quiere visitar el prospecto cuando no hay unitId en la conversación.
- * Toma la primera unidad disponible que cumpla el budget.
- */
 async function inferUnitFromSlots(
   tenantId: string,
   slots: Record<string, string>,
@@ -395,7 +355,6 @@ async function inferUnitFromSlots(
   return units[0]?.id ?? null;
 }
 
-/** Crea un Lead si no existe (de-duplicación por teléfono). */
 async function ensureLead(
   tenantId: string,
   conversationId: string,

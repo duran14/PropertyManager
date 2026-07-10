@@ -31,13 +31,13 @@ const CHANNEL_STYLES: Record<string, string> = {
 };
 
 const STATE_LABELS: Record<string, string> = {
-  greeting: 'Saludo',
-  collecting_budget: 'Pidiendo presupuesto',
-  collecting_movein: 'Pidiendo fecha',
-  proposing_units: 'Proposando unidades',
-  proposing_tour: 'Ofreciendo visita',
-  scheduling: 'Agendando',
-  handoff: 'Pasar a humano',
+  greeting: 'Greeting',
+  collecting_budget: 'Collecting budget',
+  collecting_movein: 'Collecting move-in date',
+  proposing_units: 'Proposing units',
+  proposing_tour: 'Offering tour',
+  scheduling: 'Scheduling',
+  handoff: 'Human handoff',
 };
 
 export function ConversationsPage() {
@@ -66,7 +66,6 @@ export function ConversationsPage() {
         },
       ),
     onSuccess: (data) => {
-      // Añade el mensaje del staff inmediatamente a la conversación visible.
       queryClient.setQueryData<{ conversation: Conversation }>(
         ['conversation', selectedId],
         (old) => {
@@ -99,22 +98,21 @@ export function ConversationsPage() {
   return (
     <div>
       <div className="mb-6">
-        <h1 className="text-2xl font-bold">Conversaciones</h1>
+        <h1 className="text-2xl font-bold">Conversations</h1>
         <p className="text-sm text-slate-500">
-          Historial de chats del bot con prospectos. Puedes intervenir manualmente cuando sea necesario.
+          Bot chat history with prospects. Staff can step in manually when needed.
         </p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Lista de conversaciones */}
         <div className="lg:col-span-1 bg-white rounded-lg border border-slate-200 overflow-hidden">
           <div className="px-4 py-3 border-b border-slate-200 bg-slate-50">
-            <h2 className="font-medium text-sm">{conversations.length} conversaciones</h2>
+            <h2 className="font-medium text-sm">{conversations.length} conversations</h2>
           </div>
           <div className="divide-y divide-slate-100 max-h-[600px] overflow-y-auto">
-            {isLoading && <p className="p-4 text-sm text-slate-400">Cargando...</p>}
+            {isLoading && <p className="p-4 text-sm text-slate-400">Loading...</p>}
             {conversations.length === 0 && (
-              <p className="p-4 text-sm text-slate-400">Sin conversaciones aún.</p>
+              <p className="p-4 text-sm text-slate-400">No conversations yet.</p>
             )}
             {conversations.map((c) => (
               <button
@@ -141,15 +139,13 @@ export function ConversationsPage() {
           </div>
         </div>
 
-        {/* Detalle de conversación */}
         <div className="lg:col-span-2 bg-white rounded-lg border border-slate-200 overflow-hidden flex flex-col" style={{ minHeight: '600px' }}>
           {!selected ? (
             <div className="flex-1 flex items-center justify-center text-slate-400">
-              Selecciona una conversación para ver el historial
+              Select a conversation to view the history
             </div>
           ) : (
             <>
-              {/* Header */}
               <div className="px-4 py-3 border-b border-slate-200 flex items-center justify-between">
                 <div>
                   <span className={`inline-block rounded-full px-2 py-0.5 text-xs ${CHANNEL_STYLES[selected.channel] ?? 'bg-slate-100'}`}>
@@ -162,7 +158,6 @@ export function ConversationsPage() {
                 <span className="text-xs text-slate-400">{STATE_LABELS[selected.state] ?? selected.state}</span>
               </div>
 
-              {/* Slots recolectados (solo los legibles, no los técnicos) */}
               {selected.slots.filter((s) => !s.key.startsWith('pending_') && !s.key.startsWith('scheduling_')).length > 0 && (
                 <div className="px-4 py-2 border-b border-slate-100 bg-slate-50 flex flex-wrap gap-2">
                   {selected.slots
@@ -184,15 +179,9 @@ export function ConversationsPage() {
                 </div>
               )}
 
-              {/* Mensajes */}
               <div className="flex-1 overflow-y-auto p-4 space-y-2 max-h-[400px]">
                 {selected.messages.map((msg) => (
-                  <div
-                    key={msg.id}
-                    className={`flex ${
-                      msg.role === 'user' ? 'justify-start' : 'justify-end'
-                    }`}
-                  >
+                  <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-start' : 'justify-end'}`}>
                     <div
                       className={`max-w-[75%] rounded-2xl px-3 py-2 text-sm ${
                         msg.role === 'user'
@@ -202,19 +191,14 @@ export function ConversationsPage() {
                             : 'bg-violet-600 text-white rounded-br-md'
                       }`}
                     >
-                      {msg.role === 'staff' && (
-                        <div className="text-[10px] opacity-75 mb-0.5">👤 Staff</div>
-                      )}
-                      {msg.role === 'assistant' && (
-                        <div className="text-[10px] opacity-75 mb-0.5">🤖 Bot</div>
-                      )}
+                      {msg.role === 'staff' && <div className="text-[10px] opacity-75 mb-0.5">Staff</div>}
+                      {msg.role === 'assistant' && <div className="text-[10px] opacity-75 mb-0.5">Bot</div>}
                       {msg.content}
                     </div>
                   </div>
                 ))}
               </div>
 
-              {/* Reply manual */}
               <div className="p-3 border-t border-slate-200 flex gap-2">
                 <input
                   type="text"
@@ -225,7 +209,7 @@ export function ConversationsPage() {
                       replyMutation.mutate({ id: selected.id, message: reply.trim() });
                     }
                   }}
-                  placeholder="Intervenir manualmente..."
+                  placeholder="Write a manual reply..."
                   className="flex-1 rounded-full border border-slate-300 px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500"
                 />
                 <button
@@ -234,7 +218,7 @@ export function ConversationsPage() {
                   className="inline-flex items-center gap-1 rounded-full bg-violet-600 px-4 py-2 text-white text-sm hover:bg-violet-700 disabled:opacity-50"
                 >
                   <Icon name="upload" size={14} className="rotate-90" />
-                  Enviar
+                  Send
                 </button>
               </div>
             </>

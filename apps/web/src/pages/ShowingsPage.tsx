@@ -39,13 +39,12 @@ function formatTime(iso: string): string {
   });
 }
 
-/** Agrupa showings por día para la vista de calendario. */
 function groupByDay(showings: Showing[]): Array<{ date: string; label: string; showings: Showing[] }> {
   const groups = new Map<string, Showing[]>();
-  for (const s of showings) {
-    const dayKey = new Date(s.scheduledAt).toDateString();
+  for (const showing of showings) {
+    const dayKey = new Date(showing.scheduledAt).toDateString();
     if (!groups.has(dayKey)) groups.set(dayKey, []);
-    groups.get(dayKey)!.push(s);
+    groups.get(dayKey)!.push(showing);
   }
   return Array.from(groups.entries())
     .sort(([a], [b]) => new Date(a).getTime() - new Date(b).getTime())
@@ -88,7 +87,7 @@ export function ShowingsPage() {
             Showings & Calendar
           </h1>
           <p className="text-sm text-slate-500">
-            Property tours booked by prospects. Confirm your availability as broker/PM.
+            Property tours booked by prospects. Confirm broker or PM availability.
           </p>
         </div>
         <div className="flex gap-3">
@@ -103,7 +102,6 @@ export function ShowingsPage() {
         </div>
       </div>
 
-      {/* Filtros */}
       <div className="mb-6 flex gap-2 text-sm">
         {['', 'scheduled', 'confirmed', 'completed', 'cancelled'].map((f) => (
           <button
@@ -113,44 +111,40 @@ export function ShowingsPage() {
               filter === f ? 'bg-slate-900 text-white' : 'bg-white border border-slate-200 text-slate-600'
             }`}
           >
-            {f === '' ? 'Todas' : STATUS_META[f]?.label ?? f}
+            {f === '' ? 'All' : STATUS_META[f]?.label ?? f}
           </button>
         ))}
       </div>
 
-      {/* Calendario / Lista por día */}
       {isLoading ? (
-        <p className="text-slate-400">Cargando visitas...</p>
+        <p className="text-slate-400">Loading showings...</p>
       ) : days.length === 0 ? (
         <div className="bg-white rounded-lg border border-dashed border-slate-300 p-12 text-center">
           <IconBadge name="showings" badgeSize={48} />
-          <p className="text-slate-400 mt-3">Sin visitas agendadas. Los prospectos que conversen con el bot y agenden aparecerán aquí.</p>
+          <p className="text-slate-400 mt-3">No showings scheduled yet. Tours booked by the bot will appear here.</p>
         </div>
       ) : (
         <div className="space-y-6">
           {days.map((day) => (
             <div key={day.date}>
-              {/* Header del día */}
               <div className="flex items-center gap-3 mb-3">
                 <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-teal-50 text-teal-700 flex-col">
                   <span className="text-xs font-medium uppercase">
                     {new Date(day.date).toLocaleDateString('en-CA', { month: 'short' })}
                   </span>
-                  <span className="text-lg font-bold leading-none">
-                    {new Date(day.date).getDate()}
-                  </span>
+                  <span className="text-lg font-bold leading-none">{new Date(day.date).getDate()}</span>
                 </div>
                 <h2 className="text-sm font-medium text-slate-700">{day.label}</h2>
-                <span className="text-xs text-slate-400">({day.showings.length} {day.showings.length === 1 ? 'visita' : 'visitas'})</span>
+                <span className="text-xs text-slate-400">
+                  ({day.showings.length} {day.showings.length === 1 ? 'showing' : 'showings'})
+                </span>
               </div>
 
-              {/* Cards de visitas del día */}
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 pl-15">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 md:pl-14">
                 {day.showings.map((showing) => {
                   const meta = STATUS_META[showing.status] ?? STATUS_META.scheduled;
                   return (
                     <div key={showing.id} className="bg-white rounded-lg border border-slate-200 p-4 hover:shadow-sm transition">
-                      {/* Hora y estado */}
                       <div className="flex items-center justify-between mb-3">
                         <div className="flex items-center gap-2">
                           <Icon name="schedule" size={16} className="text-slate-400" />
@@ -162,28 +156,21 @@ export function ShowingsPage() {
                         </span>
                       </div>
 
-                      {/* Prospecto */}
                       <div className="mb-2">
                         <div className="font-medium text-slate-900">
-                          {showing.lead.name ?? showing.lead.phone ?? 'Prospecto'}
+                          {showing.lead.name ?? showing.lead.phone ?? 'Prospect'}
                         </div>
-                        {showing.lead.phone && (
-                          <div className="text-xs text-slate-500">{showing.lead.phone}</div>
-                        )}
-                        {showing.lead.email && (
-                          <div className="text-xs text-slate-500">{showing.lead.email}</div>
-                        )}
+                        {showing.lead.phone && <div className="text-xs text-slate-500">{showing.lead.phone}</div>}
+                        {showing.lead.email && <div className="text-xs text-slate-500">{showing.lead.email}</div>}
                       </div>
 
-                      {/* Unidad */}
                       {showing.unit && (
                         <div className="text-xs text-slate-500 mb-3">
-                          {showing.unit.name} · {showing.unit.property.name}
+                          {showing.unit.name} / {showing.unit.property.name}
                           <div>{showing.unit.property.address}, {showing.unit.property.city}</div>
                         </div>
                       )}
 
-                      {/* Link de ShowMojo */}
                       {showing.showmojoUrl && (
                         <a
                           href={showing.showmojoUrl}
@@ -192,11 +179,10 @@ export function ShowingsPage() {
                           className="inline-flex items-center gap-1 text-xs text-teal-600 hover:underline mb-3"
                         >
                           <Icon name="document" size={12} />
-                          Ver en ShowMojo
+                          View in ShowMojo
                         </a>
                       )}
 
-                      {/* Acciones */}
                       {showing.status === 'scheduled' && (
                         <div className="flex gap-2 pt-2 border-t border-slate-100">
                           <button
@@ -223,16 +209,14 @@ export function ShowingsPage() {
                             <Icon name="approve" size={14} />
                             Visit confirmed
                           </div>
-                          <div className="flex gap-2">
-                            <button
-                              onClick={() => cancelMutation.mutate(showing.id)}
-                              disabled={cancelMutation.isPending}
-                              className="inline-flex items-center justify-center gap-1 rounded-md bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-100"
-                            >
-                              <Icon name="reject" size={14} />
-                              Cancel
-                            </button>
-                          </div>
+                          <button
+                            onClick={() => cancelMutation.mutate(showing.id)}
+                            disabled={cancelMutation.isPending}
+                            className="inline-flex items-center justify-center gap-1 rounded-md bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-100"
+                          >
+                            <Icon name="reject" size={14} />
+                            Cancel
+                          </button>
                         </div>
                       )}
                     </div>

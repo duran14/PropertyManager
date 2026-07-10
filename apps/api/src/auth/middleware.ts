@@ -2,7 +2,7 @@
  * Middleware de autenticación.
  *
  * Extrae el access token del header Authorization (Bearer), lo verifica y
- * adjunta el payload a req.user. Si falta o es inválido, deja req.user
+ * attaches the payload to req.user. If missing or invalid, leaves req.user
  * undefined para que los middlewares de ruta (requireAuth/requireRole) decidan.
  *
  * El refresh token va aparte, en cookie httpOnly, y se gestiona en /auth/refresh.
@@ -15,7 +15,7 @@ import type { AuthUser } from './context.js';
  * Middleware de autenticación.
  *
  * Extrae el access token del header Authorization (Bearer), lo verifica y
- * adjunta el payload a req.user. Si falta o es inválido, deja req.user
+ * attaches the payload to req.user. If missing or invalid, leaves req.user
  * undefined para que los middlewares de ruta (requireAuth/requireRole) decidan.
  *
  * El refresh token va aparte, en cookie httpOnly, y se gestiona en /auth/refresh.
@@ -38,7 +38,7 @@ export function authMiddleware(req: Request, _res: Response, next: NextFunction)
     };
     (req as Request & { user?: AuthUser }).user = user;
   } catch {
-    // Token inválido/expirado: dejamos sin usuario. El 401 lo da requireAuth.
+    // Invalid or expired token: leave the request without a user; requireAuth returns 401.
     (req as Request & { user?: AuthUser }).user = undefined;
   }
   next();

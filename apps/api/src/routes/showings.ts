@@ -1,10 +1,10 @@
 /**
- * Rutas de Showings / Visitas (Módulo A — Fase 10).
+ * Showings routes.
  *
- *  GET  /showings              — lista visitas (filtrable por estado)
- *  GET  /showings/:id          — detalle de una visita
- *  POST /showings/:id/confirm  — broker confirma la visita
- *  POST /showings/:id/cancel   — cancela una visita
+ *  GET  /showings              - list showings, optionally filtered by status
+ *  GET  /showings/:id          - showing detail
+ *  POST /showings/:id/confirm  - broker confirms the showing
+ *  POST /showings/:id/cancel   - cancel a showing
  */
 import { Router } from 'express';
 import { z } from 'zod';
@@ -34,7 +34,7 @@ showingsRouter.get('/:id', requireAuth, async (req, res, next) => {
     const showings = await listShowings(user.tenantId, {});
     const showing = showings.find((s) => s.id === req.params.id);
     if (!showing) {
-      res.status(404).json({ error: 'Visita no encontrada' });
+      res.status(404).json({ error: 'Showing not found' });
       return;
     }
     res.json({ showing });

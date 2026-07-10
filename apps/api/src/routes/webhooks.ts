@@ -7,7 +7,7 @@
  *  POST /webhooks/bank/e-transfer   — aviso de e-Transfer (banco o Plaid)
  *  POST /webhooks/buildium          — eventos de Buildium (Payment/Lease)
  *  POST /webhooks/twilio            — mensajes WhatsApp/SMS entrantes
- *  POST /webhooks/showmojo          — registros de visita y leads
+ *  POST /webhooks/showmojo          - showing registrations and leads
  */
 import { Router, type Request } from 'express';
 import { z } from 'zod';
@@ -26,7 +26,7 @@ export const webhooksRouter = Router();
 function getTenantId(req: Request): string {
   const tenantId = req.headers['x-tenant-id'];
   if (typeof tenantId !== 'string' || !tenantId) {
-    throw new Error('Header x-tenant-id requerido');
+    throw new Error('x-tenant-id header is required');
   }
   return tenantId;
 }
@@ -44,7 +44,7 @@ webhooksRouter.post('/bank/e-transfer', async (req, res, next) => {
     const tenantId = getTenantId(req);
     const parsed = eTransferSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: 'Payload inválido', details: parsed.error.flatten() });
+      res.status(400).json({ error: 'Invalid payload', details: parsed.error.flatten() });
       return;
     }
     await bankNotificationQueue.add('e-transfer', { tenantId, ...parsed.data });
@@ -71,7 +71,7 @@ webhooksRouter.post('/twilio', async (req, res, next) => {
     const tenantId = getTenantId(req);
     const { From, Body, MediaUrl0 } = req.body ?? {};
     if (!From || !Body) {
-      res.status(400).json({ error: 'From y Body requeridos' });
+      res.status(400).json({ error: 'From and Body are required' });
       return;
     }
     const adapters = getAdapters();
@@ -90,7 +90,7 @@ webhooksRouter.post('/twilio', async (req, res, next) => {
   }
 });
 
-// --- Webhook de ShowMojo (registros de visita) ---
+// --- ShowMojo webhook (showing registrations) ---
 const showmojoSchema = z.object({
   name: z.string().optional(),
   email: z.string().email().optional(),
@@ -104,7 +104,7 @@ webhooksRouter.post('/showmojo', async (req, res, next) => {
     const tenantId = getTenantId(req);
     const parsed = showmojoSchema.safeParse(req.body ?? {});
     if (!parsed.success) {
-      res.status(400).json({ error: 'Payload inválido' });
+      res.status(400).json({ error: 'Invalid payload' });
       return;
     }
     const result = await createLeadFromShowMojo({ tenantId, ...parsed.data });
