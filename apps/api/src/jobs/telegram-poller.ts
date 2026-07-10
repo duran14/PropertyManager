@@ -1,10 +1,8 @@
 /**
- * Poller de Telegram — consulta por mensajes nuevos y los pasa al chatbot.
+ * Telegram poller: fetches new messages and passes them to the chatbot.
  *
- * Como estamos en local (sin URL pública), usamos long polling en vez de
- * webhook. Este proceso corre en background dentro del server.
- *
- * En producción con dominio público, se reemplazaría por setWebhook.
+ * Local development uses long polling because there is no public webhook URL.
+ * Production should replace this with setWebhook once a public domain exists.
  */
 import { TelegramRealAdapter } from '@property-manager/adapters';
 import { prisma } from '../config/db.js';
@@ -17,23 +15,21 @@ let polling = false;
 export function startTelegramPoller(): void {
   const env = getEnv();
   if (!env.TELEGRAM_BOT_TOKEN) {
-    console.log('  ℹ️  Telegram poller desactivado (sin TELEGRAM_BOT_TOKEN)');
+    console.log('  Telegram poller disabled because TELEGRAM_BOT_TOKEN is not set');
     return;
   }
 
-  // Verificar que el adapter es el real (no mock).
   const adapters = getAdapters();
   const telegramAdapter = adapters.messaging.telegram;
   if (!(telegramAdapter instanceof TelegramRealAdapter)) {
-    console.log('  ℹ️  Telegram adapter no es real (mock) — poller desactivado');
+    console.log('  Telegram adapter is running in mock mode; poller disabled');
     return;
   }
 
-  console.log('  🤖 Telegram poller iniciado (long polling)');
+  console.log('  Telegram poller started in long polling mode');
   polling = true;
   pollLoop(telegramAdapter).catch((err) => {
-    console.error('[Telegram] Error en poller:', err.message);
-    // Reintento tras 10s si falla.
+    console.error('[Telegram] Poller error:', err.message);
     setTimeout(() => startTelegramPoller(), 10000);
   });
 }
@@ -43,13 +39,14 @@ export function stopTelegramPoller(): void {
 }
 
 async function pollLoop(adapter: TelegramRealAdapter): Promise<void> {
-  // Verificación inicial del token.
+  const env = getEnv();
+
   const verify = await adapter.verifyToken();
   if (!verify.ok) {
-    console.error('[Telegram] Token inválido. Verifica TELEGRAM_BOT_TOKEN.');
+    console.error('[Telegram] Invalid token. Check TELEGRAM_BOT_TOKEN.');
     return;
   }
-  console.log(`  ✓ Bot conectado: @${verify.botName}`);
+  console.log(`  Telegram bot connected: @${verify.botName}`);
 
   const adapters = getAdapters();
 
@@ -57,15 +54,19 @@ async function pollLoop(adapter: TelegramRealAdapter): Promise<void> {
     const messages = await adapter.pollUpdates();
     for (const msg of messages) {
       try {
-        // Determinar a qué tenant pertenece el chat.
-        // En MVP: todos los mensajes van al tenant demo (solo hay uno).
-        // En multi-tenant real: mapear chat_id → tenant via IntegrationConfig.
+        // MVP routing: one shared bot sends all messages to the configured demo tenant.
+        // Multi-tenant routing will map bot token/webhook path or chat setup to IntegrationConfig.
         const tenant = await prisma.tenant.findFirst({
-          where: { id: 'tenant_demo_pm' },
+          where: { id: env.TELEGRAM_DEFAULT_TENANT_ID },
         });
-        if (!tenant) continue;
+        if (!tenant) {
+          console.warn(
+            `[Telegram] Tenant ${env.TELEGRAM_DEFAULT_TENANT_ID} not found; message skipped`,
+          );
+          continue;
+        }
 
-        console.log(`[Telegram] Mensaje de ${msg.from}: "${msg.body.slice(0, 50)}"`);
+        console.log(`[Telegram] Message from ${msg.from}: "${msg.body.slice(0, 50)}"`);
 
         await handleInboundMessage(
           {
@@ -77,7 +78,7 @@ async function pollLoop(adapter: TelegramRealAdapter): Promise<void> {
           { glm: adapters.glm, messaging: adapters.messaging.telegram, showmojo: adapters.showmojo },
         );
       } catch (err) {
-        console.error('[Telegram] Error procesando mensaje:', err);
+        console.error('[Telegram] Error processing message:', err);
       }
     }
   }

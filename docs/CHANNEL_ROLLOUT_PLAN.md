@@ -120,6 +120,16 @@ Then add tenant-owned Telegram bot support:
 
 The current codebase has an early single-token Telegram integration. Before production multi-tenant use, it needs tenant-scoped channel configuration instead of routing every Telegram message to the demo tenant.
 
+#### MVP implementation note
+
+The first implementation keeps the shared bot model explicit:
+
+- `TELEGRAM_BOT_TOKEN` enables the real Telegram adapter.
+- `TELEGRAM_DEFAULT_TENANT_ID` decides which tenant receives inbound messages from the shared bot.
+- The demo default is `tenant_demo_pm`.
+
+This lets an existing Telegram bot answer through the app during mock-friendly testing while preserving the later path to tenant-owned bot tokens stored in encrypted `IntegrationConfig`.
+
 ## Phase 2: SMS through Twilio
 
 Why second:

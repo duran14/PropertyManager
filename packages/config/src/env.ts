@@ -84,6 +84,11 @@ const envSchema = z.object({
 
   // --- Telegram (bot) ---
   TELEGRAM_BOT_TOKEN: z.string().optional().default(''),
+  TELEGRAM_DEFAULT_TENANT_ID: z
+    .preprocess(
+      (value) => (value === '' ? undefined : value),
+      z.string().min(1).default('tenant_demo_pm'),
+    ),
 
   // --- Umbral HITL por defecto ---
   DEFAULT_CONFIDENCE_THRESHOLD: z.coerce.number().min(0).max(1).default(0.85),
