@@ -190,6 +190,11 @@ The first real channels should be implemented in this order:
 
 Voice provider research is tracked separately in `docs/VOICE_PROVIDER_RESEARCH.md`.
 
+Detailed onboarding and channel implementation notes are tracked in:
+
+- `docs/ONBOARDING_AND_PROPERTY_MANAGEMENT_SPEC.md`
+- `docs/CHANNEL_ROLLOUT_PLAN.md`
+
 ## Accepted Product Decisions
 
 - Onboarding is a guided setup flow for company, policies, pricing, brand voice, documents, and initial knowledge.
