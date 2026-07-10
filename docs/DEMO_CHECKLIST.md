@@ -45,7 +45,7 @@ Use `Password123!` for every account.
 From the repository root:
 
 ```bash
-pnpm --filter @property-manager/api seed
+pnpm db:seed
 ```
 
 The seed rebuilds the deterministic demo tenant and restores the walkthrough data.
