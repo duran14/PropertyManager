@@ -1,0 +1,295 @@
+# Project Handoff - Property Manager
+
+Last updated: 2026-07-11, America/Vancouver.
+
+This document is for a future AI agent or developer continuing the project after the current Codex session. It summarizes what was built, what is currently working, how to verify it, and what should come next.
+
+## Current Objective
+
+Build a Property Manager / Broker SaaS for British Columbia, Canada. The current product direction is an English-language operational app where property managers can onboard their business and properties, then let AI-assisted bots handle early prospect conversations across Telegram, SMS, WhatsApp, and later voice.
+
+The app is still in mock/prototype mode for intelligence and most third-party integrations. Real Twilio SMS and WhatsApp are connected for testing.
+
+## Repository
+
+- Local path: `C:\Users\duran\Documents\Proyectos IA\ZCodeProject\Property Manager`
+- GitHub remote: `https://github.com/duran14/PropertyManager.git`
+- Branch: `main`
+- Latest confirmed feature commit before this handoff document: `a31208e Surface chatbot lead profile in dashboard`
+
+Important recent commits:
+
+- `a31208e Surface chatbot lead profile in dashboard`
+- `4f6f930 Improve mock leasing chatbot flow`
+- `79fbfbe Keep chat conversations channel-specific`
+- `15779c1 Return TwiML from Twilio webhooks`
+- `06b7ee7 Add real Twilio messaging adapter`
+- `3400687 Add Twilio SMS and WhatsApp webhook plumbing`
+- `ad11f5d Configure shared Telegram demo routing`
+
+Before starting new work, run:
+
+```powershell
+git status --short
+git log --oneline -8
+```
+
+The working tree was clean before creating this handoff document.
+
+## Verified Capabilities
+
+### Messaging channels
+
+Telegram:
+- Shared Telegram demo routing exists.
+- A previously created Telegram bot is configured through `TELEGRAM_BOT_TOKEN` when present.
+- Default tenant routing uses `TELEGRAM_DEFAULT_TENANT_ID=tenant_demo_pm`.
+
+SMS:
+- Real Twilio SMS is connected and verified end to end.
+- User's test phone received SMS replies.
+- Twilio inbound and outbound were confirmed in Twilio Messages API.
+- `TWILIO_SMS_FROM` was corrected to the real SMS-capable Twilio number ending in `5576`.
+
+WhatsApp:
+- Twilio WhatsApp Sandbox is connected and verified end to end.
+- User received WhatsApp replies.
+- Twilio status showed outbound WhatsApp as `read`.
+- `TWILIO_WHATSAPP_FROM` points to Twilio Sandbox number ending in `8886`.
+
+Channel separation:
+- SMS and WhatsApp conversations now use channel-specific external IDs, e.g. `sms:+...` and `whatsapp:+...`.
+- This prevents the same phone number from overwriting the same conversation across channels.
+- Manual staff replies strip the channel prefix before sending.
+
+### Mock chatbot brain
+
+The app still uses the mock GLM adapter unless a real AI key is configured. The mock was improved to support a better leasing journey:
+
+- English responses.
+- Extracts budget.
+- Asks for move-in timing.
+- Extracts preferred area, occupants, and pets.
+- Moves toward tour scheduling after basic qualification.
+- Routes human/legal/emergency requests to handoff.
+
+Primary files:
+
+- `packages/adapters/src/mocks/glm.mock.ts`
+- `packages/adapters/src/mocks/glm.mock.test.ts`
+- `apps/api/src/services/chatbot.service.ts`
+- `apps/api/src/services/chatbot.service.test.ts`
+
+### Dashboard lead profile
+
+Captured chatbot data is surfaced in the app:
+
+- `/leads` now returns `prospectProfile`.
+- Leads table shows compact chips for budget, move-in, area, occupants, pets.
+- Leads table recognizes `sms`, `whatsapp`, `telegram`, `web`, `email`, `unit_url`, `showmojo`, `manual`.
+- Conversations page shows visible slots in list previews and detail summary cards.
+
+Primary files:
+
+- `apps/api/src/services/leads.service.ts`
+- `apps/api/src/services/leads.service.test.ts`
+- `apps/web/src/pages/LeadsPage.tsx`
+- `apps/web/src/pages/ConversationsPage.tsx`
+- `apps/web/src/lib/types.ts`
+
+## Current Local Runtime
+
+The API and tunnel were restarted after the last feature work.
+
+Expected local services:
+
+- API: `http://localhost:4000`
+- Web: `http://localhost:5173`
+- Cloudflare quick tunnel: `https://movers-ccd-starter-dance.trycloudflare.com`
+
+Important: the Cloudflare quick tunnel URL is temporary. If it stops working, start a new tunnel and update Twilio webhook URLs.
+
+Current Twilio webhook targets used during testing:
+
+```text
+SMS:
+https://movers-ccd-starter-dance.trycloudflare.com/webhooks/twilio/sms
+
+WhatsApp:
+https://movers-ccd-starter-dance.trycloudflare.com/webhooks/twilio/whatsapp
+```
+
+Health checks:
+
+```powershell
+Invoke-RestMethod -Uri 'http://localhost:4000/health' -Method GET
+Invoke-RestMethod -Uri 'https://movers-ccd-starter-dance.trycloudflare.com/health' -Method GET
+```
+
+Check API listener:
+
+```powershell
+Get-NetTCPConnection -LocalPort 4000 -ErrorAction SilentlyContinue |
+  Select-Object LocalAddress,LocalPort,State,OwningProcess
+```
+
+If multiple stale API dev processes appear, stop only processes whose command line contains this project path and `@property-manager/api` or `tsx watch src/server.ts`, then restart:
+
+```powershell
+pnpm --filter @property-manager/api dev
+```
+
+## Environment Notes
+
+Do not commit `.env`.
+
+Required local services:
+
+- Postgres from Docker on port `5433`
+- Redis from Docker on port `6380`
+
+Key environment variables currently relevant:
+
+- `DATABASE_URL`
+- `REDIS_URL`
+- `API_URL`
+- `WEB_URL`
+- `JWT_ACCESS_SECRET`
+- `JWT_REFRESH_SECRET`
+- `INTEGRATION_ENCRYPTION_KEY`
+- `TWILIO_ACCOUNT_SID`
+- `TWILIO_AUTH_TOKEN`
+- `TWILIO_SMS_FROM`
+- `TWILIO_WHATSAPP_FROM`
+- `TWILIO_DEFAULT_TENANT_ID=tenant_demo_pm`
+- `TELEGRAM_BOT_TOKEN`
+- `TELEGRAM_DEFAULT_TENANT_ID=tenant_demo_pm`
+
+Security note:
+- A Twilio auth token was pasted into the chat earlier. The user was advised to rotate it. Do not expose or reprint secrets.
+
+## How To Verify The Current State
+
+Run:
+
+```powershell
+pnpm typecheck
+pnpm test
+pnpm build
+```
+
+These passed after the latest work.
+
+Manual UI check:
+
+1. Open `http://localhost:5173`.
+2. Login with demo account:
+   - `pm@pacificridge.ca`
+   - `Password123!`
+3. Open `Leads`.
+4. Confirm profile chips are visible for bot-enriched leads.
+5. Open `Conversations`.
+6. Confirm visible prospect slots appear in list previews and detail summary cards.
+
+Messaging smoke tests:
+
+SMS:
+1. Send a message from the user's phone to the Twilio SMS number ending in `5576`.
+2. Confirm the phone receives a reply.
+3. Confirm Twilio shows inbound received and outbound-api delivered.
+
+WhatsApp:
+1. Ensure the user's phone has joined the Twilio WhatsApp Sandbox.
+2. Send a WhatsApp message to the sandbox number ending in `8886`.
+3. Confirm the phone receives a reply.
+4. Confirm Twilio shows inbound received and outbound-api read/delivered.
+
+Useful test WhatsApp/SMS text:
+
+```text
+My budget is $2600. I want to move in August near Burnaby. 2 occupants and one cat.
+```
+
+Expected behavior:
+- Bot replies coherently in English.
+- Conversation slots capture budget, move-in date, area, occupants, pets.
+- Leads dashboard surfaces the enriched profile.
+
+## Product Decisions Captured
+
+Language:
+- User confirmed the application must be in English.
+- Conversation with the user can remain Spanish.
+
+Channel priority:
+1. Telegram
+2. WhatsApp
+3. SMS/Twilio was added because many Canadian users prefer normal SMS
+4. Voice later
+
+Twilio model:
+- Twilio is used for SMS and WhatsApp Sandbox testing.
+- WhatsApp does not strictly require Twilio in the abstract, but for this MVP Twilio gives a unified messaging adapter and webhook model.
+
+Tenant strategy:
+- Current demo uses shared bots and `TWILIO_DEFAULT_TENANT_ID` / `TELEGRAM_DEFAULT_TENANT_ID`.
+- Long term can route by per-tenant numbers, bot mappings, or channel configuration.
+
+Obsidian direction:
+- App should be the source of truth for properties, policies, prices, and documents.
+- Later export/sync to Obsidian as Markdown.
+- Bots should query app-owned structured data first; Obsidian can be a synced knowledge layer.
+
+Voice direction:
+- Later prototype the same script in Gemini, ElevenLabs, and OpenAI Realtime.
+- Measure naturalness, latency, and cost for 5 and 10 minute calls.
+
+Legal/handoff:
+- Bot should be warm and useful but not pretend to be human.
+- It should disclose AI nature at an appropriate point.
+- It should hand off legal, emergency, complaint, contract, or explicit human requests.
+
+## Next Recommended Work
+
+Recommended next step:
+
+1. Improve lead data model for first source vs last/preferred channel.
+   - Current lead may keep `source: sms` even after later WhatsApp conversations from same phone.
+   - Add `lastChannel` or update `preferredChannel` when new conversations arrive.
+   - Consider whether `source` should mean first-touch attribution only.
+
+Then:
+
+2. Add a property intake/onboarding area.
+   - Company profile, values, services, pricing, preferences.
+   - Document upload, logo, policies, price lists.
+   - Separate section for ongoing property/unit management with photos and characteristics.
+   - Roles: property manager, broker, bookkeeper, assistant.
+
+3. Connect chatbot responses to real app data.
+   - Query actual active units and property attributes.
+   - Use uploaded property data and policies.
+   - Keep legal/compliance guardrails.
+
+4. Add real AI provider behind the existing GLM adapter or a new provider abstraction.
+   - Keep current mock behavior as fallback.
+   - Do not remove mock mode; it is useful for demos and tests.
+
+5. Make Twilio webhook/tunnel setup more durable.
+   - For real deployment, use a stable hosted API URL instead of Cloudflare quick tunnel.
+   - Avoid requiring local machine uptime for Twilio callbacks.
+
+6. Persist an explicit project state/changelog.
+   - Keep this handoff doc updated after each major milestone.
+   - Add links to commits and exact verification commands.
+
+## Known Gaps And Watchouts
+
+- Cloudflare quick tunnel is temporary and can break.
+- Current AI is still mock, not real LLM behavior.
+- `.env` contains live credentials locally; never commit it.
+- User had trouble connecting GitHub through ChatGPT, but direct git push works to `duran14/PropertyManager.git`.
+- Twilio trial may have limitations around numbers and verified recipients.
+- Some old seeded/demo conversations can contain historical Spanish slot values or old externalId format from before the channel-specific fix.
+- README has mojibake/encoding artifacts from earlier content; not addressed yet.
+- Lead source semantics need refinement: first-touch source vs latest channel/preferred channel.

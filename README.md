@@ -121,6 +121,13 @@ pnpm --filter @property-manager/core test   # lógica de dominio
 - Portal de inquilinos y propietarios
 - Escalar a otras provincias (excluyendo Quebec)
 
+## Handoff para continuar el proyecto
+
+Si este proyecto se abre en otra sesion o con otro agente, empezar por
+[`docs/PROJECT_HANDOFF.md`](./docs/PROJECT_HANDOFF.md). Ese documento resume
+que esta funcionando, que se verifico, como probar SMS/WhatsApp y cuales son
+los siguientes pasos recomendados.
+
 ## Licencia
 
 UNLICENSED — Propietario.
