@@ -14,7 +14,7 @@ import { z } from 'zod';
 import { getAdapters } from '../config/adapters.js';
 import { prisma } from '../config/db.js';
 import { requireAuth, requireUser } from '../auth/context.js';
-import { handleInboundMessage } from '../services/chatbot.service.js';
+import { getReplyAddressFromConversation, handleInboundMessage } from '../services/chatbot.service.js';
 
 export const chatRouter = Router();
 
@@ -172,7 +172,7 @@ chatRouter.post('/conversations/:id/reply', requireAuth, async (req, res, next) 
     const messagingAdapter = adapters.messaging[conversation.channel as 'whatsapp' | 'sms' | 'telegram' | 'web' | 'email'];
     if (messagingAdapter) {
       await messagingAdapter.send({
-        to: conversation.externalId,
+        to: getReplyAddressFromConversation(conversation.externalId),
         body: parsed.data.message,
         channel: conversation.channel as 'whatsapp' | 'sms' | 'telegram' | 'web' | 'email',
       });

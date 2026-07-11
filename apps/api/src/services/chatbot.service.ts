@@ -39,14 +39,15 @@ export async function handleInboundMessage(
   input: InboundChatMessage,
   deps: { glm: GlmAdapter; messaging: MessagingAdapter; showmojo: ShowMojoAdapter },
 ): Promise<BotReply> {
+  const externalId = getConversationExternalId(input);
   const conversation = await prisma.chatConversation.upsert({
     where: {
-      tenantId_externalId: { tenantId: input.tenantId, externalId: input.from },
+      tenantId_externalId: { tenantId: input.tenantId, externalId },
     },
     update: { channel: input.channel },
     create: {
       tenantId: input.tenantId,
-      externalId: input.from,
+      externalId,
       channel: input.channel,
       state: 'greeting',
     },
@@ -396,4 +397,15 @@ function getLeadSourceForChannel(channel: string): 'telegram' | 'web' | 'email' 
   if (channel === 'email') return 'email';
   if (channel === 'sms') return 'sms';
   return 'whatsapp';
+}
+
+export function getConversationExternalId(input: Pick<InboundChatMessage, 'channel' | 'from'>): string {
+  if (['sms', 'whatsapp', 'telegram'].includes(input.channel)) {
+    return `${input.channel}:${input.from}`;
+  }
+  return input.from;
+}
+
+export function getReplyAddressFromConversation(externalId: string): string {
+  return externalId.replace(/^(sms|whatsapp|telegram):/, '');
 }
