@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildLeadProspectProfile } from './leads.service.js';
+import { buildLeadProspectProfile, isLeadStatus } from './leads.service.js';
 
 describe('lead prospect profile', () => {
   it('summarizes captured chatbot slots from the most recent conversations', () => {
@@ -34,5 +34,10 @@ describe('lead prospect profile', () => {
       lastChannel: 'whatsapp',
       conversationState: 'proposing_tour',
     });
+  });
+
+  it('accepts only known lead funnel statuses', () => {
+    expect(isLeadStatus('tour_scheduled')).toBe(true);
+    expect(isLeadStatus('needs_callback')).toBe(false);
   });
 });

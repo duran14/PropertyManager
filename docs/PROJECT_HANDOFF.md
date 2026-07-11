@@ -1,6 +1,6 @@
 # Project Handoff - Property Manager
 
-Last updated: 2026-07-11 08:29, America/Vancouver.
+Last updated: 2026-07-11 13:00, America/Vancouver.
 
 This document is for a future AI agent or developer continuing the project after the current Codex session. It summarizes what was built, what is currently working, how to verify it, and what should come next.
 
@@ -15,10 +15,11 @@ The app is still in mock/prototype mode for intelligence and most third-party in
 - Local path: `C:\Users\duran\Documents\Proyectos IA\ZCodeProject\Property Manager`
 - GitHub remote: `https://github.com/duran14/PropertyManager.git`
 - Branch: `main`
-- Latest confirmed feature commit before this handoff document: `Add staff override for recommended units`
+- Latest confirmed feature commit before this handoff document: pending current commit with lead status controls in Conversations.
 
 Important recent commits:
 
+- pending: lead status can be managed from Conversations
 - `Add staff override for recommended units`
 - `b1dcb17 Track chatbot unit recommendations`
 - `8da09e0 Add onboarding and property inventory management`
@@ -92,6 +93,8 @@ Captured chatbot data is surfaced in the app:
 - Leads table shows compact chips for budget, move-in, area, occupants, pets.
 - Leads table recognizes `sms`, `whatsapp`, `telegram`, `web`, `email`, `unit_url`, `showmojo`, `manual`.
 - Conversations page shows visible slots in list previews and detail summary cards.
+- Conversations detail lets staff update the linked lead status without leaving the conversation.
+- Lead status updates are validated against the known funnel states: `new_`, `contacted`, `tour_scheduled`, `qualified`, `converted`, `lost`.
 
 ### Onboarding and property inventory
 

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from '../lib/apiClient';
 import { Icon } from '../components/Icon';
+import type { LeadStatus } from '../lib/types';
 
 interface ChatMessage {
   id: string;
@@ -16,7 +17,7 @@ interface Conversation {
   externalId: string;
   channel: string;
   state: string;
-  lead: { name: string | null; phone: string | null; status: string } | null;
+  lead: { id: string; name: string | null; phone: string | null; status: LeadStatus } | null;
   unit: {
     id: string;
     name: string;
@@ -52,6 +53,15 @@ const STATE_LABELS: Record<string, string> = {
   scheduling: 'Scheduling',
   handoff: 'Human handoff',
 };
+
+const LEAD_STATUS_OPTIONS: Array<{ value: LeadStatus; label: string }> = [
+  { value: 'new_', label: 'New' },
+  { value: 'contacted', label: 'Contacted' },
+  { value: 'tour_scheduled', label: 'Tour scheduled' },
+  { value: 'qualified', label: 'Qualified' },
+  { value: 'converted', label: 'Converted' },
+  { value: 'lost', label: 'Lost' },
+];
 
 const SLOT_LABELS: Record<string, string> = {
   budget: 'Budget',
@@ -143,6 +153,30 @@ export function ConversationsPage() {
     },
   });
 
+  const leadStatusMutation = useMutation({
+    mutationFn: ({ id, status }: { id: string; status: LeadStatus }) =>
+      apiFetch(`/leads/${id}/status`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status }),
+      }),
+    onSuccess: (_data, variables) => {
+      queryClient.setQueryData<{ conversation: Conversation }>(
+        ['conversation', selectedId],
+        (old) => {
+          if (!old?.conversation.lead) return old;
+          return {
+            conversation: {
+              ...old.conversation,
+              lead: { ...old.conversation.lead, status: variables.status },
+            },
+          };
+        },
+      );
+      queryClient.invalidateQueries({ queryKey: ['conversations'] });
+      queryClient.invalidateQueries({ queryKey: ['leads'] });
+    },
+  });
+
   const conversations = data?.conversations ?? [];
   const selected = detail?.conversation;
   const units = unitsData?.units ?? [];
@@ -221,7 +255,25 @@ export function ConversationsPage() {
                     {selected.lead?.name ?? selected.externalId}
                   </span>
                 </div>
-                <span className="text-xs text-slate-400">{STATE_LABELS[selected.state] ?? selected.state}</span>
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  {selected.lead && (
+                    <select
+                      aria-label="Lead status"
+                      value={selected.lead.status}
+                      onChange={(event) => leadStatusMutation.mutate({
+                        id: selected.lead!.id,
+                        status: event.target.value as LeadStatus,
+                      })}
+                      disabled={leadStatusMutation.isPending}
+                      className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-violet-500 disabled:opacity-50"
+                    >
+                      {LEAD_STATUS_OPTIONS.map((status) => (
+                        <option key={status.value} value={status.value}>{status.label}</option>
+                      ))}
+                    </select>
+                  )}
+                  <span className="text-xs text-slate-400">{STATE_LABELS[selected.state] ?? selected.state}</span>
+                </div>
               </div>
 
               <div className="border-b border-slate-100 bg-white px-4 py-3">

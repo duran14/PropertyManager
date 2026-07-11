@@ -30,6 +30,12 @@ interface LeadConversationSummary {
   slots: Array<{ key: string; value: string }>;
 }
 
+export const LEAD_STATUSES = ['new_', 'contacted', 'tour_scheduled', 'qualified', 'converted', 'lost'] as const;
+
+export function isLeadStatus(status: string): boolean {
+  return LEAD_STATUSES.includes(status as (typeof LEAD_STATUSES)[number]);
+}
+
 /** Registra un lead desde un webhook de ShowMojo (registro de visita). */
 export async function createLeadFromShowMojo(input: ShowMojoEvent): Promise<{ leadId: string }> {
   const lead = await prisma.lead.create({

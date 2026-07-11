@@ -15,7 +15,7 @@ import { z } from 'zod';
 import { prisma } from '../config/db.js';
 import { getAdapters } from '../config/adapters.js';
 import { requireAuth, requireUser } from '../auth/context.js';
-import { createLeadFromUnitUrl, listLeads, updateLeadStatus } from '../services/leads.service.js';
+import { createLeadFromUnitUrl, isLeadStatus, listLeads, updateLeadStatus } from '../services/leads.service.js';
 import { handleInboundMessage } from '../services/chatbot.service.js';
 
 export const publicRouter = Router();
@@ -117,6 +117,10 @@ leadsRouter.patch('/:id/status', requireAuth, async (req, res, next) => {
     const parsed = statusSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: 'status is required' });
+      return;
+    }
+    if (!isLeadStatus(parsed.data.status)) {
+      res.status(400).json({ error: 'Invalid lead status' });
       return;
     }
     await updateLeadStatus(req.params.id, user.tenantId, parsed.data.status);
