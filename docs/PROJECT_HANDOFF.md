@@ -1,6 +1,6 @@
 # Project Handoff - Property Manager
 
-Last updated: 2026-07-11 13:09, America/Vancouver.
+Last updated: 2026-07-11 14:10, America/Vancouver.
 
 This document is for a future AI agent or developer continuing the project after the current Codex session. It summarizes what was built, what is currently working, how to verify it, and what should come next.
 
@@ -15,11 +15,12 @@ The app is still in mock/prototype mode for intelligence and most third-party in
 - Local path: `C:\Users\duran\Documents\Proyectos IA\ZCodeProject\Property Manager`
 - GitHub remote: `https://github.com/duran14/PropertyManager.git`
 - Branch: `main`
-- Latest confirmed feature commit before this handoff document: pending current commit with manual showings from Conversations.
+- Latest confirmed feature commit before this handoff document: pending current commit with showing confirm/cancel actions in Conversations.
 
 Important recent commits:
 
-- pending: manual showings can be scheduled from Conversations
+- pending: showings can be confirmed or cancelled from Conversations
+- `032e330 Schedule showings from conversations`
 - `a59b081 Add lead status controls to conversations`
 - `Add staff override for recommended units`
 - `b1dcb17 Track chatbot unit recommendations`
@@ -107,6 +108,8 @@ Staff can now create a manual/internal showing directly from a conversation:
 - Conversation detail now returns linked showings for the lead, so staff can see scheduled visits without leaving the thread.
 - This does not require real ShowMojo integration; `showmojoId` and `showmojoUrl` remain empty for manual/internal showings.
 - Showing duration is validated to 15, 30, 45, or 60 minutes.
+- Linked showings can now be confirmed or cancelled from the conversation detail.
+- Backend guards prevent confirming non-scheduled showings and cancelling terminal showings.
 
 Primary files:
 

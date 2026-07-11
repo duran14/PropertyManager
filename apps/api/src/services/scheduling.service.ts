@@ -23,6 +23,14 @@ export function normalizeShowingDuration(durationMinutes: number | undefined): n
   return duration;
 }
 
+export function canConfirmShowingStatus(status: string): boolean {
+  return status === 'scheduled';
+}
+
+export function canCancelShowingStatus(status: string): boolean {
+  return status === 'scheduled' || status === 'confirmed';
+}
+
 export async function getAvailableSlots(
   tenantId: string,
   unitId: string,
@@ -240,6 +248,7 @@ export async function confirmShowing(
     where: { id: showingId, tenantId },
   });
   if (!showing) throw new Error('Showing not found');
+  if (!canConfirmShowingStatus(showing.status)) throw new Error(`Showing cannot be confirmed from status: ${showing.status}`);
 
   if (showing.showmojoId) {
     await adapters.showmojo.confirmShowing(showing.showmojoId);
@@ -273,6 +282,7 @@ export async function cancelShowing(
     where: { id: showingId, tenantId },
   });
   if (!showing) throw new Error('Showing not found');
+  if (!canCancelShowingStatus(showing.status)) throw new Error(`Showing cannot be cancelled from status: ${showing.status}`);
 
   if (showing.showmojoId) {
     await adapters.showmojo.cancelShowing(showing.showmojoId, reason);

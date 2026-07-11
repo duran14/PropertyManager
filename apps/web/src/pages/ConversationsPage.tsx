@@ -106,6 +106,14 @@ function formatShowingDateTime(iso: string): string {
   });
 }
 
+function canConfirmShowing(status: ShowingSummary['status']): boolean {
+  return status === 'scheduled';
+}
+
+function canCancelShowing(status: ShowingSummary['status']): boolean {
+  return status === 'scheduled' || status === 'confirmed';
+}
+
 export function ConversationsPage() {
   const queryClient = useQueryClient();
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -235,6 +243,35 @@ export function ConversationsPage() {
       queryClient.invalidateQueries({ queryKey: ['leads'] });
       queryClient.invalidateQueries({ queryKey: ['showings'] });
     },
+  });
+
+  const updateShowingStatus = (showingId: string, status: ShowingSummary['status']) => {
+    queryClient.setQueryData<{ conversation: Conversation }>(
+      ['conversation', selectedId],
+      (old) => {
+        if (!old) return old;
+        return {
+          conversation: {
+            ...old.conversation,
+            showings: (old.conversation.showings ?? []).map((showing) =>
+              showing.id === showingId ? { ...showing, status } : showing,
+            ),
+          },
+        };
+      },
+    );
+    queryClient.invalidateQueries({ queryKey: ['showings'] });
+    queryClient.invalidateQueries({ queryKey: ['conversations'] });
+  };
+
+  const confirmShowingMutation = useMutation({
+    mutationFn: (id: string) => apiFetch(`/showings/${id}/confirm`, { method: 'POST' }),
+    onSuccess: (_data, id) => updateShowingStatus(id, 'confirmed'),
+  });
+
+  const cancelShowingMutation = useMutation({
+    mutationFn: (id: string) => apiFetch(`/showings/${id}/cancel`, { method: 'POST', body: JSON.stringify({}) }),
+    onSuccess: (_data, id) => updateShowingStatus(id, 'cancelled'),
   });
 
   const conversations = data?.conversations ?? [];
@@ -450,9 +487,29 @@ export function ConversationsPage() {
                 {(selected.showings ?? []).length > 0 && (
                   <div className="mt-3 flex flex-wrap gap-2">
                     {selected.showings!.map((showing) => (
-                      <div key={showing.id} className="rounded-md border border-teal-100 bg-teal-50 px-2 py-1 text-xs text-teal-800">
-                        <span className="font-medium">{formatShowingDateTime(showing.scheduledAt)}</span>
-                        <span className="text-teal-600"> / {showing.durationMinutes} min / {showing.status}</span>
+                      <div key={showing.id} className="flex flex-wrap items-center gap-2 rounded-md border border-teal-100 bg-teal-50 px-2 py-1 text-xs text-teal-800">
+                        <div>
+                          <span className="font-medium">{formatShowingDateTime(showing.scheduledAt)}</span>
+                          <span className="text-teal-600"> / {showing.durationMinutes} min / {showing.status}</span>
+                        </div>
+                        {canConfirmShowing(showing.status) && (
+                          <button
+                            onClick={() => confirmShowingMutation.mutate(showing.id)}
+                            disabled={confirmShowingMutation.isPending || cancelShowingMutation.isPending}
+                            className="rounded border border-green-200 bg-white px-1.5 py-0.5 font-medium text-green-700 hover:bg-green-50 disabled:opacity-50"
+                          >
+                            Confirm
+                          </button>
+                        )}
+                        {canCancelShowing(showing.status) && (
+                          <button
+                            onClick={() => cancelShowingMutation.mutate(showing.id)}
+                            disabled={confirmShowingMutation.isPending || cancelShowingMutation.isPending}
+                            className="rounded border border-red-200 bg-white px-1.5 py-0.5 font-medium text-red-700 hover:bg-red-50 disabled:opacity-50"
+                          >
+                            Cancel
+                          </button>
+                        )}
                       </div>
                     ))}
                   </div>
