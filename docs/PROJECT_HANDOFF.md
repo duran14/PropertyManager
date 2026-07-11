@@ -1,6 +1,6 @@
 # Project Handoff - Property Manager
 
-Last updated: 2026-07-11 08:24, America/Vancouver.
+Last updated: 2026-07-11 08:29, America/Vancouver.
 
 This document is for a future AI agent or developer continuing the project after the current Codex session. It summarizes what was built, what is currently working, how to verify it, and what should come next.
 
@@ -15,10 +15,13 @@ The app is still in mock/prototype mode for intelligence and most third-party in
 - Local path: `C:\Users\duran\Documents\Proyectos IA\ZCodeProject\Property Manager`
 - GitHub remote: `https://github.com/duran14/PropertyManager.git`
 - Branch: `main`
-- Latest confirmed feature commit before this handoff document: `a31208e Surface chatbot lead profile in dashboard`
+- Latest confirmed feature commit before this handoff document: `Add staff override for recommended units`
 
 Important recent commits:
 
+- `Add staff override for recommended units`
+- `b1dcb17 Track chatbot unit recommendations`
+- `8da09e0 Add onboarding and property inventory management`
 - `a31208e Surface chatbot lead profile in dashboard`
 - `22eddc0 Track preferred lead channel separately`
 - `4f6f930 Improve mock leasing chatbot flow`
@@ -122,6 +125,8 @@ The chatbot now ranks active units by captured lead criteria and stores the reco
 - The same unit is also saved on `Lead.unitId`, so the Leads table shows the interested unit.
 - The bot stores `match_reason` and `recommended_unit_id` as conversation slots.
 - Conversations now display a `Recommended unit` summary and match reason.
+- Staff can override the recommended unit directly from `/conversations`.
+- The override is tenant-scoped, updates `ChatConversation.unitId`, updates `Lead.unitId` when a lead is linked, and rewrites the `recommended_unit_id` and `match_reason` slots.
 
 Primary files:
 

@@ -490,6 +490,10 @@ export function buildUnitMatchReason(unit: AvailableUnit, slots: Record<string, 
   return reasons.length > 0 ? reasons.join(', ') : 'it is an active listing in the current inventory';
 }
 
+export function buildStaffOverrideMatchReason(propertyName: string, unitName: string): string {
+  return `Selected by staff override: ${propertyName} ${unitName}.`;
+}
+
 function scoreUnit(unit: AvailableUnit, slots: Record<string, string>): number {
   let score = 0;
   const budget = parseBudget(slots.budget);

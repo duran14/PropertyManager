@@ -14,7 +14,11 @@ import { z } from 'zod';
 import { getAdapters } from '../config/adapters.js';
 import { prisma } from '../config/db.js';
 import { requireAuth, requireUser } from '../auth/context.js';
-import { getReplyAddressFromConversation, handleInboundMessage } from '../services/chatbot.service.js';
+import {
+  buildStaffOverrideMatchReason,
+  getReplyAddressFromConversation,
+  handleInboundMessage,
+} from '../services/chatbot.service.js';
 
 export const chatRouter = Router();
 
@@ -136,6 +140,79 @@ chatRouter.get('/conversations/:id', requireAuth, async (req, res, next) => {
 
 const manualReplySchema = z.object({
   message: z.string().min(1).max(2000),
+});
+
+const recommendedUnitSchema = z.object({
+  unitId: z.string().min(1),
+});
+
+chatRouter.patch('/conversations/:id/recommended-unit', requireAuth, async (req, res, next) => {
+  try {
+    const user = requireUser(req);
+    const parsed = recommendedUnitSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: 'Unit is required' });
+      return;
+    }
+
+    const conversation = await prisma.chatConversation.findFirst({
+      where: { id: req.params.id, tenantId: user.tenantId },
+    });
+    if (!conversation) {
+      res.status(404).json({ error: 'Conversation not found' });
+      return;
+    }
+
+    const unit = await prisma.unit.findFirst({
+      where: { id: parsed.data.unitId, tenantId: user.tenantId },
+      include: { property: { select: { name: true, city: true } } },
+    });
+    if (!unit) {
+      res.status(404).json({ error: 'Unit not found' });
+      return;
+    }
+
+    const matchReason = buildStaffOverrideMatchReason(unit.property.name, unit.name);
+    const updatedConversation = await prisma.$transaction(async (tx) => {
+      await tx.chatConversation.update({
+        where: { id: conversation.id },
+        data: { unitId: unit.id },
+      });
+
+      if (conversation.leadId) {
+        await tx.lead.update({
+          where: { id: conversation.leadId },
+          data: { unitId: unit.id },
+        });
+      }
+
+      await tx.conversationSlot.upsert({
+        where: { conversationId_key: { conversationId: conversation.id, key: 'recommended_unit_id' } },
+        update: { value: unit.id },
+        create: { conversationId: conversation.id, key: 'recommended_unit_id', value: unit.id },
+      });
+
+      await tx.conversationSlot.upsert({
+        where: { conversationId_key: { conversationId: conversation.id, key: 'match_reason' } },
+        update: { value: matchReason },
+        create: { conversationId: conversation.id, key: 'match_reason', value: matchReason },
+      });
+
+      return tx.chatConversation.findUniqueOrThrow({
+        where: { id: conversation.id },
+        include: {
+          lead: true,
+          unit: { select: { id: true, name: true, rentCents: true, property: { select: { name: true, city: true } } } },
+          messages: { orderBy: { createdAt: 'asc' } },
+          slots: true,
+        },
+      });
+    });
+
+    res.json({ conversation: updatedConversation });
+  } catch (err) {
+    next(err);
+  }
 });
 
 chatRouter.post('/conversations/:id/reply', requireAuth, async (req, res, next) => {

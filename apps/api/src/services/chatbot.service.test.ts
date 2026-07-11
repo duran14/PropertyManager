@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildStaffOverrideMatchReason,
   buildUnitMatchReason,
   getConversationExternalId,
   getExistingLeadChannelUpdate,
@@ -70,5 +71,11 @@ describe('chatbot conversation identity', () => {
       occupants: '2',
       move_in_date: 'August',
     })).toContain('matches the Burnaby area');
+  });
+
+  it('describes a staff-selected unit recommendation override', () => {
+    expect(buildStaffOverrideMatchReason('Burnaby Heights', 'Suite 12')).toBe(
+      'Selected by staff override: Burnaby Heights Suite 12.',
+    );
   });
 });

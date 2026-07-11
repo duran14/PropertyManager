@@ -28,6 +28,13 @@ interface Conversation {
   updatedAt: string;
 }
 
+interface UnitOption {
+  id: string;
+  name: string;
+  rentCents: number;
+  property: { name: string; city: string };
+}
+
 const CHANNEL_STYLES: Record<string, string> = {
   whatsapp: 'bg-green-50 text-green-700',
   telegram: 'bg-blue-50 text-blue-700',
@@ -79,6 +86,11 @@ export function ConversationsPage() {
     enabled: !!selectedId,
   });
 
+  const { data: unitsData } = useQuery<{ units: UnitOption[] }>({
+    queryKey: ['units'],
+    queryFn: () => apiFetch('/units'),
+  });
+
   const replyMutation = useMutation({
     mutationFn: ({ id, message }: { id: string; message: string }) =>
       apiFetch<{ status: string; message: { id: string; role: string; content: string; createdAt: string } }>(
@@ -115,8 +127,25 @@ export function ConversationsPage() {
     },
   });
 
+  const recommendedUnitMutation = useMutation({
+    mutationFn: ({ id, unitId }: { id: string; unitId: string }) =>
+      apiFetch<{ conversation: Conversation }>(`/chat/conversations/${id}/recommended-unit`, {
+        method: 'PATCH',
+        body: JSON.stringify({ unitId }),
+      }),
+    onSuccess: (data) => {
+      queryClient.setQueryData<{ conversation: Conversation }>(
+        ['conversation', data.conversation.id],
+        data,
+      );
+      queryClient.invalidateQueries({ queryKey: ['conversations'] });
+      queryClient.invalidateQueries({ queryKey: ['leads'] });
+    },
+  });
+
   const conversations = data?.conversations ?? [];
   const selected = detail?.conversation;
+  const units = unitsData?.units ?? [];
 
   return (
     <div>
@@ -195,8 +224,8 @@ export function ConversationsPage() {
                 <span className="text-xs text-slate-400">{STATE_LABELS[selected.state] ?? selected.state}</span>
               </div>
 
-              {selected.unit && (
-                <div className="border-b border-slate-100 bg-white px-4 py-3">
+              <div className="border-b border-slate-100 bg-white px-4 py-3">
+                {selected.unit ? (
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div>
                       <div className="text-[11px] font-medium uppercase text-slate-400">Recommended unit</div>
@@ -208,11 +237,39 @@ export function ConversationsPage() {
                       ${(selected.unit.rentCents / 100).toLocaleString('en-CA')}/month
                     </div>
                   </div>
-                  {slotValue(selected.slots, 'match_reason') && (
-                    <p className="mt-2 text-xs text-slate-500">{slotValue(selected.slots, 'match_reason')}</p>
-                  )}
+                ) : (
+                  <div>
+                    <div className="text-[11px] font-medium uppercase text-slate-400">Recommended unit</div>
+                    <div className="text-sm font-medium text-slate-700">No unit selected yet</div>
+                  </div>
+                )}
+                {slotValue(selected.slots, 'match_reason') && (
+                  <p className="mt-2 text-xs text-slate-500">{slotValue(selected.slots, 'match_reason')}</p>
+                )}
+                <div className="mt-3 flex flex-col gap-1 sm:max-w-md">
+                  <label htmlFor="recommended-unit" className="text-[11px] font-medium uppercase text-slate-400">
+                    Staff override
+                  </label>
+                  <select
+                    id="recommended-unit"
+                    value={selected.unit?.id ?? ''}
+                    onChange={(event) => {
+                      if (event.target.value) {
+                        recommendedUnitMutation.mutate({ id: selected.id, unitId: event.target.value });
+                      }
+                    }}
+                    disabled={recommendedUnitMutation.isPending || units.length === 0}
+                    className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-violet-500 disabled:opacity-50"
+                  >
+                    <option value="">Select an active unit</option>
+                    {units.map((unit) => (
+                      <option key={unit.id} value={unit.id}>
+                        {unit.property.name} {unit.name} / {unit.property.city} - ${(unit.rentCents / 100).toLocaleString('en-CA')}/month
+                      </option>
+                    ))}
+                  </select>
                 </div>
-              )}
+              </div>
 
               {visibleSlots(selected.slots).length > 0 && (
                 <div className="border-b border-slate-100 bg-slate-50 px-4 py-3">
