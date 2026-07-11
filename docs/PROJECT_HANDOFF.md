@@ -1,6 +1,6 @@
 # Project Handoff - Property Manager
 
-Last updated: 2026-07-11 14:19, America/Vancouver.
+Last updated: 2026-07-11 15:45, America/Vancouver.
 
 This document is for a future AI agent or developer continuing the project after the current Codex session. It summarizes what was built, what is currently working, how to verify it, and what should come next.
 
@@ -15,11 +15,12 @@ The app is still in mock/prototype mode for intelligence and most third-party in
 - Local path: `C:\Users\duran\Documents\Proyectos IA\ZCodeProject\Property Manager`
 - GitHub remote: `https://github.com/duran14/PropertyManager.git`
 - Branch: `main`
-- Latest confirmed feature commit before this handoff document: pending current commit with suggested replies after showing actions.
+- Latest confirmed feature commit before this handoff document: pending current commit with staged suggested replies and reschedule helper.
 
 Important recent commits:
 
-- pending: showing actions fill suggested manual replies in Conversations
+- pending: suggested replies are staged safely and cancelled showings can be rescheduled
+- `d9b0966 Suggest replies for showing actions`
 - `3583f81 Manage showings from conversations`
 - `032e330 Schedule showings from conversations`
 - `a59b081 Add lead status controls to conversations`
@@ -112,6 +113,8 @@ Staff can now create a manual/internal showing directly from a conversation:
 - Linked showings can now be confirmed or cancelled from the conversation detail.
 - Backend guards prevent confirming non-scheduled showings and cancelling terminal showings.
 - Confirming or cancelling a showing now fills the manual reply input with an editable English suggested message.
+- If staff already typed a manual reply, the suggestion is staged in a `Suggested reply ready` band with `Use` and `Dismiss` actions instead of overwriting the draft.
+- Cancelled showings expose a `Reschedule` action that preloads the tour scheduler with the same duration and a next-day time.
 - Suggested showing reply copy lives in `@property-manager/core/showing-messages` so it can later be reused by AI-assisted reply generation.
 
 Primary files:

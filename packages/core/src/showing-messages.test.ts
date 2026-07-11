@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildShowingSuggestedReply } from './showing-messages.js';
+import { buildShowingSuggestedReply, stageSuggestedReply } from './showing-messages.js';
 
 describe('showing suggested replies', () => {
   it('suggests a confirmation message with the tour details', () => {
@@ -21,5 +21,16 @@ describe('showing suggested replies', () => {
       unitName: 'Apt 102',
       propertyName: 'Cedar Court Apartments',
     })).toBe('No problem, we can reschedule your tour for Cedar Court Apartments Apt 102. Would another morning or afternoon work better for you?');
+  });
+
+  it('uses a suggestion immediately only when the reply box is empty', () => {
+    expect(stageSuggestedReply('', 'Suggested copy')).toEqual({
+      reply: 'Suggested copy',
+      pendingSuggestion: null,
+    });
+    expect(stageSuggestedReply('Already typing', 'Suggested copy')).toEqual({
+      reply: 'Already typing',
+      pendingSuggestion: 'Suggested copy',
+    });
   });
 });

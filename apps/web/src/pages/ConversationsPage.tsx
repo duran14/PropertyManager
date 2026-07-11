@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { buildShowingSuggestedReply } from '@property-manager/core/showing-messages';
+import { buildShowingSuggestedReply, stageSuggestedReply } from '@property-manager/core/showing-messages';
 import { apiFetch } from '../lib/apiClient';
 import { Icon } from '../components/Icon';
 import type { LeadStatus } from '../lib/types';
@@ -94,6 +94,10 @@ function defaultShowingDateTime(): string {
   const date = new Date();
   date.setDate(date.getDate() + 1);
   date.setHours(10, 0, 0, 0);
+  return toDateTimeLocalValue(date);
+}
+
+function toDateTimeLocalValue(date: Date): string {
   return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
 }
 
@@ -115,10 +119,15 @@ function canCancelShowing(status: ShowingSummary['status']): boolean {
   return status === 'scheduled' || status === 'confirmed';
 }
 
+function canRescheduleShowing(status: ShowingSummary['status']): boolean {
+  return status === 'cancelled';
+}
+
 export function ConversationsPage() {
   const queryClient = useQueryClient();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [reply, setReply] = useState('');
+  const [pendingSuggestedReply, setPendingSuggestedReply] = useState<string | null>(null);
   const [showingDateTime, setShowingDateTime] = useState(defaultShowingDateTime);
   const [showingDuration, setShowingDuration] = useState(30);
 
@@ -171,6 +180,7 @@ export function ConversationsPage() {
       );
       queryClient.invalidateQueries({ queryKey: ['conversations'] });
       setReply('');
+      setPendingSuggestedReply(null);
     },
   });
 
@@ -265,11 +275,24 @@ export function ConversationsPage() {
     queryClient.invalidateQueries({ queryKey: ['conversations'] });
   };
 
+  const stageReplySuggestion = (suggestion: string) => {
+    const staged = stageSuggestedReply(reply, suggestion);
+    setReply(staged.reply);
+    setPendingSuggestedReply(staged.pendingSuggestion);
+  };
+
+  const stageShowingReschedule = (showing: ShowingSummary) => {
+    const nextSlot = new Date(showing.scheduledAt);
+    nextSlot.setDate(nextSlot.getDate() + 1);
+    setShowingDateTime(toDateTimeLocalValue(nextSlot));
+    setShowingDuration(showing.durationMinutes);
+  };
+
   const confirmShowingMutation = useMutation({
     mutationFn: (showing: ShowingSummary) => apiFetch(`/showings/${showing.id}/confirm`, { method: 'POST' }),
     onSuccess: (_data, showing) => {
       updateShowingStatus(showing.id, 'confirmed');
-      setReply(buildShowingSuggestedReply({
+      stageReplySuggestion(buildShowingSuggestedReply({
         action: 'confirmed',
         scheduledAt: showing.scheduledAt,
         propertyName: showing.unit?.property.name ?? selected?.unit?.property.name ?? 'the property',
@@ -282,7 +305,7 @@ export function ConversationsPage() {
     mutationFn: (showing: ShowingSummary) => apiFetch(`/showings/${showing.id}/cancel`, { method: 'POST', body: JSON.stringify({}) }),
     onSuccess: (_data, showing) => {
       updateShowingStatus(showing.id, 'cancelled');
-      setReply(buildShowingSuggestedReply({
+      stageReplySuggestion(buildShowingSuggestedReply({
         action: 'cancelled',
         scheduledAt: showing.scheduledAt,
         propertyName: showing.unit?.property.name ?? selected?.unit?.property.name ?? 'the property',
@@ -527,6 +550,14 @@ export function ConversationsPage() {
                             Cancel
                           </button>
                         )}
+                        {canRescheduleShowing(showing.status) && (
+                          <button
+                            onClick={() => stageShowingReschedule(showing)}
+                            className="rounded border border-teal-200 bg-white px-1.5 py-0.5 font-medium text-teal-700 hover:bg-teal-50"
+                          >
+                            Reschedule
+                          </button>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -554,22 +585,45 @@ export function ConversationsPage() {
               </div>
 
               <div className="p-3 border-t border-slate-200 flex gap-2">
-                <input
-                  type="text"
-                  value={reply}
-                  onChange={(e) => setReply(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && reply.trim()) {
-                      replyMutation.mutate({ id: selected.id, message: reply.trim() });
-                    }
-                  }}
-                  placeholder="Write a manual reply..."
-                  className="flex-1 rounded-full border border-slate-300 px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500"
-                />
+                <div className="flex-1">
+                  {pendingSuggestedReply && (
+                    <div className="mb-2 flex flex-wrap items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                      <span className="font-medium">Suggested reply ready</span>
+                      <span className="min-w-0 flex-1 truncate text-amber-700">{pendingSuggestedReply}</span>
+                      <button
+                        onClick={() => {
+                          setReply(pendingSuggestedReply);
+                          setPendingSuggestedReply(null);
+                        }}
+                        className="rounded border border-amber-300 bg-white px-2 py-0.5 font-medium text-amber-800 hover:bg-amber-100"
+                      >
+                        Use
+                      </button>
+                      <button
+                        onClick={() => setPendingSuggestedReply(null)}
+                        className="rounded border border-slate-200 bg-white px-2 py-0.5 font-medium text-slate-600 hover:bg-slate-50"
+                      >
+                        Dismiss
+                      </button>
+                    </div>
+                  )}
+                  <input
+                    type="text"
+                    value={reply}
+                    onChange={(e) => setReply(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && reply.trim()) {
+                        replyMutation.mutate({ id: selected.id, message: reply.trim() });
+                      }
+                    }}
+                    placeholder="Write a manual reply..."
+                    className="w-full rounded-full border border-slate-300 px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500"
+                  />
+                </div>
                 <button
                   onClick={() => reply.trim() && replyMutation.mutate({ id: selected.id, message: reply.trim() })}
                   disabled={!reply.trim() || replyMutation.isPending}
-                  className="inline-flex items-center gap-1 rounded-full bg-violet-600 px-4 py-2 text-white text-sm hover:bg-violet-700 disabled:opacity-50"
+                  className="inline-flex h-[38px] items-center gap-1 rounded-full bg-violet-600 px-4 py-2 text-white text-sm hover:bg-violet-700 disabled:opacity-50"
                 >
                   <Icon name="upload" size={14} className="rotate-90" />
                   Send
