@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { buildShowingSuggestedReply } from '@property-manager/core/showing-messages';
 import { apiFetch } from '../lib/apiClient';
 import { Icon } from '../components/Icon';
 import type { LeadStatus } from '../lib/types';
@@ -265,13 +266,29 @@ export function ConversationsPage() {
   };
 
   const confirmShowingMutation = useMutation({
-    mutationFn: (id: string) => apiFetch(`/showings/${id}/confirm`, { method: 'POST' }),
-    onSuccess: (_data, id) => updateShowingStatus(id, 'confirmed'),
+    mutationFn: (showing: ShowingSummary) => apiFetch(`/showings/${showing.id}/confirm`, { method: 'POST' }),
+    onSuccess: (_data, showing) => {
+      updateShowingStatus(showing.id, 'confirmed');
+      setReply(buildShowingSuggestedReply({
+        action: 'confirmed',
+        scheduledAt: showing.scheduledAt,
+        propertyName: showing.unit?.property.name ?? selected?.unit?.property.name ?? 'the property',
+        unitName: showing.unit?.name ?? selected?.unit?.name ?? '',
+      }));
+    },
   });
 
   const cancelShowingMutation = useMutation({
-    mutationFn: (id: string) => apiFetch(`/showings/${id}/cancel`, { method: 'POST', body: JSON.stringify({}) }),
-    onSuccess: (_data, id) => updateShowingStatus(id, 'cancelled'),
+    mutationFn: (showing: ShowingSummary) => apiFetch(`/showings/${showing.id}/cancel`, { method: 'POST', body: JSON.stringify({}) }),
+    onSuccess: (_data, showing) => {
+      updateShowingStatus(showing.id, 'cancelled');
+      setReply(buildShowingSuggestedReply({
+        action: 'cancelled',
+        scheduledAt: showing.scheduledAt,
+        propertyName: showing.unit?.property.name ?? selected?.unit?.property.name ?? 'the property',
+        unitName: showing.unit?.name ?? selected?.unit?.name ?? '',
+      }));
+    },
   });
 
   const conversations = data?.conversations ?? [];
@@ -494,7 +511,7 @@ export function ConversationsPage() {
                         </div>
                         {canConfirmShowing(showing.status) && (
                           <button
-                            onClick={() => confirmShowingMutation.mutate(showing.id)}
+                            onClick={() => confirmShowingMutation.mutate(showing)}
                             disabled={confirmShowingMutation.isPending || cancelShowingMutation.isPending}
                             className="rounded border border-green-200 bg-white px-1.5 py-0.5 font-medium text-green-700 hover:bg-green-50 disabled:opacity-50"
                           >
@@ -503,7 +520,7 @@ export function ConversationsPage() {
                         )}
                         {canCancelShowing(showing.status) && (
                           <button
-                            onClick={() => cancelShowingMutation.mutate(showing.id)}
+                            onClick={() => cancelShowingMutation.mutate(showing)}
                             disabled={confirmShowingMutation.isPending || cancelShowingMutation.isPending}
                             className="rounded border border-red-200 bg-white px-1.5 py-0.5 font-medium text-red-700 hover:bg-red-50 disabled:opacity-50"
                           >

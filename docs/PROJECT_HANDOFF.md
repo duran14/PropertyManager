@@ -1,6 +1,6 @@
 # Project Handoff - Property Manager
 
-Last updated: 2026-07-11 14:10, America/Vancouver.
+Last updated: 2026-07-11 14:19, America/Vancouver.
 
 This document is for a future AI agent or developer continuing the project after the current Codex session. It summarizes what was built, what is currently working, how to verify it, and what should come next.
 
@@ -15,11 +15,12 @@ The app is still in mock/prototype mode for intelligence and most third-party in
 - Local path: `C:\Users\duran\Documents\Proyectos IA\ZCodeProject\Property Manager`
 - GitHub remote: `https://github.com/duran14/PropertyManager.git`
 - Branch: `main`
-- Latest confirmed feature commit before this handoff document: pending current commit with showing confirm/cancel actions in Conversations.
+- Latest confirmed feature commit before this handoff document: pending current commit with suggested replies after showing actions.
 
 Important recent commits:
 
-- pending: showings can be confirmed or cancelled from Conversations
+- pending: showing actions fill suggested manual replies in Conversations
+- `3583f81 Manage showings from conversations`
 - `032e330 Schedule showings from conversations`
 - `a59b081 Add lead status controls to conversations`
 - `Add staff override for recommended units`
@@ -110,6 +111,8 @@ Staff can now create a manual/internal showing directly from a conversation:
 - Showing duration is validated to 15, 30, 45, or 60 minutes.
 - Linked showings can now be confirmed or cancelled from the conversation detail.
 - Backend guards prevent confirming non-scheduled showings and cancelling terminal showings.
+- Confirming or cancelling a showing now fills the manual reply input with an editable English suggested message.
+- Suggested showing reply copy lives in `@property-manager/core/showing-messages` so it can later be reused by AI-assisted reply generation.
 
 Primary files:
 
@@ -117,6 +120,8 @@ Primary files:
 - `apps/api/src/services/scheduling.service.ts`
 - `apps/api/src/services/scheduling.service.test.ts`
 - `apps/web/src/pages/ConversationsPage.tsx`
+- `packages/core/src/showing-messages.ts`
+- `packages/core/src/showing-messages.test.ts`
 
 ### Onboarding and property inventory
 
