@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   getConversationExternalId,
+  getExistingLeadChannelUpdate,
   getReplyAddressFromConversation,
 } from './chatbot.service.js';
 
@@ -17,5 +18,10 @@ describe('chatbot conversation identity', () => {
     expect(getReplyAddressFromConversation('whatsapp:+16045551792')).toBe('+16045551792');
     expect(getReplyAddressFromConversation('telegram:12345')).toBe('12345');
     expect(getReplyAddressFromConversation('web_session_1')).toBe('web_session_1');
+  });
+
+  it('keeps first-touch source while updating the preferred channel', () => {
+    expect(getExistingLeadChannelUpdate('whatsapp')).toEqual({ preferredChannel: 'whatsapp' });
+    expect(getExistingLeadChannelUpdate('sms')).toEqual({ preferredChannel: 'sms' });
   });
 });

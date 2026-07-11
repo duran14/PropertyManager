@@ -105,7 +105,7 @@ export function LeadsPage() {
               <th className="text-left px-4 py-3 font-medium">Prospect</th>
               <th className="text-left px-4 py-3 font-medium">Contact</th>
               <th className="text-left px-4 py-3 font-medium">Profile</th>
-              <th className="text-left px-4 py-3 font-medium">Source</th>
+              <th className="text-left px-4 py-3 font-medium">First source</th>
               <th className="text-left px-4 py-3 font-medium">Unit</th>
               <th className="text-center px-4 py-3 font-medium">Status</th>
               <th className="text-left px-4 py-3 font-medium">Date</th>
@@ -156,8 +156,8 @@ export function LeadsPage() {
                       <Icon name={sourceMeta.icon} size={12} />
                       {sourceMeta.label}
                     </span>
-                    {lead.prospectProfile?.lastChannel && lead.prospectProfile.lastChannel !== lead.source && (
-                      <div className="mt-1 text-[11px] text-slate-400">Last: {lead.prospectProfile.lastChannel}</div>
+                    {lead.preferredChannel && lead.preferredChannel !== lead.source && (
+                      <div className="mt-1 text-[11px] text-slate-400">Preferred: {lead.preferredChannel}</div>
                     )}
                   </td>
                   <td className="px-4 py-3 text-slate-600 text-xs">

@@ -367,6 +367,10 @@ async function ensureLead(
     where: { tenantId, phone: fromPhone },
   });
   if (existing) {
+    await prisma.lead.update({
+      where: { id: existing.id },
+      data: getExistingLeadChannelUpdate(channel),
+    });
     await prisma.chatConversation.update({
       where: { id: conversationId },
       data: { leadId: existing.id },
@@ -408,4 +412,8 @@ export function getConversationExternalId(input: Pick<InboundChatMessage, 'chann
 
 export function getReplyAddressFromConversation(externalId: string): string {
   return externalId.replace(/^(sms|whatsapp|telegram):/, '');
+}
+
+export function getExistingLeadChannelUpdate(channel: string): { preferredChannel: string } {
+  return { preferredChannel: channel };
 }

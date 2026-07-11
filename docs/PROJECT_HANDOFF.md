@@ -253,10 +253,11 @@ Legal/handoff:
 
 Recommended next step:
 
-1. Improve lead data model for first source vs last/preferred channel.
-   - Current lead may keep `source: sms` even after later WhatsApp conversations from same phone.
-   - Add `lastChannel` or update `preferredChannel` when new conversations arrive.
-   - Consider whether `source` should mean first-touch attribution only.
+1. Continue refining lead attribution and channel history.
+   - `source` now means first-touch attribution.
+   - `preferredChannel` is updated when an existing lead resumes through another channel.
+   - `prospectProfile.lastChannel` is derived from the most recently updated conversation.
+   - A future improvement could add a dedicated channel history table or event timeline.
 
 Then:
 
