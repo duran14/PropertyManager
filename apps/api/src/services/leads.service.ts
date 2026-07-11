@@ -13,6 +13,23 @@ export interface ShowMojoEvent {
   tourDate?: string;
 }
 
+export interface LeadProspectProfile {
+  budget?: string;
+  moveInDate?: string;
+  preferredArea?: string;
+  occupants?: string;
+  pets?: string;
+  lastChannel?: string;
+  conversationState?: string;
+}
+
+interface LeadConversationSummary {
+  channel: string;
+  state: string;
+  updatedAt: Date;
+  slots: Array<{ key: string; value: string }>;
+}
+
 /** Registra un lead desde un webhook de ShowMojo (registro de visita). */
 export async function createLeadFromShowMojo(input: ShowMojoEvent): Promise<{ leadId: string }> {
   const lead = await prisma.lead.create({
@@ -81,7 +98,7 @@ export async function listLeads(
   tenantId: string,
   opts: { status?: string; source?: string; limit?: number } = {},
 ) {
-  return prisma.lead.findMany({
+  const leads = await prisma.lead.findMany({
     where: {
       tenantId,
       ...(opts.status ? { status: opts.status as never } : {}),
@@ -89,8 +106,54 @@ export async function listLeads(
     },
     orderBy: { createdAt: 'desc' },
     take: opts.limit ?? 50,
-    include: { unit: { select: { name: true, property: { select: { name: true } } } } },
+    include: {
+      unit: { select: { name: true, property: { select: { name: true } } } },
+      conversations: {
+        orderBy: { updatedAt: 'desc' },
+        select: {
+          channel: true,
+          state: true,
+          updatedAt: true,
+          slots: { select: { key: true, value: true } },
+        },
+      },
+    },
   });
+
+  return leads.map((lead) => ({
+    ...lead,
+    prospectProfile: buildLeadProspectProfile(lead.conversations),
+  }));
+}
+
+export function buildLeadProspectProfile(conversations: LeadConversationSummary[]): LeadProspectProfile {
+  const sorted = [...conversations].sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+  const profile: LeadProspectProfile = {};
+
+  if (sorted[0]) {
+    profile.lastChannel = sorted[0].channel;
+    profile.conversationState = sorted[0].state;
+  }
+
+  const slotMap: Record<string, keyof LeadProspectProfile> = {
+    budget: 'budget',
+    move_in_date: 'moveInDate',
+    preferred_area: 'preferredArea',
+    occupants: 'occupants',
+    pets: 'pets',
+  };
+
+  for (const conversation of sorted) {
+    for (const slot of conversation.slots) {
+      if (slot.key.startsWith('pending_') || slot.key.startsWith('scheduling_')) continue;
+      const profileKey = slotMap[slot.key];
+      if (profileKey && !profile[profileKey]) {
+        profile[profileKey] = slot.value;
+      }
+    }
+  }
+
+  return profile;
 }
 
 /** Actualiza el estado de un lead (avanza el funnel). */

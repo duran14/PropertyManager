@@ -62,7 +62,7 @@ export interface ReconciliationBatch {
   balanced: boolean;
 }
 
-export type LeadSource = 'unit_url' | 'whatsapp' | 'sms' | 'showmojo' | 'manual';
+export type LeadSource = 'unit_url' | 'whatsapp' | 'sms' | 'telegram' | 'web' | 'email' | 'showmojo' | 'manual';
 
 export type LeadStatus = 'new_' | 'contacted' | 'tour_scheduled' | 'qualified' | 'converted' | 'lost';
 
@@ -77,6 +77,15 @@ export interface Lead {
   preferredChannel: string | null;
   createdAt: string;
   unit?: { name: string; property: { name: string } } | null;
+  prospectProfile?: {
+    budget?: string;
+    moveInDate?: string;
+    preferredArea?: string;
+    occupants?: string;
+    pets?: string;
+    lastChannel?: string;
+    conversationState?: string;
+  };
 }
 
 export interface Lease {

@@ -8,6 +8,9 @@ const SOURCE_META: Record<string, { label: string; icon: IconName; color: string
   unit_url: { label: 'Unit URL', icon: 'document', color: 'bg-sky-50 text-sky-700' },
   whatsapp: { label: 'WhatsApp', icon: 'chat', color: 'bg-green-50 text-green-700' },
   sms: { label: 'SMS', icon: 'chat', color: 'bg-blue-50 text-blue-700' },
+  telegram: { label: 'Telegram', icon: 'chat', color: 'bg-cyan-50 text-cyan-700' },
+  web: { label: 'Web chat', icon: 'chat', color: 'bg-violet-50 text-violet-700' },
+  email: { label: 'Email', icon: 'document', color: 'bg-amber-50 text-amber-700' },
   showmojo: { label: 'ShowMojo', icon: 'sparkles', color: 'bg-violet-50 text-violet-700' },
   manual: { label: 'Manual', icon: 'hitl', color: 'bg-slate-100 text-slate-700' },
 };
@@ -27,6 +30,19 @@ const NEXT_STATUS: Partial<Record<LeadStatus, LeadStatus>> = {
   tour_scheduled: 'qualified',
   qualified: 'converted',
 };
+
+function profileChips(lead: Lead): Array<{ label: string; value: string }> {
+  const profile = lead.prospectProfile;
+  if (!profile) return [];
+
+  return [
+    profile.budget ? { label: 'Budget', value: `$${profile.budget}` } : null,
+    profile.moveInDate ? { label: 'Move-in', value: profile.moveInDate } : null,
+    profile.preferredArea ? { label: 'Area', value: profile.preferredArea } : null,
+    profile.occupants ? { label: 'People', value: profile.occupants } : null,
+    profile.pets ? { label: 'Pets', value: profile.pets } : null,
+  ].filter((chip): chip is { label: string; value: string } => Boolean(chip));
+}
 
 export function LeadsPage() {
   const queryClient = useQueryClient();
@@ -69,7 +85,7 @@ export function LeadsPage() {
       </div>
 
       <div className="mb-4 flex gap-2 text-sm">
-        {['', 'whatsapp', 'unit_url', 'showmojo'].map((f) => (
+        {['', 'whatsapp', 'sms', 'telegram', 'web', 'unit_url', 'showmojo'].map((f) => (
           <button
             key={f}
             onClick={() => setFilter(f)}
@@ -88,6 +104,7 @@ export function LeadsPage() {
             <tr>
               <th className="text-left px-4 py-3 font-medium">Prospect</th>
               <th className="text-left px-4 py-3 font-medium">Contact</th>
+              <th className="text-left px-4 py-3 font-medium">Profile</th>
               <th className="text-left px-4 py-3 font-medium">Source</th>
               <th className="text-left px-4 py-3 font-medium">Unit</th>
               <th className="text-center px-4 py-3 font-medium">Status</th>
@@ -97,10 +114,10 @@ export function LeadsPage() {
           </thead>
           <tbody className="divide-y divide-slate-100">
             {isLoading && (
-              <tr><td colSpan={7} className="px-4 py-8 text-center text-slate-400">Loading...</td></tr>
+              <tr><td colSpan={8} className="px-4 py-8 text-center text-slate-400">Loading...</td></tr>
             )}
             {!isLoading && leads.length === 0 && (
-              <tr><td colSpan={7} className="px-4 py-8 text-center text-slate-400">
+              <tr><td colSpan={8} className="px-4 py-8 text-center text-slate-400">
                 No leads yet. Leads arrive from WhatsApp, public unit pages, or ShowMojo.
               </td></tr>
             )}
@@ -108,6 +125,7 @@ export function LeadsPage() {
               const sourceMeta = SOURCE_META[lead.source] ?? SOURCE_META.manual;
               const statusMeta = STATUS_META[lead.status] ?? STATUS_META.new_;
               const nextStatus = NEXT_STATUS[lead.status];
+              const chips = profileChips(lead);
               return (
                 <tr key={lead.id} className="hover:bg-slate-50">
                   <td className="px-4 py-3">
@@ -121,10 +139,26 @@ export function LeadsPage() {
                     {lead.email && <div>{lead.email}</div>}
                   </td>
                   <td className="px-4 py-3">
+                    {chips.length > 0 ? (
+                      <div className="flex max-w-[260px] flex-wrap gap-1">
+                        {chips.map((chip) => (
+                          <span key={`${lead.id}-${chip.label}`} className="rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[11px] text-slate-600">
+                            <span className="font-medium text-slate-500">{chip.label}</span> {chip.value}
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <span className="text-xs text-slate-400">-</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-3">
                     <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs ${sourceMeta.color}`}>
                       <Icon name={sourceMeta.icon} size={12} />
                       {sourceMeta.label}
                     </span>
+                    {lead.prospectProfile?.lastChannel && lead.prospectProfile.lastChannel !== lead.source && (
+                      <div className="mt-1 text-[11px] text-slate-400">Last: {lead.prospectProfile.lastChannel}</div>
+                    )}
                   </td>
                   <td className="px-4 py-3 text-slate-600 text-xs">
                     {lead.unit ? `${lead.unit.name} / ${lead.unit.property.name}` : '-'}

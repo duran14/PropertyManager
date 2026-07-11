@@ -40,6 +40,22 @@ const STATE_LABELS: Record<string, string> = {
   handoff: 'Human handoff',
 };
 
+const SLOT_LABELS: Record<string, string> = {
+  budget: 'Budget',
+  move_in_date: 'Move-in',
+  occupants: 'People',
+  pets: 'Pets',
+  preferred_area: 'Area',
+};
+
+function visibleSlots(slots: Array<{ key: string; value: string }>) {
+  return slots.filter((s) => !s.key.startsWith('pending_') && !s.key.startsWith('scheduling_'));
+}
+
+function slotValue(slots: Array<{ key: string; value: string }>, key: string): string | undefined {
+  return slots.find((slot) => slot.key === key)?.value;
+}
+
 export function ConversationsPage() {
   const queryClient = useQueryClient();
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -134,6 +150,15 @@ export function ConversationsPage() {
                 <div className="text-xs text-slate-400">
                   {STATE_LABELS[c.state] ?? c.state}
                 </div>
+                {visibleSlots(c.slots).length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {visibleSlots(c.slots).slice(0, 3).map((slot) => (
+                      <span key={`${c.id}-${slot.key}`} className="rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[11px] text-slate-500">
+                        {SLOT_LABELS[slot.key] ?? slot.key}: {slot.value}
+                      </span>
+                    ))}
+                  </div>
+                )}
               </button>
             ))}
           </div>
@@ -158,24 +183,22 @@ export function ConversationsPage() {
                 <span className="text-xs text-slate-400">{STATE_LABELS[selected.state] ?? selected.state}</span>
               </div>
 
-              {selected.slots.filter((s) => !s.key.startsWith('pending_') && !s.key.startsWith('scheduling_')).length > 0 && (
-                <div className="px-4 py-2 border-b border-slate-100 bg-slate-50 flex flex-wrap gap-2">
-                  {selected.slots
-                    .filter((s) => !s.key.startsWith('pending_') && !s.key.startsWith('scheduling_'))
-                    .map((s) => {
-                      const labels: Record<string, string> = {
-                        budget: 'Budget',
-                        move_in_date: 'Move-in',
-                        occupants: 'Occupants',
-                        pets: 'Pets',
-                        preferred_area: 'Area',
-                      };
-                      return (
-                        <span key={s.key} className="text-xs bg-white border border-slate-200 rounded px-2 py-0.5">
-                          <strong className="text-slate-500">{labels[s.key] ?? s.key}:</strong> {s.value}
-                        </span>
-                      );
-                    })}
+              {visibleSlots(selected.slots).length > 0 && (
+                <div className="border-b border-slate-100 bg-slate-50 px-4 py-3">
+                  <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
+                    {[
+                      { key: 'budget', value: slotValue(selected.slots, 'budget') ? `$${slotValue(selected.slots, 'budget')}` : undefined },
+                      { key: 'move_in_date', value: slotValue(selected.slots, 'move_in_date') },
+                      { key: 'preferred_area', value: slotValue(selected.slots, 'preferred_area') },
+                      { key: 'occupants', value: slotValue(selected.slots, 'occupants') },
+                      { key: 'pets', value: slotValue(selected.slots, 'pets') },
+                    ].map(({ key, value }) => (
+                      <div key={key} className="min-h-[54px] rounded-md border border-slate-200 bg-white px-2 py-1.5">
+                        <div className="text-[11px] font-medium uppercase text-slate-400">{SLOT_LABELS[key] ?? key}</div>
+                        <div className="mt-0.5 truncate text-sm font-medium text-slate-700">{value ?? '-'}</div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
 
