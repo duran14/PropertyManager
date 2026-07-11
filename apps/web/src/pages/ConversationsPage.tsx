@@ -26,7 +26,16 @@ interface Conversation {
   } | null;
   messages: ChatMessage[];
   slots: Array<{ key: string; value: string }>;
+  showings?: ShowingSummary[];
   updatedAt: string;
+}
+
+interface ShowingSummary {
+  id: string;
+  scheduledAt: string;
+  durationMinutes: number;
+  status: 'scheduled' | 'confirmed' | 'completed' | 'cancelled' | 'no_show';
+  unit: { name: string; property: { name: string; address: string; city: string } } | null;
 }
 
 interface UnitOption {
@@ -80,10 +89,29 @@ function slotValue(slots: Array<{ key: string; value: string }>, key: string): s
   return slots.find((slot) => slot.key === key)?.value;
 }
 
+function defaultShowingDateTime(): string {
+  const date = new Date();
+  date.setDate(date.getDate() + 1);
+  date.setHours(10, 0, 0, 0);
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+}
+
+function formatShowingDateTime(iso: string): string {
+  return new Date(iso).toLocaleString('en-CA', {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  });
+}
+
 export function ConversationsPage() {
   const queryClient = useQueryClient();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [reply, setReply] = useState('');
+  const [showingDateTime, setShowingDateTime] = useState(defaultShowingDateTime);
+  const [showingDuration, setShowingDuration] = useState(30);
 
   const { data, isLoading } = useQuery<{ conversations: Conversation[] }>({
     queryKey: ['conversations'],
@@ -174,6 +202,38 @@ export function ConversationsPage() {
       );
       queryClient.invalidateQueries({ queryKey: ['conversations'] });
       queryClient.invalidateQueries({ queryKey: ['leads'] });
+    },
+  });
+
+  const scheduleShowingMutation = useMutation({
+    mutationFn: ({ id, scheduledAt, durationMinutes }: { id: string; scheduledAt: string; durationMinutes: number }) =>
+      apiFetch<{ showing: ShowingSummary }>(`/chat/conversations/${id}/showing`, {
+        method: 'POST',
+        body: JSON.stringify({
+          scheduledAt: new Date(scheduledAt).toISOString(),
+          durationMinutes,
+        }),
+      }),
+    onSuccess: (data) => {
+      queryClient.setQueryData<{ conversation: Conversation }>(
+        ['conversation', selectedId],
+        (old) => {
+          if (!old) return old;
+          return {
+            conversation: {
+              ...old.conversation,
+              state: 'scheduling',
+              lead: old.conversation.lead
+                ? { ...old.conversation.lead, status: 'tour_scheduled' }
+                : old.conversation.lead,
+              showings: [...(old.conversation.showings ?? []), data.showing],
+            },
+          };
+        },
+      );
+      queryClient.invalidateQueries({ queryKey: ['conversations'] });
+      queryClient.invalidateQueries({ queryKey: ['leads'] });
+      queryClient.invalidateQueries({ queryKey: ['showings'] });
     },
   });
 
@@ -341,6 +401,63 @@ export function ConversationsPage() {
                   </div>
                 </div>
               )}
+
+              <div className="border-b border-slate-100 bg-white px-4 py-3">
+                <div className="flex flex-wrap items-end gap-2">
+                  <div className="min-w-[190px] flex-1">
+                    <label htmlFor="showing-date" className="text-[11px] font-medium uppercase text-slate-400">
+                      Schedule tour
+                    </label>
+                    <input
+                      id="showing-date"
+                      type="datetime-local"
+                      value={showingDateTime}
+                      onChange={(event) => setShowingDateTime(event.target.value)}
+                      className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-violet-500"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="showing-duration" className="text-[11px] font-medium uppercase text-slate-400">
+                      Duration
+                    </label>
+                    <select
+                      id="showing-duration"
+                      value={showingDuration}
+                      onChange={(event) => setShowingDuration(Number(event.target.value))}
+                      className="mt-1 w-28 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-violet-500"
+                    >
+                      {[15, 30, 45, 60].map((minutes) => (
+                        <option key={minutes} value={minutes}>{minutes} min</option>
+                      ))}
+                    </select>
+                  </div>
+                  <button
+                    onClick={() => scheduleShowingMutation.mutate({
+                      id: selected.id,
+                      scheduledAt: showingDateTime,
+                      durationMinutes: showingDuration,
+                    })}
+                    disabled={!selected.lead || !selected.unit || !showingDateTime || scheduleShowingMutation.isPending}
+                    className="inline-flex items-center gap-1 rounded-md bg-teal-600 px-3 py-2 text-sm font-medium text-white hover:bg-teal-700 disabled:opacity-50"
+                  >
+                    <Icon name="showings" size={14} />
+                    Create showing
+                  </button>
+                </div>
+                {(!selected.lead || !selected.unit) && (
+                  <p className="mt-2 text-xs text-slate-400">A linked lead and recommended unit are required.</p>
+                )}
+                {(selected.showings ?? []).length > 0 && (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {selected.showings!.map((showing) => (
+                      <div key={showing.id} className="rounded-md border border-teal-100 bg-teal-50 px-2 py-1 text-xs text-teal-800">
+                        <span className="font-medium">{formatShowingDateTime(showing.scheduledAt)}</span>
+                        <span className="text-teal-600"> / {showing.durationMinutes} min / {showing.status}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
 
               <div className="flex-1 overflow-y-auto p-4 space-y-2 max-h-[400px]">
                 {selected.messages.map((msg) => (

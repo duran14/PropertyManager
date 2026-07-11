@@ -19,6 +19,7 @@ import {
   getReplyAddressFromConversation,
   handleInboundMessage,
 } from '../services/chatbot.service.js';
+import { createManualShowingFromConversation } from '../services/scheduling.service.js';
 
 export const chatRouter = Router();
 
@@ -130,7 +131,17 @@ chatRouter.get('/conversations/:id', requireAuth, async (req, res, next) => {
       res.status(404).json({ error: 'Conversation not found' });
       return;
     }
-    res.json({ conversation });
+    const showings = conversation.leadId
+      ? await prisma.showing.findMany({
+          where: { tenantId: user.tenantId, leadId: conversation.leadId },
+          orderBy: { scheduledAt: 'asc' },
+          include: {
+            lead: { select: { name: true, phone: true, email: true } },
+            unit: { select: { name: true, property: { select: { name: true, address: true, city: true } } } },
+          },
+        })
+      : [];
+    res.json({ conversation: { ...conversation, showings } });
   } catch (err) {
     next(err);
   }
@@ -144,6 +155,44 @@ const manualReplySchema = z.object({
 
 const recommendedUnitSchema = z.object({
   unitId: z.string().min(1),
+});
+
+const showingScheduleSchema = z.object({
+  scheduledAt: z.string().datetime(),
+  durationMinutes: z.number().int().optional(),
+});
+
+chatRouter.post('/conversations/:id/showing', requireAuth, async (req, res, next) => {
+  try {
+    const user = requireUser(req);
+    const parsed = showingScheduleSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: 'Valid scheduledAt is required' });
+      return;
+    }
+
+    const showing = await createManualShowingFromConversation({
+      tenantId: user.tenantId,
+      conversationId: req.params.id,
+      scheduledAt: new Date(parsed.data.scheduledAt),
+      durationMinutes: parsed.data.durationMinutes,
+      actorId: user.userId,
+    });
+
+    res.status(201).json({ showing });
+  } catch (err) {
+    if (err instanceof Error) {
+      if (err.message === 'Conversation not found') {
+        res.status(404).json({ error: err.message });
+        return;
+      }
+      if (err.message.startsWith('Conversation has no') || err.message.startsWith('Showing duration')) {
+        res.status(400).json({ error: err.message });
+        return;
+      }
+    }
+    next(err);
+  }
 });
 
 chatRouter.patch('/conversations/:id/recommended-unit', requireAuth, async (req, res, next) => {

@@ -4,7 +4,6 @@
 import type { ShowMojoAdapter, ShowMojoSlot } from '@property-manager/adapters';
 import { prisma } from '../config/db.js';
 import { writeAudit } from './audit.service.js';
-import { getAdapters } from '../config/adapters.js';
 
 export interface AvailableSlotsResult {
   slots: Array<{
@@ -14,6 +13,14 @@ export interface AvailableSlotsResult {
     brokerName?: string;
     label: string;
   }>;
+}
+
+export function normalizeShowingDuration(durationMinutes: number | undefined): number {
+  const duration = durationMinutes ?? 30;
+  if (![15, 30, 45, 60].includes(duration)) {
+    throw new Error('Showing duration must be 15, 30, 45, or 60 minutes');
+  }
+  return duration;
 }
 
 export async function getAvailableSlots(
@@ -43,6 +50,72 @@ export async function getAvailableSlots(
       label: formatSlotLabel(slot),
     })),
   };
+}
+
+export async function createManualShowingFromConversation(input: {
+  tenantId: string;
+  conversationId: string;
+  scheduledAt: Date;
+  durationMinutes?: number;
+  actorId: string;
+}) {
+  const conversation = await prisma.chatConversation.findFirst({
+    where: { id: input.conversationId, tenantId: input.tenantId },
+    include: { lead: true, unit: true },
+  });
+  if (!conversation) throw new Error('Conversation not found');
+  if (!conversation.leadId || !conversation.lead) throw new Error('Conversation has no linked lead');
+
+  const unitId = conversation.unitId ?? conversation.lead.unitId;
+  if (!unitId) throw new Error('Conversation has no recommended unit');
+
+  const durationMinutes = normalizeShowingDuration(input.durationMinutes);
+  const showing = await prisma.$transaction(async (tx) => {
+    const dbShowing = await tx.showing.create({
+      data: {
+        tenantId: input.tenantId,
+        leadId: conversation.leadId!,
+        unitId,
+        scheduledAt: input.scheduledAt,
+        durationMinutes,
+        status: 'scheduled',
+      },
+      include: {
+        lead: { select: { name: true, phone: true, email: true } },
+        unit: { select: { name: true, property: { select: { name: true, address: true, city: true } } } },
+      },
+    });
+
+    await tx.lead.update({
+      where: { id: conversation.leadId! },
+      data: { status: 'tour_scheduled' },
+    });
+
+    await tx.chatConversation.update({
+      where: { id: conversation.id },
+      data: { state: 'scheduling' },
+    });
+
+    return dbShowing;
+  });
+
+  await writeAudit({
+    tenantId: input.tenantId,
+    actorId: input.actorId,
+    actorType: 'user',
+    action: 'showing.scheduled_manual',
+    entityType: 'showing',
+    entityId: showing.id,
+    payload: {
+      conversationId: input.conversationId,
+      leadId: showing.leadId,
+      unitId,
+      scheduledAt: input.scheduledAt.toISOString(),
+      durationMinutes,
+    },
+  });
+
+  return showing;
 }
 
 export async function scheduleTour(input: {
@@ -161,6 +234,7 @@ export async function confirmShowing(
   tenantId: string,
   brokerUserId: string,
 ): Promise<void> {
+  const { getAdapters } = await import('../config/adapters.js');
   const adapters = getAdapters();
   const showing = await prisma.showing.findFirst({
     where: { id: showingId, tenantId },
@@ -193,6 +267,7 @@ export async function cancelShowing(
   userId: string,
   reason?: string,
 ): Promise<void> {
+  const { getAdapters } = await import('../config/adapters.js');
   const adapters = getAdapters();
   const showing = await prisma.showing.findFirst({
     where: { id: showingId, tenantId },

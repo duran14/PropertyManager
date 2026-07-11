@@ -1,6 +1,6 @@
 # Project Handoff - Property Manager
 
-Last updated: 2026-07-11 13:00, America/Vancouver.
+Last updated: 2026-07-11 13:09, America/Vancouver.
 
 This document is for a future AI agent or developer continuing the project after the current Codex session. It summarizes what was built, what is currently working, how to verify it, and what should come next.
 
@@ -15,11 +15,12 @@ The app is still in mock/prototype mode for intelligence and most third-party in
 - Local path: `C:\Users\duran\Documents\Proyectos IA\ZCodeProject\Property Manager`
 - GitHub remote: `https://github.com/duran14/PropertyManager.git`
 - Branch: `main`
-- Latest confirmed feature commit before this handoff document: pending current commit with lead status controls in Conversations.
+- Latest confirmed feature commit before this handoff document: pending current commit with manual showings from Conversations.
 
 Important recent commits:
 
-- pending: lead status can be managed from Conversations
+- pending: manual showings can be scheduled from Conversations
+- `a59b081 Add lead status controls to conversations`
 - `Add staff override for recommended units`
 - `b1dcb17 Track chatbot unit recommendations`
 - `8da09e0 Add onboarding and property inventory management`
@@ -95,6 +96,24 @@ Captured chatbot data is surfaced in the app:
 - Conversations page shows visible slots in list previews and detail summary cards.
 - Conversations detail lets staff update the linked lead status without leaving the conversation.
 - Lead status updates are validated against the known funnel states: `new_`, `contacted`, `tour_scheduled`, `qualified`, `converted`, `lost`.
+
+### Showings from Conversations
+
+Staff can now create a manual/internal showing directly from a conversation:
+
+- `POST /chat/conversations/:id/showing` creates a `Showing` from the linked lead and recommended unit.
+- The showing is tenant-scoped and appears on `/showings`.
+- Creating the showing updates the lead status to `tour_scheduled`.
+- Conversation detail now returns linked showings for the lead, so staff can see scheduled visits without leaving the thread.
+- This does not require real ShowMojo integration; `showmojoId` and `showmojoUrl` remain empty for manual/internal showings.
+- Showing duration is validated to 15, 30, 45, or 60 minutes.
+
+Primary files:
+
+- `apps/api/src/routes/chat.ts`
+- `apps/api/src/services/scheduling.service.ts`
+- `apps/api/src/services/scheduling.service.test.ts`
+- `apps/web/src/pages/ConversationsPage.tsx`
 
 ### Onboarding and property inventory
 
