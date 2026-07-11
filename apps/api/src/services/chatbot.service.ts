@@ -96,6 +96,10 @@ export async function handleInboundMessage(
   let newState = glmResult.next_state ?? currentState;
   let finalReply = glmResult.reply;
 
+  if (newState === 'proposing_tour' && availableUnits.length > 0) {
+    finalReply = buildUnitRecommendationReply(availableUnits);
+  }
+
   if (newState === 'scheduling' && currentState !== 'scheduling') {
     const unitId = conversation.unitId ?? (await inferUnitFromSlots(input.tenantId, existingSlots));
     if (unitId) {
@@ -228,7 +232,7 @@ async function callGlm(
     userMessage: string;
     history: Array<{ role: string; content: string }>;
     existingSlots: Record<string, string>;
-    availableUnits: Array<{ id: string; name: string; rentCents: number; city: string; beds?: string }>;
+    availableUnits: AvailableUnit[];
   },
 ): Promise<{
   reply: string;
@@ -290,11 +294,18 @@ async function callGlm(
 
 function buildSystemPrompt(
   state: ConversationState,
-  availableUnits: Array<{ id: string; name: string; rentCents: number; city: string }>,
+  availableUnits: Array<AvailableUnit>,
   slots: Record<string, string>,
 ): string {
   const unitsText = availableUnits.length > 0
-    ? availableUnits.map((unit) => `- ${unit.name} in ${unit.city}: $${(unit.rentCents / 100).toFixed(0)}/month`).join('\n')
+    ? availableUnits.map((unit) => {
+      const details = [
+        unit.bedrooms !== null ? `${unit.bedrooms} bed` : undefined,
+        unit.bathrooms !== null ? `${unit.bathrooms} bath` : undefined,
+        unit.petPolicy ?? undefined,
+      ].filter(Boolean).join(', ');
+      return `- ${unit.propertyName} ${unit.name} in ${unit.city}: $${(unit.rentCents / 100).toFixed(0)}/month${details ? ` (${details})` : ''}`;
+    }).join('\n')
     : 'There are no available units right now.';
 
   const slotsText = Object.keys(slots).length > 0
@@ -326,10 +337,22 @@ function buildSystemPrompt(
   ].join('\n');
 }
 
+interface AvailableUnit {
+  id: string;
+  name: string;
+  rentCents: number;
+  city: string;
+  propertyName: string;
+  bedrooms: number | null;
+  bathrooms: number | null;
+  availableFrom: Date | null;
+  petPolicy: string | null;
+}
+
 async function getAvailableUnits(
   tenantId: string,
   slots: Record<string, string>,
-): Promise<Array<{ id: string; name: string; rentCents: number; city: string }>> {
+): Promise<AvailableUnit[]> {
   const budget = slots.budget ? parseInt(slots.budget.replace(/[^0-9]/g, '')) * 100 : undefined;
   const units = await prisma.unit.findMany({
     where: {
@@ -337,14 +360,19 @@ async function getAvailableUnits(
       isActive: true,
       ...(budget ? { rentCents: { lte: budget } } : {}),
     },
-    include: { property: { select: { city: true } } },
+    include: { property: { select: { name: true, city: true } } },
     take: 5,
   });
   return units.map((unit) => ({
     id: unit.id,
     name: unit.name,
     rentCents: unit.rentCents,
+    propertyName: unit.property.name,
     city: unit.property.city,
+    bedrooms: unit.bedrooms,
+    bathrooms: unit.bathrooms,
+    availableFrom: unit.availableFrom,
+    petPolicy: unit.petPolicy,
   }));
 }
 
@@ -416,4 +444,19 @@ export function getReplyAddressFromConversation(externalId: string): string {
 
 export function getExistingLeadChannelUpdate(channel: string): { preferredChannel: string } {
   return { preferredChannel: channel };
+}
+
+function buildUnitRecommendationReply(units: AvailableUnit[]): string {
+  const options = units.slice(0, 3).map((unit) => {
+    const details = [
+      unit.bedrooms !== null ? `${unit.bedrooms} bed` : undefined,
+      unit.bathrooms !== null ? `${unit.bathrooms} bath` : undefined,
+      unit.petPolicy ?? undefined,
+      unit.availableFrom ? `available ${unit.availableFrom.toLocaleDateString('en-CA')}` : undefined,
+    ].filter(Boolean).join(', ');
+    const suffix = details ? ` (${details})` : '';
+    return `- ${unit.propertyName} ${unit.name} in ${unit.city}: $${(unit.rentCents / 100).toLocaleString('en-CA')}/month${suffix}`;
+  }).join('\n');
+
+  return `Thanks. Based on your criteria, these active listings may fit:\n\n${options}\n\nWould you like to schedule a tour for one of them?`;
 }

@@ -15,7 +15,10 @@ unitsRouter.get('/', requireAuth, async (req, res, next) => {
     const user = requireUser(req);
     const units = await prisma.unit.findMany({
       where: { tenantId: user.tenantId, isActive: true },
-      include: { property: { select: { name: true, city: true, address: true } } },
+      include: {
+        property: { select: { name: true, city: true, address: true } },
+        listingPhotos: { take: 3, orderBy: [{ isPrimary: 'desc' }, { createdAt: 'asc' }] },
+      },
       orderBy: { createdAt: 'asc' },
     });
     res.json({ units });

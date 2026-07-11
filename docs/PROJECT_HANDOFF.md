@@ -1,6 +1,6 @@
 # Project Handoff - Property Manager
 
-Last updated: 2026-07-11, America/Vancouver.
+Last updated: 2026-07-11 08:18, America/Vancouver.
 
 This document is for a future AI agent or developer continuing the project after the current Codex session. It summarizes what was built, what is currently working, how to verify it, and what should come next.
 
@@ -20,6 +20,7 @@ The app is still in mock/prototype mode for intelligence and most third-party in
 Important recent commits:
 
 - `a31208e Surface chatbot lead profile in dashboard`
+- `22eddc0 Track preferred lead channel separately`
 - `4f6f930 Improve mock leasing chatbot flow`
 - `79fbfbe Keep chat conversations channel-specific`
 - `15779c1 Return TwiML from Twilio webhooks`
@@ -88,6 +89,29 @@ Captured chatbot data is surfaced in the app:
 - Leads table shows compact chips for budget, move-in, area, occupants, pets.
 - Leads table recognizes `sms`, `whatsapp`, `telegram`, `web`, `email`, `unit_url`, `showmojo`, `manual`.
 - Conversations page shows visible slots in list previews and detail summary cards.
+
+### Onboarding and property inventory
+
+The app now has a `Properties & Onboarding` page for the PM/broker team:
+
+- Company onboarding profile: logo URL, services, values, pricing notes, showing preferences, pet policy, handoff contact, AI tone, AI instructions.
+- Property creation: name, address, city, province, postal code.
+- Unit creation: rent, bedrooms, bathrooms, square feet, available date, amenities, pet policy, parking, utilities, active flag.
+- Inventory list grouped by property.
+
+Primary files:
+
+- `apps/api/prisma/schema.prisma`
+- `apps/api/prisma/migrations/20260711152000_add_onboarding_and_unit_details/migration.sql`
+- `apps/api/prisma/migrations/20260711154500_rls_onboarding_profile/migration.sql`
+- `apps/api/src/routes/onboarding.ts`
+- `apps/api/src/routes/properties.ts`
+- `apps/api/src/services/property-inventory.service.ts`
+- `apps/web/src/pages/PropertiesPage.tsx`
+- `apps/web/src/App.tsx`
+- `apps/web/src/components/Layout.tsx`
+
+The chatbot now uses active units from the database when it reaches the unit recommendation stage. It replies with real property/unit names, city, rent, and available details when present.
 
 Primary files:
 
@@ -261,15 +285,14 @@ Recommended next step:
 
 Then:
 
-2. Add a property intake/onboarding area.
-   - Company profile, values, services, pricing, preferences.
-   - Document upload, logo, policies, price lists.
-   - Separate section for ongoing property/unit management with photos and characteristics.
-   - Roles: property manager, broker, bookkeeper, assistant.
+2. Deepen property intake/onboarding.
+   - Add actual file/document upload for logos, policies, pricing sheets, and compliance documents.
+   - Add assistant role if the product needs a fourth RBAC role.
+   - Add edit/delete flows for properties and units; current UI focuses on create/list.
 
-3. Connect chatbot responses to real app data.
-   - Query actual active units and property attributes.
-   - Use uploaded property data and policies.
+3. Improve chatbot matching against real inventory.
+   - Match by preferred area, pets, bedrooms, availability date, and amenities.
+   - Store which unit was recommended and why.
    - Keep legal/compliance guardrails.
 
 4. Add real AI provider behind the existing GLM adapter or a new provider abstraction.
@@ -288,6 +311,7 @@ Then:
 
 - Cloudflare quick tunnel is temporary and can break.
 - Current AI is still mock, not real LLM behavior.
+- Properties & Onboarding can create/list records, but edit/delete and document upload are not implemented yet.
 - `.env` contains live credentials locally; never commit it.
 - User had trouble connecting GitHub through ChatGPT, but direct git push works to `duran14/PropertyManager.git`.
 - Twilio trial may have limitations around numbers and verified recipients.

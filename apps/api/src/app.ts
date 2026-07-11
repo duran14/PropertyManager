@@ -21,6 +21,8 @@ import { photosRouter } from './routes/photos.js';
 import { unitsRouter } from './routes/units.js';
 import { chatRouter } from './routes/chat.js';
 import { showingsRouter } from './routes/showings.js';
+import { propertiesRouter } from './routes/properties.js';
+import { onboardingRouter } from './routes/onboarding.js';
 
 export function createApp(): express.Application {
   const env = getEnv();
@@ -50,6 +52,8 @@ export function createApp(): express.Application {
   app.use('/leads', leadsRouter);
   app.use('/leases', leasesRouter);
   app.use('/units', unitsRouter);
+  app.use('/properties', propertiesRouter);
+  app.use('/onboarding', onboardingRouter);
   app.use('/photos', photosRouter);
   app.use('/chat', chatRouter);
   app.use('/showings', showingsRouter);

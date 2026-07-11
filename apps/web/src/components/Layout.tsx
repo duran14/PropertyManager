@@ -12,6 +12,7 @@ interface NavItem {
 
 const NAV: NavItem[] = [
   { to: '/', label: 'Dashboard', icon: 'dashboard', roles: ['property_manager', 'bookkeeper', 'broker'] },
+  { to: '/properties', label: 'Properties', icon: 'home', roles: ['property_manager', 'bookkeeper', 'broker'] },
   { to: '/photos', label: 'AI Photos', icon: 'sparkles', roles: ['property_manager', 'broker'] },
   { to: '/leads', label: 'Leads', icon: 'leads', roles: ['property_manager', 'bookkeeper', 'broker'] },
   { to: '/showings', label: 'Showings', icon: 'showings', roles: ['property_manager', 'broker'] },

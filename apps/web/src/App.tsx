@@ -13,6 +13,7 @@ import { LeasesPage } from './pages/LeasesPage';
 import { PhotosPage } from './pages/PhotosPage';
 import { ConversationsPage } from './pages/ConversationsPage';
 import { ShowingsPage } from './pages/ShowingsPage';
+import { PropertiesPage } from './pages/PropertiesPage';
 import { useQuery } from '@tanstack/react-query';
 import { apiFetch } from './lib/apiClient';
 import type { Lease } from './lib/types';
@@ -52,6 +53,7 @@ function ProtectedRoutes() {
     <Layout>
       <Routes>
         <Route path="/" element={<DashboardPage />} />
+        <Route path="/properties" element={<PropertiesPage />} />
         <Route path="/photos" element={<PhotosRoute />} />
         <Route path="/leads" element={<LeadsPage />} />
         <Route path="/showings" element={<ShowingsPage />} />

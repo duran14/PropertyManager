@@ -1,14 +1,12 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-const migrationPath = join(
-  process.cwd(),
-  'prisma',
-  'migrations',
-  '20260709145000_enable_rls_tenant_isolation',
-  'migration.sql',
-);
+const migrationsDir = join(process.cwd(), 'prisma', 'migrations');
+const migration = readdirSync(migrationsDir, { withFileTypes: true })
+  .filter((entry) => entry.isDirectory())
+  .map((entry) => readFileSync(join(migrationsDir, entry.name, 'migration.sql'), 'utf8'))
+  .join('\n');
 
 const tenantScopedTables = [
   'tenants',
@@ -29,13 +27,12 @@ const tenantScopedTables = [
   'chat_conversations',
   'showings',
   'listing_photos',
+  'tenant_onboarding_profiles',
 ];
 
 const childTablesScopedByConversation = ['conversation_slots', 'chat_messages'];
 
 describe('RLS tenant isolation migration', () => {
-  const migration = readFileSync(migrationPath, 'utf8');
-
   it('enables RLS for every tenant-scoped business table', () => {
     for (const table of tenantScopedTables) {
       expect(migration).toContain(`ALTER TABLE "${table}" ENABLE ROW LEVEL SECURITY;`);

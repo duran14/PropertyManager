@@ -88,6 +88,48 @@ export interface Lead {
   };
 }
 
+export interface TenantOnboardingProfile {
+  id: string;
+  logoUrl: string | null;
+  services: string[];
+  values: string[];
+  pricingNotes: string | null;
+  showingPreferences: string | null;
+  petPolicy: string | null;
+  handoffName: string | null;
+  handoffEmail: string | null;
+  handoffPhone: string | null;
+  aiTone: string | null;
+  aiInstructions: string | null;
+}
+
+export interface PropertyUnit {
+  id: string;
+  propertyId: string;
+  name: string;
+  rentCents: number;
+  bedrooms: number | null;
+  bathrooms: number | null;
+  squareFeet: number | null;
+  availableFrom: string | null;
+  amenities: string[];
+  petPolicy: string | null;
+  parking: string | null;
+  utilities: string | null;
+  slug: string;
+  isActive: boolean;
+}
+
+export interface PropertyRecord {
+  id: string;
+  name: string;
+  address: string;
+  city: string;
+  province: string;
+  postalCode: string | null;
+  units: PropertyUnit[];
+}
+
 export interface Lease {
   id: string;
   startDate: string;
