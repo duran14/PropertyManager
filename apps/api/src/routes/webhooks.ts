@@ -9,7 +9,7 @@
  *  POST /webhooks/twilio            — mensajes WhatsApp/SMS entrantes
  *  POST /webhooks/showmojo          - showing registrations and leads
  */
-import { Router, type Request } from 'express';
+import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { bankNotificationQueue } from '../jobs/queues.js';
 import { getAdapters } from '../config/adapters.js';
@@ -74,7 +74,7 @@ webhooksRouter.post('/twilio/sms', async (req, res, next) => {
       res.status(400).json({ error: result.error });
       return;
     }
-    res.status(200).json({ status: 'processed', channel: 'sms' });
+    sendTwilioWebhookAccepted(res);
   } catch (err) {
     next(err);
   }
@@ -87,7 +87,7 @@ webhooksRouter.post('/twilio/whatsapp', async (req, res, next) => {
       res.status(400).json({ error: result.error });
       return;
     }
-    res.status(200).json({ status: 'processed', channel: 'whatsapp' });
+    sendTwilioWebhookAccepted(res);
   } catch (err) {
     next(err);
   }
@@ -102,7 +102,7 @@ webhooksRouter.post('/twilio', async (req, res, next) => {
       res.status(400).json({ error: result.error });
       return;
     }
-    res.status(200).json({ status: 'processed', channel });
+    sendTwilioWebhookAccepted(res);
   } catch (err) {
     next(err);
   }
@@ -202,4 +202,8 @@ function collectTwilioMediaUrls(body: unknown): string[] | undefined {
 
 function getTwilioMediaIndex(key: string): number {
   return Number(key.replace('MediaUrl', ''));
+}
+
+function sendTwilioWebhookAccepted(res: Response): void {
+  res.status(200).type('text/xml').send('<Response></Response>');
 }

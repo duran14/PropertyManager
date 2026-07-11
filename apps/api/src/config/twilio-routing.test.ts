@@ -21,6 +21,9 @@ describe('Twilio shared channel routing', () => {
     expect(webhooksSource).toContain('parseWebhook');
     expect(webhooksSource).toContain('TWILIO_DEFAULT_TENANT_ID');
     expect(webhooksSource).toContain('From and Body are required');
+    expect(webhooksSource).toContain('sendTwilioWebhookAccepted');
+    expect(webhooksSource).toContain('<Response></Response>');
+    expect(webhooksSource).toContain('text/xml');
     expect(appSource).toContain('express.urlencoded');
   });
 
