@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildUnitMatchReason,
   getConversationExternalId,
   getExistingLeadChannelUpdate,
   getReplyAddressFromConversation,
+  rankMatchingUnits,
 } from './chatbot.service.js';
 
 describe('chatbot conversation identity', () => {
@@ -23,5 +25,50 @@ describe('chatbot conversation identity', () => {
   it('keeps first-touch source while updating the preferred channel', () => {
     expect(getExistingLeadChannelUpdate('whatsapp')).toEqual({ preferredChannel: 'whatsapp' });
     expect(getExistingLeadChannelUpdate('sms')).toEqual({ preferredChannel: 'sms' });
+  });
+
+  it('ranks active units by budget, area, pets, beds, and availability', () => {
+    const ranked = rankMatchingUnits(
+      [
+        {
+          id: 'unit_a',
+          name: 'Apt 101',
+          propertyName: 'Cedar Court',
+          city: 'Vancouver',
+          rentCents: 240000,
+          bedrooms: 1,
+          bathrooms: 1,
+          availableFrom: new Date('2026-08-01T00:00:00.000Z'),
+          petPolicy: 'Cats allowed',
+        },
+        {
+          id: 'unit_b',
+          name: 'Suite 12',
+          propertyName: 'Burnaby Heights',
+          city: 'Burnaby',
+          rentCents: 260000,
+          bedrooms: 2,
+          bathrooms: 1.5,
+          availableFrom: new Date('2026-08-15T00:00:00.000Z'),
+          petPolicy: 'Pet friendly',
+        },
+      ],
+      {
+        budget: '2600',
+        preferred_area: 'Burnaby',
+        pets: 'cat',
+        occupants: '2',
+        move_in_date: 'August',
+      },
+    );
+
+    expect(ranked[0].id).toBe('unit_b');
+    expect(buildUnitMatchReason(ranked[0], {
+      budget: '2600',
+      preferred_area: 'Burnaby',
+      pets: 'cat',
+      occupants: '2',
+      move_in_date: 'August',
+    })).toContain('matches the Burnaby area');
   });
 });

@@ -17,6 +17,12 @@ interface Conversation {
   channel: string;
   state: string;
   lead: { name: string | null; phone: string | null; status: string } | null;
+  unit: {
+    id: string;
+    name: string;
+    rentCents: number;
+    property: { name: string; city: string };
+  } | null;
   messages: ChatMessage[];
   slots: Array<{ key: string; value: string }>;
   updatedAt: string;
@@ -46,10 +52,11 @@ const SLOT_LABELS: Record<string, string> = {
   occupants: 'People',
   pets: 'Pets',
   preferred_area: 'Area',
+  match_reason: 'Match',
 };
 
 function visibleSlots(slots: Array<{ key: string; value: string }>) {
-  return slots.filter((s) => !s.key.startsWith('pending_') && !s.key.startsWith('scheduling_'));
+  return slots.filter((s) => !s.key.startsWith('pending_') && !s.key.startsWith('scheduling_') && s.key !== 'recommended_unit_id');
 }
 
 function slotValue(slots: Array<{ key: string; value: string }>, key: string): string | undefined {
@@ -150,6 +157,11 @@ export function ConversationsPage() {
                 <div className="text-xs text-slate-400">
                   {STATE_LABELS[c.state] ?? c.state}
                 </div>
+                {c.unit && (
+                  <div className="mt-1 text-xs text-slate-500">
+                    {c.unit.property.name} {c.unit.name}
+                  </div>
+                )}
                 {visibleSlots(c.slots).length > 0 && (
                   <div className="mt-2 flex flex-wrap gap-1">
                     {visibleSlots(c.slots).slice(0, 3).map((slot) => (
@@ -182,6 +194,25 @@ export function ConversationsPage() {
                 </div>
                 <span className="text-xs text-slate-400">{STATE_LABELS[selected.state] ?? selected.state}</span>
               </div>
+
+              {selected.unit && (
+                <div className="border-b border-slate-100 bg-white px-4 py-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <div className="text-[11px] font-medium uppercase text-slate-400">Recommended unit</div>
+                      <div className="text-sm font-medium text-slate-800">
+                        {selected.unit.property.name} {selected.unit.name} / {selected.unit.property.city}
+                      </div>
+                    </div>
+                    <div className="rounded-full bg-green-50 px-2 py-1 text-xs font-medium text-green-700">
+                      ${(selected.unit.rentCents / 100).toLocaleString('en-CA')}/month
+                    </div>
+                  </div>
+                  {slotValue(selected.slots, 'match_reason') && (
+                    <p className="mt-2 text-xs text-slate-500">{slotValue(selected.slots, 'match_reason')}</p>
+                  )}
+                </div>
+              )}
 
               {visibleSlots(selected.slots).length > 0 && (
                 <div className="border-b border-slate-100 bg-slate-50 px-4 py-3">

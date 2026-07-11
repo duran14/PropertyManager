@@ -35,6 +35,18 @@ export interface BotReply {
   proposedUnits?: Array<{ id: string; name: string; rent: number }>;
 }
 
+export interface AvailableUnit {
+  id: string;
+  name: string;
+  rentCents: number;
+  city: string;
+  propertyName: string;
+  bedrooms: number | null;
+  bathrooms: number | null;
+  availableFrom: Date | null;
+  petPolicy: string | null;
+}
+
 export async function handleInboundMessage(
   input: InboundChatMessage,
   deps: { glm: GlmAdapter; messaging: MessagingAdapter; showmojo: ShowMojoAdapter },
@@ -93,15 +105,36 @@ export async function handleInboundMessage(
     }
   }
 
+  const effectiveSlots = { ...existingSlots, ...(glmResult.slots ?? {}) };
+  const matchingUnits = rankMatchingUnits(await getAvailableUnits(input.tenantId, effectiveSlots), effectiveSlots);
+  const recommendedUnit = matchingUnits[0];
+  const matchReason = recommendedUnit ? buildUnitMatchReason(recommendedUnit, effectiveSlots) : undefined;
+
   let newState = glmResult.next_state ?? currentState;
   let finalReply = glmResult.reply;
 
-  if (newState === 'proposing_tour' && availableUnits.length > 0) {
-    finalReply = buildUnitRecommendationReply(availableUnits);
+  if (newState === 'proposing_tour' && matchingUnits.length > 0) {
+    finalReply = buildUnitRecommendationReply(matchingUnits, effectiveSlots);
+    if (recommendedUnit) {
+      await prisma.chatConversation.update({
+        where: { id: conversation.id },
+        data: { unitId: recommendedUnit.id },
+      });
+      await prisma.conversationSlot.upsert({
+        where: { conversationId_key: { conversationId: conversation.id, key: 'match_reason' } },
+        update: { value: matchReason ?? '' },
+        create: { conversationId: conversation.id, key: 'match_reason', value: matchReason ?? '' },
+      });
+      await prisma.conversationSlot.upsert({
+        where: { conversationId_key: { conversationId: conversation.id, key: 'recommended_unit_id' } },
+        update: { value: recommendedUnit.id },
+        create: { conversationId: conversation.id, key: 'recommended_unit_id', value: recommendedUnit.id },
+      });
+    }
   }
 
   if (newState === 'scheduling' && currentState !== 'scheduling') {
-    const unitId = conversation.unitId ?? (await inferUnitFromSlots(input.tenantId, existingSlots));
+    const unitId = conversation.unitId ?? recommendedUnit?.id ?? (await inferUnitFromSlots(input.tenantId, effectiveSlots));
     if (unitId) {
       const slotsResult = await getAvailableSlots(input.tenantId, unitId, deps.showmojo);
       if (slotsResult.slots.length > 0) {
@@ -177,14 +210,14 @@ export async function handleInboundMessage(
 
   await prisma.chatConversation.update({
     where: { id: conversation.id },
-    data: { state: newState },
+    data: { state: newState, ...(recommendedUnit ? { unitId: recommendedUnit.id } : {}) },
   });
 
   await prisma.chatMessage.create({
     data: { conversationId: conversation.id, role: 'assistant', content: finalReply },
   });
 
-  const leadCreated = await ensureLead(input.tenantId, conversation.id, input.from, input.body, input.channel);
+  const leadCreated = await ensureLead(input.tenantId, conversation.id, input.from, input.body, input.channel, recommendedUnit?.id);
 
   await deps.messaging.send({
     to: input.from,
@@ -216,7 +249,7 @@ export async function handleInboundMessage(
     handoff: newState === 'handoff',
     extractedSlots: glmResult.slots,
     proposedUnits: newState === 'proposing_tour'
-      ? availableUnits.slice(0, 3).map((unit) => ({
+      ? matchingUnits.slice(0, 3).map((unit) => ({
         id: unit.id,
         name: unit.name,
         rent: unit.rentCents,
@@ -337,18 +370,6 @@ function buildSystemPrompt(
   ].join('\n');
 }
 
-interface AvailableUnit {
-  id: string;
-  name: string;
-  rentCents: number;
-  city: string;
-  propertyName: string;
-  bedrooms: number | null;
-  bathrooms: number | null;
-  availableFrom: Date | null;
-  petPolicy: string | null;
-}
-
 async function getAvailableUnits(
   tenantId: string,
   slots: Record<string, string>,
@@ -390,6 +411,7 @@ async function ensureLead(
   fromPhone: string,
   firstMessage: string,
   channel: string,
+  unitId?: string,
 ): Promise<boolean> {
   const existing = await prisma.lead.findFirst({
     where: { tenantId, phone: fromPhone },
@@ -397,7 +419,7 @@ async function ensureLead(
   if (existing) {
     await prisma.lead.update({
       where: { id: existing.id },
-      data: getExistingLeadChannelUpdate(channel),
+      data: { ...getExistingLeadChannelUpdate(channel), ...(unitId ? { unitId } : {}) },
     });
     await prisma.chatConversation.update({
       where: { id: conversationId },
@@ -414,6 +436,7 @@ async function ensureLead(
       source: getLeadSourceForChannel(channel),
       status: 'new_',
       preferredChannel: channel,
+      unitId,
     },
   });
   await prisma.chatConversation.update({
@@ -446,7 +469,59 @@ export function getExistingLeadChannelUpdate(channel: string): { preferredChanne
   return { preferredChannel: channel };
 }
 
-function buildUnitRecommendationReply(units: AvailableUnit[]): string {
+export function rankMatchingUnits(units: AvailableUnit[], slots: Record<string, string>): AvailableUnit[] {
+  return [...units].sort((a, b) => scoreUnit(b, slots) - scoreUnit(a, slots));
+}
+
+export function buildUnitMatchReason(unit: AvailableUnit, slots: Record<string, string>): string {
+  const reasons: string[] = [];
+  const budget = parseBudget(slots.budget);
+  const area = slots.preferred_area?.toLowerCase();
+  const pets = slots.pets?.toLowerCase();
+  const occupants = parseInt(slots.occupants ?? '', 10);
+  const moveInMonth = normalizeMonth(slots.move_in_date);
+
+  if (budget && unit.rentCents <= budget) reasons.push(`fits the $${(budget / 100).toLocaleString('en-CA')} budget`);
+  if (area && (`${unit.city} ${unit.propertyName}`).toLowerCase().includes(area)) reasons.push(`matches the ${slots.preferred_area} area`);
+  if (pets && pets !== 'none' && unit.petPolicy?.toLowerCase().includes(pets)) reasons.push(`supports ${pets} needs`);
+  if (!Number.isNaN(occupants) && unit.bedrooms !== null && unit.bedrooms >= Math.min(occupants, 3)) reasons.push(`has enough bedrooms for ${occupants} people`);
+  if (moveInMonth && unit.availableFrom && unit.availableFrom.toLocaleString('en-CA', { month: 'long' }).toLowerCase() === moveInMonth) reasons.push(`aligns with the ${slots.move_in_date} move-in timing`);
+
+  return reasons.length > 0 ? reasons.join(', ') : 'it is an active listing in the current inventory';
+}
+
+function scoreUnit(unit: AvailableUnit, slots: Record<string, string>): number {
+  let score = 0;
+  const budget = parseBudget(slots.budget);
+  const area = slots.preferred_area?.toLowerCase();
+  const pets = slots.pets?.toLowerCase();
+  const occupants = parseInt(slots.occupants ?? '', 10);
+  const moveInMonth = normalizeMonth(slots.move_in_date);
+
+  if (budget) {
+    score += unit.rentCents <= budget ? 30 : -20;
+    score -= Math.max(0, unit.rentCents - budget) / 10000;
+  }
+  if (area && (`${unit.city} ${unit.propertyName}`).toLowerCase().includes(area)) score += 25;
+  if (pets && pets !== 'none' && unit.petPolicy?.toLowerCase().includes(pets)) score += 15;
+  if (!Number.isNaN(occupants) && unit.bedrooms !== null && unit.bedrooms >= Math.min(occupants, 3)) score += 10;
+  if (moveInMonth && unit.availableFrom && unit.availableFrom.toLocaleString('en-CA', { month: 'long' }).toLowerCase() === moveInMonth) score += 10;
+  return score;
+}
+
+function parseBudget(value: string | undefined): number | undefined {
+  if (!value) return undefined;
+  const parsed = parseInt(value.replace(/[^0-9]/g, ''), 10);
+  return Number.isNaN(parsed) ? undefined : parsed * 100;
+}
+
+function normalizeMonth(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const match = value.match(/january|february|march|april|may|june|july|august|september|october|november|december/i);
+  return match?.[0].toLowerCase();
+}
+
+function buildUnitRecommendationReply(units: AvailableUnit[], slots: Record<string, string>): string {
   const options = units.slice(0, 3).map((unit) => {
     const details = [
       unit.bedrooms !== null ? `${unit.bedrooms} bed` : undefined,
@@ -457,6 +532,7 @@ function buildUnitRecommendationReply(units: AvailableUnit[]): string {
     const suffix = details ? ` (${details})` : '';
     return `- ${unit.propertyName} ${unit.name} in ${unit.city}: $${(unit.rentCents / 100).toLocaleString('en-CA')}/month${suffix}`;
   }).join('\n');
+  const reason = buildUnitMatchReason(units[0], slots);
 
-  return `Thanks. Based on your criteria, these active listings may fit:\n\n${options}\n\nWould you like to schedule a tour for one of them?`;
+  return `Thanks. Based on your criteria, these active listings may fit:\n\n${options}\n\nBest match: ${units[0].propertyName} ${units[0].name}, because it ${reason}. Would you like to schedule a tour?`;
 }

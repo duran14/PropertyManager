@@ -1,6 +1,6 @@
 # Project Handoff - Property Manager
 
-Last updated: 2026-07-11 08:18, America/Vancouver.
+Last updated: 2026-07-11 08:24, America/Vancouver.
 
 This document is for a future AI agent or developer continuing the project after the current Codex session. It summarizes what was built, what is currently working, how to verify it, and what should come next.
 
@@ -112,6 +112,23 @@ Primary files:
 - `apps/web/src/components/Layout.tsx`
 
 The chatbot now uses active units from the database when it reaches the unit recommendation stage. It replies with real property/unit names, city, rent, and available details when present.
+
+### Traceable unit recommendations
+
+The chatbot now ranks active units by captured lead criteria and stores the recommendation:
+
+- Matching considers budget, preferred area, pets, occupants/bedrooms, and move-in month when available.
+- The recommended unit is saved on `ChatConversation.unitId`.
+- The same unit is also saved on `Lead.unitId`, so the Leads table shows the interested unit.
+- The bot stores `match_reason` and `recommended_unit_id` as conversation slots.
+- Conversations now display a `Recommended unit` summary and match reason.
+
+Primary files:
+
+- `apps/api/src/services/chatbot.service.ts`
+- `apps/api/src/services/chatbot.service.test.ts`
+- `apps/api/src/routes/chat.ts`
+- `apps/web/src/pages/ConversationsPage.tsx`
 
 Primary files:
 
@@ -291,8 +308,9 @@ Then:
    - Add edit/delete flows for properties and units; current UI focuses on create/list.
 
 3. Improve chatbot matching against real inventory.
-   - Match by preferred area, pets, bedrooms, availability date, and amenities.
-   - Store which unit was recommended and why.
+   - Add amenities and exact availability-date matching.
+   - Add explicit "why this unit matched" event history, not only the latest slot value.
+   - Let staff override the recommended unit from the Conversations page.
    - Keep legal/compliance guardrails.
 
 4. Add real AI provider behind the existing GLM adapter or a new provider abstraction.

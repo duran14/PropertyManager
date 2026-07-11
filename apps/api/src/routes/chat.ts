@@ -99,6 +99,7 @@ chatRouter.get('/conversations', requireAuth, async (req, res, next) => {
       take: 50,
       include: {
         lead: { select: { name: true, phone: true, status: true } },
+        unit: { select: { id: true, name: true, rentCents: true, property: { select: { name: true, city: true } } } },
         messages: { orderBy: { createdAt: 'asc' }, take: 50 },
         slots: true,
       },
@@ -116,6 +117,7 @@ chatRouter.get('/conversations/:id', requireAuth, async (req, res, next) => {
       where: { id: req.params.id, tenantId: user.tenantId },
       include: {
         lead: true,
+        unit: { select: { id: true, name: true, rentCents: true, property: { select: { name: true, city: true } } } },
         messages: { orderBy: { createdAt: 'asc' } },
         slots: true,
       },
