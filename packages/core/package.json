@@ -7,7 +7,8 @@
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
-    "./showing-messages": "./src/showing-messages.ts"
+    "./showing-messages": "./src/showing-messages.ts",
+    "./conversation-timeline": "./src/conversation-timeline.ts"
   },
   "scripts": {
     "test": "vitest run",

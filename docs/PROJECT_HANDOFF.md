@@ -1,6 +1,6 @@
 # Project Handoff - Property Manager
 
-Last updated: 2026-07-11 15:45, America/Vancouver.
+Last updated: 2026-07-11 16:51, America/Vancouver.
 
 This document is for a future AI agent or developer continuing the project after the current Codex session. It summarizes what was built, what is currently working, how to verify it, and what should come next.
 
@@ -15,11 +15,12 @@ The app is still in mock/prototype mode for intelligence and most third-party in
 - Local path: `C:\Users\duran\Documents\Proyectos IA\ZCodeProject\Property Manager`
 - GitHub remote: `https://github.com/duran14/PropertyManager.git`
 - Branch: `main`
-- Latest confirmed feature commit before this handoff document: pending current commit with staged suggested replies and reschedule helper.
+- Latest confirmed feature commit before this handoff document: pending current commit with conversation timeline summary.
 
 Important recent commits:
 
-- pending: suggested replies are staged safely and cancelled showings can be rescheduled
+- pending: conversations show an operational timeline for lead, unit, tour, and pending reply state
+- `4686afa Stage suggested replies and reschedule tours`
 - `d9b0966 Suggest replies for showing actions`
 - `3583f81 Manage showings from conversations`
 - `032e330 Schedule showings from conversations`
@@ -50,23 +51,27 @@ The working tree was clean before creating this handoff document.
 ### Messaging channels
 
 Telegram:
+
 - Shared Telegram demo routing exists.
 - A previously created Telegram bot is configured through `TELEGRAM_BOT_TOKEN` when present.
 - Default tenant routing uses `TELEGRAM_DEFAULT_TENANT_ID=tenant_demo_pm`.
 
 SMS:
+
 - Real Twilio SMS is connected and verified end to end.
 - User's test phone received SMS replies.
 - Twilio inbound and outbound were confirmed in Twilio Messages API.
 - `TWILIO_SMS_FROM` was corrected to the real SMS-capable Twilio number ending in `5576`.
 
 WhatsApp:
+
 - Twilio WhatsApp Sandbox is connected and verified end to end.
 - User received WhatsApp replies.
 - Twilio status showed outbound WhatsApp as `read`.
 - `TWILIO_WHATSAPP_FROM` points to Twilio Sandbox number ending in `8886`.
 
 Channel separation:
+
 - SMS and WhatsApp conversations now use channel-specific external IDs, e.g. `sms:+...` and `whatsapp:+...`.
 - This prevents the same phone number from overwriting the same conversation across channels.
 - Manual staff replies strip the channel prefix before sending.
@@ -116,6 +121,8 @@ Staff can now create a manual/internal showing directly from a conversation:
 - If staff already typed a manual reply, the suggestion is staged in a `Suggested reply ready` band with `Use` and `Dismiss` actions instead of overwriting the draft.
 - Cancelled showings expose a `Reschedule` action that preloads the tour scheduler with the same duration and a next-day time.
 - Suggested showing reply copy lives in `@property-manager/core/showing-messages` so it can later be reused by AI-assisted reply generation.
+- Conversation detail now includes a compact `Conversation timeline` with lead capture, unit recommendation, tour status, and pending reply state.
+- Timeline copy and status priority live in `@property-manager/core/conversation-timeline` so it can later be reused in other operational views.
 
 Primary files:
 
@@ -125,6 +132,8 @@ Primary files:
 - `apps/web/src/pages/ConversationsPage.tsx`
 - `packages/core/src/showing-messages.ts`
 - `packages/core/src/showing-messages.test.ts`
+- `packages/core/src/conversation-timeline.ts`
+- `packages/core/src/conversation-timeline.test.ts`
 
 ### Onboarding and property inventory
 
@@ -245,6 +254,7 @@ Key environment variables currently relevant:
 - `TELEGRAM_DEFAULT_TENANT_ID=tenant_demo_pm`
 
 Security note:
+
 - A Twilio auth token was pasted into the chat earlier. The user was advised to rotate it. Do not expose or reprint secrets.
 
 ## How To Verify The Current State
@@ -269,15 +279,18 @@ Manual UI check:
 4. Confirm profile chips are visible for bot-enriched leads.
 5. Open `Conversations`.
 6. Confirm visible prospect slots appear in list previews and detail summary cards.
+7. Confirm the conversation detail shows `Conversation timeline` chips for lead, unit, tour, and pending reply state.
 
 Messaging smoke tests:
 
 SMS:
+
 1. Send a message from the user's phone to the Twilio SMS number ending in `5576`.
 2. Confirm the phone receives a reply.
 3. Confirm Twilio shows inbound received and outbound-api delivered.
 
 WhatsApp:
+
 1. Ensure the user's phone has joined the Twilio WhatsApp Sandbox.
 2. Send a WhatsApp message to the sandbox number ending in `8886`.
 3. Confirm the phone receives a reply.
@@ -290,6 +303,7 @@ My budget is $2600. I want to move in August near Burnaby. 2 occupants and one c
 ```
 
 Expected behavior:
+
 - Bot replies coherently in English.
 - Conversation slots capture budget, move-in date, area, occupants, pets.
 - Leads dashboard surfaces the enriched profile.
@@ -297,33 +311,40 @@ Expected behavior:
 ## Product Decisions Captured
 
 Language:
+
 - User confirmed the application must be in English.
 - Conversation with the user can remain Spanish.
 
 Channel priority:
+
 1. Telegram
 2. WhatsApp
 3. SMS/Twilio was added because many Canadian users prefer normal SMS
 4. Voice later
 
 Twilio model:
+
 - Twilio is used for SMS and WhatsApp Sandbox testing.
 - WhatsApp does not strictly require Twilio in the abstract, but for this MVP Twilio gives a unified messaging adapter and webhook model.
 
 Tenant strategy:
+
 - Current demo uses shared bots and `TWILIO_DEFAULT_TENANT_ID` / `TELEGRAM_DEFAULT_TENANT_ID`.
 - Long term can route by per-tenant numbers, bot mappings, or channel configuration.
 
 Obsidian direction:
+
 - App should be the source of truth for properties, policies, prices, and documents.
 - Later export/sync to Obsidian as Markdown.
 - Bots should query app-owned structured data first; Obsidian can be a synced knowledge layer.
 
 Voice direction:
+
 - Later prototype the same script in Gemini, ElevenLabs, and OpenAI Realtime.
 - Measure naturalness, latency, and cost for 5 and 10 minute calls.
 
 Legal/handoff:
+
 - Bot should be warm and useful but not pretend to be human.
 - It should disclose AI nature at an appropriate point.
 - It should hand off legal, emergency, complaint, contract, or explicit human requests.

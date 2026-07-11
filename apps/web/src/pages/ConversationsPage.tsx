@@ -1,6 +1,11 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { buildShowingSuggestedReply, stageSuggestedReply } from '@property-manager/core/showing-messages';
+import { buildConversationTimeline } from '@property-manager/core/conversation-timeline';
+import type { ConversationTimelineTone } from '@property-manager/core/conversation-timeline';
+import {
+  buildShowingSuggestedReply,
+  stageSuggestedReply,
+} from '@property-manager/core/showing-messages';
 import { apiFetch } from '../lib/apiClient';
 import { Icon } from '../components/Icon';
 import type { LeadStatus } from '../lib/types';
@@ -64,6 +69,13 @@ const STATE_LABELS: Record<string, string> = {
   handoff: 'Human handoff',
 };
 
+const TIMELINE_TONE_STYLES: Record<ConversationTimelineTone, string> = {
+  done: 'border-green-200 bg-green-50 text-green-800',
+  active: 'border-blue-200 bg-blue-50 text-blue-800',
+  attention: 'border-amber-200 bg-amber-50 text-amber-900',
+  muted: 'border-slate-200 bg-slate-50 text-slate-500',
+};
+
 const LEAD_STATUS_OPTIONS: Array<{ value: LeadStatus; label: string }> = [
   { value: 'new_', label: 'New' },
   { value: 'contacted', label: 'Contacted' },
@@ -83,7 +95,12 @@ const SLOT_LABELS: Record<string, string> = {
 };
 
 function visibleSlots(slots: Array<{ key: string; value: string }>) {
-  return slots.filter((s) => !s.key.startsWith('pending_') && !s.key.startsWith('scheduling_') && s.key !== 'recommended_unit_id');
+  return slots.filter(
+    (s) =>
+      !s.key.startsWith('pending_') &&
+      !s.key.startsWith('scheduling_') &&
+      s.key !== 'recommended_unit_id',
+  );
 }
 
 function slotValue(slots: Array<{ key: string; value: string }>, key: string): string | undefined {
@@ -149,13 +166,13 @@ export function ConversationsPage() {
 
   const replyMutation = useMutation({
     mutationFn: ({ id, message }: { id: string; message: string }) =>
-      apiFetch<{ status: string; message: { id: string; role: string; content: string; createdAt: string } }>(
-        `/chat/conversations/${id}/reply`,
-        {
-          method: 'POST',
-          body: JSON.stringify({ message }),
-        },
-      ),
+      apiFetch<{
+        status: string;
+        message: { id: string; role: string; content: string; createdAt: string };
+      }>(`/chat/conversations/${id}/reply`, {
+        method: 'POST',
+        body: JSON.stringify({ message }),
+      }),
     onSuccess: (data) => {
       queryClient.setQueryData<{ conversation: Conversation }>(
         ['conversation', selectedId],
@@ -225,7 +242,15 @@ export function ConversationsPage() {
   });
 
   const scheduleShowingMutation = useMutation({
-    mutationFn: ({ id, scheduledAt, durationMinutes }: { id: string; scheduledAt: string; durationMinutes: number }) =>
+    mutationFn: ({
+      id,
+      scheduledAt,
+      durationMinutes,
+    }: {
+      id: string;
+      scheduledAt: string;
+      durationMinutes: number;
+    }) =>
       apiFetch<{ showing: ShowingSummary }>(`/chat/conversations/${id}/showing`, {
         method: 'POST',
         body: JSON.stringify({
@@ -289,34 +314,50 @@ export function ConversationsPage() {
   };
 
   const confirmShowingMutation = useMutation({
-    mutationFn: (showing: ShowingSummary) => apiFetch(`/showings/${showing.id}/confirm`, { method: 'POST' }),
+    mutationFn: (showing: ShowingSummary) =>
+      apiFetch(`/showings/${showing.id}/confirm`, { method: 'POST' }),
     onSuccess: (_data, showing) => {
       updateShowingStatus(showing.id, 'confirmed');
-      stageReplySuggestion(buildShowingSuggestedReply({
-        action: 'confirmed',
-        scheduledAt: showing.scheduledAt,
-        propertyName: showing.unit?.property.name ?? selected?.unit?.property.name ?? 'the property',
-        unitName: showing.unit?.name ?? selected?.unit?.name ?? '',
-      }));
+      stageReplySuggestion(
+        buildShowingSuggestedReply({
+          action: 'confirmed',
+          scheduledAt: showing.scheduledAt,
+          propertyName:
+            showing.unit?.property.name ?? selected?.unit?.property.name ?? 'the property',
+          unitName: showing.unit?.name ?? selected?.unit?.name ?? '',
+        }),
+      );
     },
   });
 
   const cancelShowingMutation = useMutation({
-    mutationFn: (showing: ShowingSummary) => apiFetch(`/showings/${showing.id}/cancel`, { method: 'POST', body: JSON.stringify({}) }),
+    mutationFn: (showing: ShowingSummary) =>
+      apiFetch(`/showings/${showing.id}/cancel`, { method: 'POST', body: JSON.stringify({}) }),
     onSuccess: (_data, showing) => {
       updateShowingStatus(showing.id, 'cancelled');
-      stageReplySuggestion(buildShowingSuggestedReply({
-        action: 'cancelled',
-        scheduledAt: showing.scheduledAt,
-        propertyName: showing.unit?.property.name ?? selected?.unit?.property.name ?? 'the property',
-        unitName: showing.unit?.name ?? selected?.unit?.name ?? '',
-      }));
+      stageReplySuggestion(
+        buildShowingSuggestedReply({
+          action: 'cancelled',
+          scheduledAt: showing.scheduledAt,
+          propertyName:
+            showing.unit?.property.name ?? selected?.unit?.property.name ?? 'the property',
+          unitName: showing.unit?.name ?? selected?.unit?.name ?? '',
+        }),
+      );
     },
   });
 
   const conversations = data?.conversations ?? [];
   const selected = detail?.conversation;
   const units = unitsData?.units ?? [];
+  const timelineItems = selected
+    ? buildConversationTimeline({
+        hasLead: Boolean(selected.lead),
+        hasRecommendedUnit: Boolean(selected.unit),
+        showingStatuses: (selected.showings ?? []).map((showing) => showing.status),
+        hasPendingSuggestedReply: Boolean(pendingSuggestedReply),
+      })
+    : [];
 
   return (
     <div>
@@ -344,7 +385,9 @@ export function ConversationsPage() {
                 className={`w-full text-left p-3 hover:bg-slate-50 ${selectedId === c.id ? 'bg-violet-50' : ''}`}
               >
                 <div className="flex items-center justify-between mb-1">
-                  <span className={`inline-block rounded-full px-2 py-0.5 text-xs ${CHANNEL_STYLES[c.channel] ?? 'bg-slate-100'}`}>
+                  <span
+                    className={`inline-block rounded-full px-2 py-0.5 text-xs ${CHANNEL_STYLES[c.channel] ?? 'bg-slate-100'}`}
+                  >
                     {c.channel}
                   </span>
                   <span className="text-xs text-slate-400">
@@ -354,9 +397,7 @@ export function ConversationsPage() {
                 <div className="text-sm font-medium">
                   {c.lead?.name ?? c.lead?.phone ?? c.externalId}
                 </div>
-                <div className="text-xs text-slate-400">
-                  {STATE_LABELS[c.state] ?? c.state}
-                </div>
+                <div className="text-xs text-slate-400">{STATE_LABELS[c.state] ?? c.state}</div>
                 {c.unit && (
                   <div className="mt-1 text-xs text-slate-500">
                     {c.unit.property.name} {c.unit.name}
@@ -364,11 +405,16 @@ export function ConversationsPage() {
                 )}
                 {visibleSlots(c.slots).length > 0 && (
                   <div className="mt-2 flex flex-wrap gap-1">
-                    {visibleSlots(c.slots).slice(0, 3).map((slot) => (
-                      <span key={`${c.id}-${slot.key}`} className="rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[11px] text-slate-500">
-                        {SLOT_LABELS[slot.key] ?? slot.key}: {slot.value}
-                      </span>
-                    ))}
+                    {visibleSlots(c.slots)
+                      .slice(0, 3)
+                      .map((slot) => (
+                        <span
+                          key={`${c.id}-${slot.key}`}
+                          className="rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[11px] text-slate-500"
+                        >
+                          {SLOT_LABELS[slot.key] ?? slot.key}: {slot.value}
+                        </span>
+                      ))}
                   </div>
                 )}
               </button>
@@ -376,7 +422,10 @@ export function ConversationsPage() {
           </div>
         </div>
 
-        <div className="lg:col-span-2 bg-white rounded-lg border border-slate-200 overflow-hidden flex flex-col" style={{ minHeight: '600px' }}>
+        <div
+          className="lg:col-span-2 bg-white rounded-lg border border-slate-200 overflow-hidden flex flex-col"
+          style={{ minHeight: '600px' }}
+        >
           {!selected ? (
             <div className="flex-1 flex items-center justify-center text-slate-400">
               Select a conversation to view the history
@@ -385,7 +434,9 @@ export function ConversationsPage() {
             <>
               <div className="px-4 py-3 border-b border-slate-200 flex items-center justify-between">
                 <div>
-                  <span className={`inline-block rounded-full px-2 py-0.5 text-xs ${CHANNEL_STYLES[selected.channel] ?? 'bg-slate-100'}`}>
+                  <span
+                    className={`inline-block rounded-full px-2 py-0.5 text-xs ${CHANNEL_STYLES[selected.channel] ?? 'bg-slate-100'}`}
+                  >
                     {selected.channel}
                   </span>
                   <span className="ml-2 text-sm font-medium">
@@ -397,19 +448,41 @@ export function ConversationsPage() {
                     <select
                       aria-label="Lead status"
                       value={selected.lead.status}
-                      onChange={(event) => leadStatusMutation.mutate({
-                        id: selected.lead!.id,
-                        status: event.target.value as LeadStatus,
-                      })}
+                      onChange={(event) =>
+                        leadStatusMutation.mutate({
+                          id: selected.lead!.id,
+                          status: event.target.value as LeadStatus,
+                        })
+                      }
                       disabled={leadStatusMutation.isPending}
                       className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-violet-500 disabled:opacity-50"
                     >
                       {LEAD_STATUS_OPTIONS.map((status) => (
-                        <option key={status.value} value={status.value}>{status.label}</option>
+                        <option key={status.value} value={status.value}>
+                          {status.label}
+                        </option>
                       ))}
                     </select>
                   )}
-                  <span className="text-xs text-slate-400">{STATE_LABELS[selected.state] ?? selected.state}</span>
+                  <span className="text-xs text-slate-400">
+                    {STATE_LABELS[selected.state] ?? selected.state}
+                  </span>
+                </div>
+              </div>
+
+              <div className="border-b border-slate-100 bg-slate-50 px-4 py-3">
+                <div className="text-[11px] font-medium uppercase text-slate-400">
+                  Conversation timeline
+                </div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {timelineItems.map((item) => (
+                    <span
+                      key={item.key}
+                      className={`rounded-md border px-2 py-1 text-xs font-medium ${TIMELINE_TONE_STYLES[item.tone]}`}
+                    >
+                      {item.label}
+                    </span>
+                  ))}
                 </div>
               </div>
 
@@ -417,9 +490,12 @@ export function ConversationsPage() {
                 {selected.unit ? (
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div>
-                      <div className="text-[11px] font-medium uppercase text-slate-400">Recommended unit</div>
+                      <div className="text-[11px] font-medium uppercase text-slate-400">
+                        Recommended unit
+                      </div>
                       <div className="text-sm font-medium text-slate-800">
-                        {selected.unit.property.name} {selected.unit.name} / {selected.unit.property.city}
+                        {selected.unit.property.name} {selected.unit.name} /{' '}
+                        {selected.unit.property.city}
                       </div>
                     </div>
                     <div className="rounded-full bg-green-50 px-2 py-1 text-xs font-medium text-green-700">
@@ -428,15 +504,22 @@ export function ConversationsPage() {
                   </div>
                 ) : (
                   <div>
-                    <div className="text-[11px] font-medium uppercase text-slate-400">Recommended unit</div>
+                    <div className="text-[11px] font-medium uppercase text-slate-400">
+                      Recommended unit
+                    </div>
                     <div className="text-sm font-medium text-slate-700">No unit selected yet</div>
                   </div>
                 )}
                 {slotValue(selected.slots, 'match_reason') && (
-                  <p className="mt-2 text-xs text-slate-500">{slotValue(selected.slots, 'match_reason')}</p>
+                  <p className="mt-2 text-xs text-slate-500">
+                    {slotValue(selected.slots, 'match_reason')}
+                  </p>
                 )}
                 <div className="mt-3 flex flex-col gap-1 sm:max-w-md">
-                  <label htmlFor="recommended-unit" className="text-[11px] font-medium uppercase text-slate-400">
+                  <label
+                    htmlFor="recommended-unit"
+                    className="text-[11px] font-medium uppercase text-slate-400"
+                  >
                     Staff override
                   </label>
                   <select
@@ -444,7 +527,10 @@ export function ConversationsPage() {
                     value={selected.unit?.id ?? ''}
                     onChange={(event) => {
                       if (event.target.value) {
-                        recommendedUnitMutation.mutate({ id: selected.id, unitId: event.target.value });
+                        recommendedUnitMutation.mutate({
+                          id: selected.id,
+                          unitId: event.target.value,
+                        });
                       }
                     }}
                     disabled={recommendedUnitMutation.isPending || units.length === 0}
@@ -453,7 +539,8 @@ export function ConversationsPage() {
                     <option value="">Select an active unit</option>
                     {units.map((unit) => (
                       <option key={unit.id} value={unit.id}>
-                        {unit.property.name} {unit.name} / {unit.property.city} - ${(unit.rentCents / 100).toLocaleString('en-CA')}/month
+                        {unit.property.name} {unit.name} / {unit.property.city} - $
+                        {(unit.rentCents / 100).toLocaleString('en-CA')}/month
                       </option>
                     ))}
                   </select>
@@ -464,15 +551,27 @@ export function ConversationsPage() {
                 <div className="border-b border-slate-100 bg-slate-50 px-4 py-3">
                   <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
                     {[
-                      { key: 'budget', value: slotValue(selected.slots, 'budget') ? `$${slotValue(selected.slots, 'budget')}` : undefined },
+                      {
+                        key: 'budget',
+                        value: slotValue(selected.slots, 'budget')
+                          ? `$${slotValue(selected.slots, 'budget')}`
+                          : undefined,
+                      },
                       { key: 'move_in_date', value: slotValue(selected.slots, 'move_in_date') },
                       { key: 'preferred_area', value: slotValue(selected.slots, 'preferred_area') },
                       { key: 'occupants', value: slotValue(selected.slots, 'occupants') },
                       { key: 'pets', value: slotValue(selected.slots, 'pets') },
                     ].map(({ key, value }) => (
-                      <div key={key} className="min-h-[54px] rounded-md border border-slate-200 bg-white px-2 py-1.5">
-                        <div className="text-[11px] font-medium uppercase text-slate-400">{SLOT_LABELS[key] ?? key}</div>
-                        <div className="mt-0.5 truncate text-sm font-medium text-slate-700">{value ?? '-'}</div>
+                      <div
+                        key={key}
+                        className="min-h-[54px] rounded-md border border-slate-200 bg-white px-2 py-1.5"
+                      >
+                        <div className="text-[11px] font-medium uppercase text-slate-400">
+                          {SLOT_LABELS[key] ?? key}
+                        </div>
+                        <div className="mt-0.5 truncate text-sm font-medium text-slate-700">
+                          {value ?? '-'}
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -482,7 +581,10 @@ export function ConversationsPage() {
               <div className="border-b border-slate-100 bg-white px-4 py-3">
                 <div className="flex flex-wrap items-end gap-2">
                   <div className="min-w-[190px] flex-1">
-                    <label htmlFor="showing-date" className="text-[11px] font-medium uppercase text-slate-400">
+                    <label
+                      htmlFor="showing-date"
+                      className="text-[11px] font-medium uppercase text-slate-400"
+                    >
                       Schedule tour
                     </label>
                     <input
@@ -494,7 +596,10 @@ export function ConversationsPage() {
                     />
                   </div>
                   <div>
-                    <label htmlFor="showing-duration" className="text-[11px] font-medium uppercase text-slate-400">
+                    <label
+                      htmlFor="showing-duration"
+                      className="text-[11px] font-medium uppercase text-slate-400"
+                    >
                       Duration
                     </label>
                     <select
@@ -504,17 +609,26 @@ export function ConversationsPage() {
                       className="mt-1 w-28 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-violet-500"
                     >
                       {[15, 30, 45, 60].map((minutes) => (
-                        <option key={minutes} value={minutes}>{minutes} min</option>
+                        <option key={minutes} value={minutes}>
+                          {minutes} min
+                        </option>
                       ))}
                     </select>
                   </div>
                   <button
-                    onClick={() => scheduleShowingMutation.mutate({
-                      id: selected.id,
-                      scheduledAt: showingDateTime,
-                      durationMinutes: showingDuration,
-                    })}
-                    disabled={!selected.lead || !selected.unit || !showingDateTime || scheduleShowingMutation.isPending}
+                    onClick={() =>
+                      scheduleShowingMutation.mutate({
+                        id: selected.id,
+                        scheduledAt: showingDateTime,
+                        durationMinutes: showingDuration,
+                      })
+                    }
+                    disabled={
+                      !selected.lead ||
+                      !selected.unit ||
+                      !showingDateTime ||
+                      scheduleShowingMutation.isPending
+                    }
                     className="inline-flex items-center gap-1 rounded-md bg-teal-600 px-3 py-2 text-sm font-medium text-white hover:bg-teal-700 disabled:opacity-50"
                   >
                     <Icon name="showings" size={14} />
@@ -522,20 +636,32 @@ export function ConversationsPage() {
                   </button>
                 </div>
                 {(!selected.lead || !selected.unit) && (
-                  <p className="mt-2 text-xs text-slate-400">A linked lead and recommended unit are required.</p>
+                  <p className="mt-2 text-xs text-slate-400">
+                    A linked lead and recommended unit are required.
+                  </p>
                 )}
                 {(selected.showings ?? []).length > 0 && (
                   <div className="mt-3 flex flex-wrap gap-2">
                     {selected.showings!.map((showing) => (
-                      <div key={showing.id} className="flex flex-wrap items-center gap-2 rounded-md border border-teal-100 bg-teal-50 px-2 py-1 text-xs text-teal-800">
+                      <div
+                        key={showing.id}
+                        className="flex flex-wrap items-center gap-2 rounded-md border border-teal-100 bg-teal-50 px-2 py-1 text-xs text-teal-800"
+                      >
                         <div>
-                          <span className="font-medium">{formatShowingDateTime(showing.scheduledAt)}</span>
-                          <span className="text-teal-600"> / {showing.durationMinutes} min / {showing.status}</span>
+                          <span className="font-medium">
+                            {formatShowingDateTime(showing.scheduledAt)}
+                          </span>
+                          <span className="text-teal-600">
+                            {' '}
+                            / {showing.durationMinutes} min / {showing.status}
+                          </span>
                         </div>
                         {canConfirmShowing(showing.status) && (
                           <button
                             onClick={() => confirmShowingMutation.mutate(showing)}
-                            disabled={confirmShowingMutation.isPending || cancelShowingMutation.isPending}
+                            disabled={
+                              confirmShowingMutation.isPending || cancelShowingMutation.isPending
+                            }
                             className="rounded border border-green-200 bg-white px-1.5 py-0.5 font-medium text-green-700 hover:bg-green-50 disabled:opacity-50"
                           >
                             Confirm
@@ -544,7 +670,9 @@ export function ConversationsPage() {
                         {canCancelShowing(showing.status) && (
                           <button
                             onClick={() => cancelShowingMutation.mutate(showing)}
-                            disabled={confirmShowingMutation.isPending || cancelShowingMutation.isPending}
+                            disabled={
+                              confirmShowingMutation.isPending || cancelShowingMutation.isPending
+                            }
                             className="rounded border border-red-200 bg-white px-1.5 py-0.5 font-medium text-red-700 hover:bg-red-50 disabled:opacity-50"
                           >
                             Cancel
@@ -566,7 +694,10 @@ export function ConversationsPage() {
 
               <div className="flex-1 overflow-y-auto p-4 space-y-2 max-h-[400px]">
                 {selected.messages.map((msg) => (
-                  <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-start' : 'justify-end'}`}>
+                  <div
+                    key={msg.id}
+                    className={`flex ${msg.role === 'user' ? 'justify-start' : 'justify-end'}`}
+                  >
                     <div
                       className={`max-w-[75%] rounded-2xl px-3 py-2 text-sm ${
                         msg.role === 'user'
@@ -576,8 +707,12 @@ export function ConversationsPage() {
                             : 'bg-violet-600 text-white rounded-br-md'
                       }`}
                     >
-                      {msg.role === 'staff' && <div className="text-[10px] opacity-75 mb-0.5">Staff</div>}
-                      {msg.role === 'assistant' && <div className="text-[10px] opacity-75 mb-0.5">Bot</div>}
+                      {msg.role === 'staff' && (
+                        <div className="text-[10px] opacity-75 mb-0.5">Staff</div>
+                      )}
+                      {msg.role === 'assistant' && (
+                        <div className="text-[10px] opacity-75 mb-0.5">Bot</div>
+                      )}
                       {msg.content}
                     </div>
                   </div>
@@ -589,7 +724,9 @@ export function ConversationsPage() {
                   {pendingSuggestedReply && (
                     <div className="mb-2 flex flex-wrap items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
                       <span className="font-medium">Suggested reply ready</span>
-                      <span className="min-w-0 flex-1 truncate text-amber-700">{pendingSuggestedReply}</span>
+                      <span className="min-w-0 flex-1 truncate text-amber-700">
+                        {pendingSuggestedReply}
+                      </span>
                       <button
                         onClick={() => {
                           setReply(pendingSuggestedReply);
@@ -621,7 +758,9 @@ export function ConversationsPage() {
                   />
                 </div>
                 <button
-                  onClick={() => reply.trim() && replyMutation.mutate({ id: selected.id, message: reply.trim() })}
+                  onClick={() =>
+                    reply.trim() && replyMutation.mutate({ id: selected.id, message: reply.trim() })
+                  }
                   disabled={!reply.trim() || replyMutation.isPending}
                   className="inline-flex h-[38px] items-center gap-1 rounded-full bg-violet-600 px-4 py-2 text-white text-sm hover:bg-violet-700 disabled:opacity-50"
                 >
