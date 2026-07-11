@@ -172,6 +172,7 @@ The first Twilio slice exposes mock-friendly webhook plumbing:
 - `POST /webhooks/twilio` remains available as an auto-detect compatibility endpoint.
 - `TWILIO_DEFAULT_TENANT_ID` decides which tenant receives inbound Twilio messages when Twilio cannot send an `x-tenant-id` header.
 - `TWILIO_SMS_FROM` and `TWILIO_WHATSAPP_FROM` keep outbound sender configuration separate.
+- Setting `TWILIO_ACCOUNT_SID` and `TWILIO_AUTH_TOKEN` enables real outbound sending through Twilio's Messages API.
 
 For local Twilio testing, expose the API with a tunnel and point Twilio Messaging webhooks to the relevant endpoint.
 

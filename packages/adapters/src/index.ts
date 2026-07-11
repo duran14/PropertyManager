@@ -11,3 +11,4 @@ export * from './mocks/showmojo.mock.js';
 export * from './mocks/telegram.mock.js';
 export * from './mocks/webchat.mock.js';
 export * from './real/telegram.real.js';
+export * from './real/twilio.real.js';

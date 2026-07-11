@@ -35,6 +35,7 @@ import { TwilioMockAdapter } from './mocks/twilio.mock.js';
 import { TelegramMockAdapter } from './mocks/telegram.mock.js';
 import { WebChatMockAdapter } from './mocks/webchat.mock.js';
 import { TelegramRealAdapter } from './real/telegram.real.js';
+import { TwilioRealAdapter } from './real/twilio.real.js';
 
 export interface Adapters {
   buildium: BuildiumAdapter;
@@ -55,11 +56,16 @@ export interface Adapters {
  * Construye el set completo de adapters.
  * Las integraciones sin credenciales caen a mock automáticamente.
  *
- * NOTE: las implementaciones reales aún no existen (no hay credenciales).
- * Cuando se añadan, se importan aquí y se usan si isIntegrationConfigured.
+ * Real adapters are used when the required credentials are configured.
+ * Everything else stays mock-friendly for local development.
  */
 export function createAdapters(env: Env): Adapters {
-  const twilioAdapter = new TwilioMockAdapter();
+  const twilioAdapter = isIntegrationConfigured(env, 'twilio')
+    ? new TwilioRealAdapter({
+      accountSid: env.TWILIO_ACCOUNT_SID,
+      authToken: env.TWILIO_AUTH_TOKEN,
+    })
+    : new TwilioMockAdapter();
   const mockModes: Record<IntegrationKey, boolean> = {
     buildium: !isIntegrationConfigured(env, 'buildium'),
     qbo: !isIntegrationConfigured(env, 'qbo'),
@@ -83,8 +89,18 @@ export function createAdapters(env: Env): Adapters {
     photoEnhancement: new PhotoEnhancementMockAdapter(),
     showmojo: new ShowMojoMockAdapter(),
     messaging: {
-      whatsapp: new TwilioMessagingWrapper(twilioAdapter, 'whatsapp', env.TWILIO_WHATSAPP_FROM || '+16045550000'),
-      sms: new TwilioMessagingWrapper(twilioAdapter, 'sms', env.TWILIO_SMS_FROM || '+16045550000'),
+      whatsapp: new TwilioMessagingWrapper(
+        twilioAdapter,
+        'whatsapp',
+        env.TWILIO_WHATSAPP_FROM || (mockModes.twilio ? '+16045550000' : ''),
+        mockModes.twilio ? undefined : 'TWILIO_WHATSAPP_FROM',
+      ),
+      sms: new TwilioMessagingWrapper(
+        twilioAdapter,
+        'sms',
+        env.TWILIO_SMS_FROM || (mockModes.twilio ? '+16045550000' : ''),
+        mockModes.twilio ? undefined : 'TWILIO_SMS_FROM',
+      ),
       telegram: isIntegrationConfigured(env, 'telegram')
         ? new TelegramRealAdapter(env.TELEGRAM_BOT_TOKEN)
         : new TelegramMockAdapter(),
@@ -106,11 +122,16 @@ class TwilioMessagingWrapper implements MessagingAdapter {
     private twilio: TwilioAdapter,
     channel: ChatChannel,
     private from: string,
+    private requiredFromEnv?: string,
   ) {
     this.channel = channel;
   }
 
   async send(message: OutboundMessage): Promise<{ messageId: string }> {
+    if (this.requiredFromEnv && !this.from) {
+      throw new Error(`${this.requiredFromEnv} is required for real Twilio ${this.channel} sending`);
+    }
+
     return this.twilio.send({
       to: message.to,
       from: this.from,
