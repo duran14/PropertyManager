@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildConversationActivity } from './conversation-activity.js';
+import { buildConversationActivity, filterConversationActivity } from './conversation-activity.js';
 
 describe('buildConversationActivity', () => {
   it('orders recent conversation events from newest to oldest', () => {
@@ -61,6 +61,7 @@ describe('buildConversationActivity', () => {
         detail: 'Jul 12, 10:00 a.m.',
         occurredAt: '2026-07-10T10:00:00.000Z',
         tone: 'attention',
+        category: 'showings',
         source: 'derived',
       },
     ]);
@@ -94,6 +95,7 @@ describe('buildConversationActivity', () => {
       detail: 'Contacted to qualified',
       occurredAt: '2026-07-10T09:05:00.000Z',
       tone: 'active',
+      category: 'staff',
       source: 'event',
       actorName: 'Diana Reyes',
     });
@@ -130,5 +132,48 @@ describe('buildConversationActivity', () => {
       key: 'event-event_1',
       source: 'event',
     });
+  });
+
+  it('filters activity by operational category', () => {
+    const activity = buildConversationActivity({
+      lead: { status: 'tour_scheduled', createdAt: '2026-07-10T08:00:00.000Z' },
+      recommendedUnit: null,
+      slots: [{ key: 'budget', value: '2700', updatedAt: '2026-07-10T08:10:00.000Z' }],
+      messages: [
+        { role: 'user', content: 'I can tour tomorrow.', createdAt: '2026-07-10T08:20:00.000Z' },
+      ],
+      showings: [
+        {
+          id: 'showing_1',
+          status: 'scheduled',
+          scheduledAt: '2026-07-12T17:00:00.000Z',
+          createdAt: '2026-07-10T08:30:00.000Z',
+        },
+      ],
+      events: [
+        {
+          id: 'event_1',
+          type: 'lead.status_changed',
+          label: 'Lead status changed',
+          detail: 'New to contacted',
+          createdAt: '2026-07-10T08:40:00.000Z',
+        },
+      ],
+    });
+
+    expect(filterConversationActivity(activity, 'staff').map((item) => item.label)).toEqual([
+      'Lead status changed',
+    ]);
+    expect(filterConversationActivity(activity, 'messages').map((item) => item.label)).toEqual([
+      'Prospect replied',
+    ]);
+    expect(filterConversationActivity(activity, 'profile').map((item) => item.label)).toEqual([
+      'Profile enriched',
+      'Lead created',
+    ]);
+    expect(filterConversationActivity(activity, 'showings').map((item) => item.label)).toEqual([
+      'Tour scheduled',
+    ]);
+    expect(filterConversationActivity(activity, 'all')).toHaveLength(activity.length);
   });
 });

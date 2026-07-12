@@ -1,6 +1,6 @@
 # Project Handoff - Property Manager
 
-Last updated: 2026-07-11 21:33, America/Vancouver.
+Last updated: 2026-07-11 22:30, America/Vancouver.
 
 This document is for a future AI agent or developer continuing the project after the current Codex session. It summarizes what was built, what is currently working, how to verify it, and what should come next.
 
@@ -15,11 +15,12 @@ The app is still in mock/prototype mode for intelligence and most third-party in
 - Local path: `C:\Users\duran\Documents\Proyectos IA\ZCodeProject\Property Manager`
 - GitHub remote: `https://github.com/duran14/PropertyManager.git`
 - Branch: `main`
-- Latest confirmed feature commit before this handoff document: pending current commit with recent activity event dedupe.
+- Latest confirmed feature commit before this handoff document: pending current commit with conversation activity history filters.
 
 Important recent commits:
 
-- pending: recent activity avoids duplicating showings that already have persisted events
+- pending: conversations include an activity history section filtered by operational category
+- `0b4a8bb Dedupe persisted showing activity`
 - `438c5a0 Persist conversation event log`
 - `62c3589 Add conversation recent activity feed`
 - `8de86ff Add conversation timeline summary`
@@ -131,7 +132,9 @@ Staff can now create a manual/internal showing directly from a conversation:
 - Persisted conversation events live in the new `conversation_events` table with tenant/conversation/lead/actor links and RLS policies.
 - The app currently records events for lead status changes, staff unit overrides, manual staff replies, manual showing creation, showing confirmation, and showing cancellation.
 - Recent activity now suppresses derived showing entries when a persisted event already references the same showing through `payload.showingId`.
-- Activity feed labels, priorities, and date normalization live in `@property-manager/core/conversation-activity`.
+- Conversation detail now includes `Activity history` below `Recent activity`.
+- Activity history can be filtered by `All`, `Staff actions`, `Messages`, `Lead profile`, and `Showings`.
+- Activity feed labels, priorities, category assignment, filtering, and date normalization live in `@property-manager/core/conversation-activity`.
 
 Primary files:
 
@@ -296,7 +299,8 @@ Manual UI check:
 6. Confirm visible prospect slots appear in list previews and detail summary cards.
 7. Confirm the conversation detail shows `Conversation timeline` chips for lead, unit, tour, and pending reply state.
 8. Confirm the conversation detail shows `Recent activity` with newest events first.
-9. Trigger a lead status change or showing action and confirm a persisted staff/action event appears after the conversation detail refetches.
+9. Confirm `Activity history` filters events by `Staff actions`, `Messages`, `Lead profile`, and `Showings`.
+10. Trigger a lead status change or showing action and confirm a persisted staff/action event appears after the conversation detail refetches.
 
 Messaging smoke tests:
 

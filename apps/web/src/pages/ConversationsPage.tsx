@@ -1,7 +1,11 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { buildConversationActivity } from '@property-manager/core/conversation-activity';
+import {
+  buildConversationActivity,
+  filterConversationActivity,
+} from '@property-manager/core/conversation-activity';
 import type {
+  ConversationActivityCategory,
   ConversationActivityEventInput,
   ConversationActivityTone,
 } from '@property-manager/core/conversation-activity';
@@ -108,6 +112,14 @@ const ACTIVITY_TONE_STYLES: Record<ConversationActivityTone, string> = {
   done: 'bg-green-500',
 };
 
+const ACTIVITY_FILTER_OPTIONS: Array<{ value: ConversationActivityCategory; label: string }> = [
+  { value: 'all', label: 'All' },
+  { value: 'staff', label: 'Staff actions' },
+  { value: 'messages', label: 'Messages' },
+  { value: 'profile', label: 'Lead profile' },
+  { value: 'showings', label: 'Showings' },
+];
+
 const LEAD_STATUS_OPTIONS: Array<{ value: LeadStatus; label: string }> = [
   { value: 'new_', label: 'New' },
   { value: 'contacted', label: 'Contacted' },
@@ -204,6 +216,7 @@ export function ConversationsPage() {
   const [pendingSuggestedReply, setPendingSuggestedReply] = useState<string | null>(null);
   const [showingDateTime, setShowingDateTime] = useState(defaultShowingDateTime);
   const [showingDuration, setShowingDuration] = useState(30);
+  const [activityCategory, setActivityCategory] = useState<ConversationActivityCategory>('all');
 
   const { data, isLoading } = useQuery<{ conversations: Conversation[] }>({
     queryKey: ['conversations'],
@@ -431,8 +444,10 @@ export function ConversationsPage() {
         messages: selected.messages,
         showings: selected.showings ?? [],
         events: (selected.events ?? []).map(toConversationActivityEvent),
-      }).slice(0, 5)
+      })
     : [];
+  const recentActivityItems = activityItems.slice(0, 5);
+  const historyActivityItems = filterConversationActivity(activityItems, activityCategory);
 
   return (
     <div>
@@ -653,13 +668,13 @@ export function ConversationsPage() {
                 </div>
               )}
 
-              {activityItems.length > 0 && (
+              {recentActivityItems.length > 0 && (
                 <div className="border-b border-slate-100 bg-white px-4 py-3">
                   <div className="text-[11px] font-medium uppercase text-slate-400">
                     Recent activity
                   </div>
                   <div className="mt-2 space-y-2">
-                    {activityItems.map((item) => (
+                    {recentActivityItems.map((item) => (
                       <div key={item.key} className="grid grid-cols-[12px_1fr_auto] gap-2 text-xs">
                         <span
                           className={`mt-1 h-2.5 w-2.5 rounded-full ${ACTIVITY_TONE_STYLES[item.tone]}`}
@@ -676,6 +691,67 @@ export function ConversationsPage() {
                         </time>
                       </div>
                     ))}
+                  </div>
+                </div>
+              )}
+
+              {activityItems.length > 0 && (
+                <div className="border-b border-slate-100 bg-slate-50 px-4 py-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="text-[11px] font-medium uppercase text-slate-400">
+                      Activity history
+                    </div>
+                    <div className="flex flex-wrap gap-1">
+                      {ACTIVITY_FILTER_OPTIONS.map((option) => (
+                        <button
+                          key={option.value}
+                          type="button"
+                          onClick={() => setActivityCategory(option.value)}
+                          className={`rounded-md border px-2 py-1 text-xs font-medium ${
+                            activityCategory === option.value
+                              ? 'border-violet-200 bg-violet-50 text-violet-700'
+                              : 'border-slate-200 bg-white text-slate-500 hover:bg-slate-50'
+                          }`}
+                        >
+                          {option.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="mt-3 max-h-56 space-y-2 overflow-y-auto pr-1">
+                    {historyActivityItems.length === 0 ? (
+                      <p className="text-xs text-slate-400">No activity in this category yet.</p>
+                    ) : (
+                      historyActivityItems.map((item) => (
+                        <div
+                          key={`history-${item.key}`}
+                          className="grid grid-cols-[12px_minmax(0,1fr)_auto] gap-2 border-b border-slate-100 pb-2 text-xs last:border-b-0 last:pb-0"
+                        >
+                          <span
+                            className={`mt-1 h-2.5 w-2.5 rounded-full ${ACTIVITY_TONE_STYLES[item.tone]}`}
+                            aria-hidden="true"
+                          />
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-1">
+                              <span className="font-medium text-slate-700">{item.label}</span>
+                              <span className="rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] uppercase text-slate-400">
+                                {
+                                  ACTIVITY_FILTER_OPTIONS.find(
+                                    (option) => option.value === item.category,
+                                  )?.label
+                                }
+                              </span>
+                            </div>
+                            <div className="mt-0.5 text-slate-500">
+                              {item.actorName ? `${item.actorName}: ${item.detail}` : item.detail}
+                            </div>
+                          </div>
+                          <time className="whitespace-nowrap text-slate-400">
+                            {formatActivityTime(item.occurredAt)}
+                          </time>
+                        </div>
+                      ))
+                    )}
                   </div>
                 </div>
               )}

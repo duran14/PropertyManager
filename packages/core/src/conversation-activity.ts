@@ -1,4 +1,5 @@
 export type ConversationActivityTone = 'neutral' | 'active' | 'attention' | 'done';
+export type ConversationActivityCategory = 'all' | 'staff' | 'messages' | 'profile' | 'showings';
 
 export interface ConversationActivityInput {
   lead: { status: string; createdAt?: string } | null;
@@ -32,6 +33,7 @@ export interface ConversationActivityItem {
   detail: string;
   occurredAt: string;
   tone: ConversationActivityTone;
+  category: Exclude<ConversationActivityCategory, 'all'>;
   source?: 'event' | 'derived';
   actorName?: string | null;
 }
@@ -58,6 +60,7 @@ export function buildConversationActivity(
     detail: event.detail,
     occurredAt: event.createdAt,
     tone: event.tone ?? toneForEventType(event.type),
+    category: categoryForEventType(event.type),
     source: 'event',
     actorName: event.actorName,
   }));
@@ -72,6 +75,7 @@ export function buildConversationActivity(
       detail: formatActivityDateTime(showing.scheduledAt),
       occurredAt: showing.updatedAt ?? showing.createdAt ?? showing.scheduledAt,
       tone: buildShowingTone(showing.status),
+      category: 'showings',
       source: 'derived',
     });
   });
@@ -86,6 +90,7 @@ export function buildConversationActivity(
       detail: truncateDetail(latestUserMessage.content),
       occurredAt: latestUserMessage.createdAt,
       tone: 'neutral',
+      category: 'messages',
       source: 'derived',
     });
   }
@@ -101,6 +106,7 @@ export function buildConversationActivity(
         .join(', '),
       occurredAt: latestTimestamp(profileSlots.map((slot) => slot.updatedAt)),
       tone: 'done',
+      category: 'profile',
       source: 'derived',
     });
   }
@@ -112,6 +118,7 @@ export function buildConversationActivity(
       detail: `${input.recommendedUnit.propertyName} ${input.recommendedUnit.unitName}`,
       occurredAt: input.recommendedUnit.updatedAt ?? '',
       tone: 'done',
+      category: 'profile',
       source: 'derived',
     });
   }
@@ -123,6 +130,7 @@ export function buildConversationActivity(
       detail: formatLeadStatus(input.lead.status),
       occurredAt: input.lead.createdAt ?? '',
       tone: 'done',
+      category: 'profile',
       source: 'derived',
     });
   }
@@ -130,6 +138,14 @@ export function buildConversationActivity(
   return activity
     .filter((item) => item.occurredAt)
     .sort((a, b) => Date.parse(b.occurredAt) - Date.parse(a.occurredAt));
+}
+
+export function filterConversationActivity(
+  activity: ConversationActivityItem[],
+  category: ConversationActivityCategory,
+): ConversationActivityItem[] {
+  if (category === 'all') return activity;
+  return activity.filter((item) => item.category === category);
 }
 
 function buildShowingLabel(status: string): string {
@@ -151,6 +167,19 @@ function toneForEventType(type: string): ConversationActivityTone {
   if (type.includes('scheduled') || type.includes('status_changed')) return 'active';
   if (type.includes('confirmed') || type.includes('recommended')) return 'done';
   return 'neutral';
+}
+
+function categoryForEventType(type: string): Exclude<ConversationActivityCategory, 'all'> {
+  if (type.startsWith('showing.')) return 'showings';
+  if (
+    type.startsWith('lead.') ||
+    type.startsWith('unit.') ||
+    type.startsWith('staff.') ||
+    type.startsWith('handoff.')
+  ) {
+    return 'staff';
+  }
+  return 'messages';
 }
 
 function latestTimestamp(values: Array<string | undefined>): string {
