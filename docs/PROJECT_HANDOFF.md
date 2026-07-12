@@ -1,6 +1,6 @@
 # Project Handoff - Property Manager
 
-Last updated: 2026-07-11 20:27, America/Vancouver.
+Last updated: 2026-07-11 21:33, America/Vancouver.
 
 This document is for a future AI agent or developer continuing the project after the current Codex session. It summarizes what was built, what is currently working, how to verify it, and what should come next.
 
@@ -15,11 +15,12 @@ The app is still in mock/prototype mode for intelligence and most third-party in
 - Local path: `C:\Users\duran\Documents\Proyectos IA\ZCodeProject\Property Manager`
 - GitHub remote: `https://github.com/duran14/PropertyManager.git`
 - Branch: `main`
-- Latest confirmed feature commit before this handoff document: pending current commit with persisted conversation event log.
+- Latest confirmed feature commit before this handoff document: pending current commit with recent activity event dedupe.
 
 Important recent commits:
 
-- pending: conversations persist staff/action events and show them in recent activity
+- pending: recent activity avoids duplicating showings that already have persisted events
+- `438c5a0 Persist conversation event log`
 - `62c3589 Add conversation recent activity feed`
 - `8de86ff Add conversation timeline summary`
 - `4686afa Stage suggested replies and reschedule tours`
@@ -129,6 +130,7 @@ Staff can now create a manual/internal showing directly from a conversation:
 - Recent activity combines persisted staff/action events with derived events from existing conversation messages, profile slots, the active unit recommendation, lead creation, and linked showings.
 - Persisted conversation events live in the new `conversation_events` table with tenant/conversation/lead/actor links and RLS policies.
 - The app currently records events for lead status changes, staff unit overrides, manual staff replies, manual showing creation, showing confirmation, and showing cancellation.
+- Recent activity now suppresses derived showing entries when a persisted event already references the same showing through `payload.showingId`.
 - Activity feed labels, priorities, and date normalization live in `@property-manager/core/conversation-activity`.
 
 Primary files:

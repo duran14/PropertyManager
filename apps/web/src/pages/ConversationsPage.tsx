@@ -54,6 +54,7 @@ interface ConversationEventSummary {
   label: string;
   detail: string;
   tone: ConversationActivityTone;
+  payload?: Record<string, unknown>;
   createdAt: string;
   actorUser?: { firstName: string; lastName: string } | null;
 }
@@ -180,6 +181,7 @@ function toConversationActivityEvent(
     tone: event.tone,
     createdAt: event.createdAt,
     actorName: event.actorUser ? `${event.actorUser.firstName} ${event.actorUser.lastName}` : null,
+    relatedShowingId: typeof event.payload?.showingId === 'string' ? event.payload.showingId : null,
   };
 }
 

@@ -6,6 +6,7 @@ export interface ConversationActivityInput {
   slots: Array<{ key: string; value: string; updatedAt?: string }>;
   messages: Array<{ role: string; content: string; createdAt: string }>;
   showings: Array<{
+    id?: string;
     status: string;
     scheduledAt: string;
     createdAt?: string;
@@ -22,6 +23,7 @@ export interface ConversationActivityEventInput {
   actorName?: string | null;
   createdAt: string;
   tone?: ConversationActivityTone;
+  relatedShowingId?: string | null;
 }
 
 export interface ConversationActivityItem {
@@ -45,6 +47,11 @@ const PROFILE_SLOT_LABELS: Record<string, string> = {
 export function buildConversationActivity(
   input: ConversationActivityInput,
 ): ConversationActivityItem[] {
+  const persistedShowingIds = new Set(
+    (input.events ?? [])
+      .map((event) => event.relatedShowingId)
+      .filter((id): id is string => Boolean(id)),
+  );
   const activity: ConversationActivityItem[] = (input.events ?? []).map((event) => ({
     key: `event-${event.id}`,
     label: event.label,
@@ -56,6 +63,8 @@ export function buildConversationActivity(
   }));
 
   input.showings.forEach((showing, index) => {
+    if (showing.id && persistedShowingIds.has(showing.id)) return;
+
     const label = buildShowingLabel(showing.status);
     activity.push({
       key: `showing-${index}`,

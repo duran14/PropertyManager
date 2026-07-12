@@ -98,4 +98,37 @@ describe('buildConversationActivity', () => {
       actorName: 'Diana Reyes',
     });
   });
+
+  it('does not duplicate showings that already have persisted events', () => {
+    const activity = buildConversationActivity({
+      lead: null,
+      recommendedUnit: null,
+      slots: [],
+      messages: [],
+      showings: [
+        {
+          id: 'showing_1',
+          status: 'cancelled',
+          scheduledAt: '2026-07-12T17:00:00.000Z',
+          updatedAt: '2026-07-10T10:00:00.000Z',
+        },
+      ],
+      events: [
+        {
+          id: 'event_1',
+          type: 'showing.cancelled',
+          label: 'Tour cancelled',
+          detail: 'Jul 12, 10:00 a.m.',
+          createdAt: '2026-07-10T10:01:00.000Z',
+          relatedShowingId: 'showing_1',
+        },
+      ],
+    });
+
+    expect(activity).toHaveLength(1);
+    expect(activity[0]).toMatchObject({
+      key: 'event-event_1',
+      source: 'event',
+    });
+  });
 });
