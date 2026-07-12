@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { buildConversationActivity } from '@property-manager/core/conversation-activity';
+import type { ConversationActivityTone } from '@property-manager/core/conversation-activity';
 import { buildConversationTimeline } from '@property-manager/core/conversation-timeline';
 import type { ConversationTimelineTone } from '@property-manager/core/conversation-timeline';
 import {
@@ -23,7 +25,13 @@ interface Conversation {
   externalId: string;
   channel: string;
   state: string;
-  lead: { id: string; name: string | null; phone: string | null; status: LeadStatus } | null;
+  lead: {
+    id: string;
+    name: string | null;
+    phone: string | null;
+    status: LeadStatus;
+    createdAt?: string;
+  } | null;
   unit: {
     id: string;
     name: string;
@@ -31,7 +39,7 @@ interface Conversation {
     property: { name: string; city: string };
   } | null;
   messages: ChatMessage[];
-  slots: Array<{ key: string; value: string }>;
+  slots: Array<{ key: string; value: string; updatedAt?: string }>;
   showings?: ShowingSummary[];
   updatedAt: string;
 }
@@ -41,6 +49,8 @@ interface ShowingSummary {
   scheduledAt: string;
   durationMinutes: number;
   status: 'scheduled' | 'confirmed' | 'completed' | 'cancelled' | 'no_show';
+  createdAt?: string;
+  updatedAt?: string;
   unit: { name: string; property: { name: string; address: string; city: string } } | null;
 }
 
@@ -74,6 +84,13 @@ const TIMELINE_TONE_STYLES: Record<ConversationTimelineTone, string> = {
   active: 'border-blue-200 bg-blue-50 text-blue-800',
   attention: 'border-amber-200 bg-amber-50 text-amber-900',
   muted: 'border-slate-200 bg-slate-50 text-slate-500',
+};
+
+const ACTIVITY_TONE_STYLES: Record<ConversationActivityTone, string> = {
+  neutral: 'bg-slate-400',
+  active: 'bg-blue-500',
+  attention: 'bg-amber-500',
+  done: 'bg-green-500',
 };
 
 const LEAD_STATUS_OPTIONS: Array<{ value: LeadStatus; label: string }> = [
@@ -119,6 +136,16 @@ function toDateTimeLocalValue(date: Date): string {
 }
 
 function formatShowingDateTime(iso: string): string {
+  return new Date(iso).toLocaleString('en-CA', {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  });
+}
+
+function formatActivityTime(iso: string): string {
   return new Date(iso).toLocaleString('en-CA', {
     month: 'short',
     day: 'numeric',
@@ -358,6 +385,23 @@ export function ConversationsPage() {
         hasPendingSuggestedReply: Boolean(pendingSuggestedReply),
       })
     : [];
+  const activityItems = selected
+    ? buildConversationActivity({
+        lead: selected.lead
+          ? { status: selected.lead.status, createdAt: selected.lead.createdAt }
+          : null,
+        recommendedUnit: selected.unit
+          ? {
+              unitName: selected.unit.name,
+              propertyName: selected.unit.property.name,
+              updatedAt: selected.updatedAt,
+            }
+          : null,
+        slots: selected.slots,
+        messages: selected.messages,
+        showings: selected.showings ?? [],
+      }).slice(0, 5)
+    : [];
 
   return (
     <div>
@@ -572,6 +616,31 @@ export function ConversationsPage() {
                         <div className="mt-0.5 truncate text-sm font-medium text-slate-700">
                           {value ?? '-'}
                         </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {activityItems.length > 0 && (
+                <div className="border-b border-slate-100 bg-white px-4 py-3">
+                  <div className="text-[11px] font-medium uppercase text-slate-400">
+                    Recent activity
+                  </div>
+                  <div className="mt-2 space-y-2">
+                    {activityItems.map((item) => (
+                      <div key={item.key} className="grid grid-cols-[12px_1fr_auto] gap-2 text-xs">
+                        <span
+                          className={`mt-1 h-2.5 w-2.5 rounded-full ${ACTIVITY_TONE_STYLES[item.tone]}`}
+                          aria-hidden="true"
+                        />
+                        <div className="min-w-0">
+                          <div className="font-medium text-slate-700">{item.label}</div>
+                          <div className="truncate text-slate-500">{item.detail}</div>
+                        </div>
+                        <time className="whitespace-nowrap text-slate-400">
+                          {formatActivityTime(item.occurredAt)}
+                        </time>
                       </div>
                     ))}
                   </div>

@@ -8,7 +8,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./showing-messages": "./src/showing-messages.ts",
-    "./conversation-timeline": "./src/conversation-timeline.ts"
+    "./conversation-timeline": "./src/conversation-timeline.ts",
+    "./conversation-activity": "./src/conversation-activity.ts"
   },
   "scripts": {
     "test": "vitest run",
