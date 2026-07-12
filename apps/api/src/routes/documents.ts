@@ -1,8 +1,18 @@
 import { Router } from 'express';
+import { randomUUID } from 'node:crypto';
+import path from 'node:path';
 import { z } from 'zod';
 import { requireAuth, requireUser } from '../auth/context.js';
 import { prisma } from '../config/db.js';
+import { getEnv } from '../config/env.js';
+import { extractTextFromDocumentUpload } from '../services/document-extraction.service.js';
 import { normalizeDocumentUpload } from '../services/document-intake.service.js';
+import {
+  buildDocumentStorageKey,
+  createLocalDocumentStorage,
+  decodeBase64Payload,
+} from '../services/document-storage.service.js';
+import { buildKnowledgeChunks } from '../services/knowledge-retrieval.service.js';
 
 export const documentsRouter = Router();
 
@@ -37,7 +47,9 @@ documentsRouter.get('/', requireAuth, async (req, res, next) => {
         entityId: true,
         description: true,
         textContent: true,
+        storageKey: true,
         storageUrl: true,
+        extractionStatus: true,
         createdAt: true,
         updatedAt: true,
       },
@@ -58,15 +70,83 @@ documentsRouter.post('/', requireAuth, async (req, res, next) => {
     }
 
     const normalized = normalizeDocumentUpload(parsed.data);
-    const document = await prisma.knowledgeDocument.create({
-      data: {
+    const documentId = randomUUID();
+    const extraction = extractTextFromDocumentUpload({
+      mimeType: normalized.mimeType,
+      fileBase64: normalized.fileBase64,
+      providedTextContent: normalized.textContent,
+    });
+    const storedFile = normalized.fileBase64
+      ? await storeUploadedDocument({
         tenantId: user.tenantId,
-        ...normalized,
-        storageUrl: normalized.storageUrl || null,
-      },
+        documentId,
+        filename: normalized.filename,
+        mimeType: normalized.mimeType,
+        fileBase64: normalized.fileBase64,
+      })
+      : null;
+
+    const document = await prisma.$transaction(async (tx) => {
+      const created = await tx.knowledgeDocument.create({
+        data: {
+          id: documentId,
+          tenantId: user.tenantId,
+          filename: normalized.filename,
+          mimeType: normalized.mimeType,
+          category: normalized.category,
+          entityType: normalized.entityType,
+          entityId: normalized.entityId,
+          description: normalized.description,
+          textContent: extraction.textContent,
+          storageKey: storedFile?.storageKey ?? null,
+          storageUrl: storedFile?.storageUrl ?? normalized.storageUrl ?? null,
+          fileBase64: null,
+          extractionStatus: extraction.extractionStatus,
+        },
+      });
+
+      const chunks = buildKnowledgeChunks({
+        sourceType: 'document',
+        sourceId: created.id,
+        title: created.filename,
+        text: [created.description, created.textContent].filter(Boolean).join('\n\n'),
+      });
+      if (chunks.length > 0) {
+        await tx.knowledgeChunk.createMany({
+          data: chunks.map((chunk) => ({
+            tenantId: user.tenantId,
+            sourceType: chunk.sourceType,
+            sourceId: chunk.sourceId,
+            title: chunk.title,
+            content: chunk.content,
+            chunkIndex: chunk.chunkIndex,
+          })),
+        });
+      }
+
+      return created;
     });
     res.status(201).json({ document });
   } catch (err) {
     next(err);
   }
 });
+
+async function storeUploadedDocument(input: {
+  tenantId: string;
+  documentId: string;
+  filename: string;
+  mimeType: string;
+  fileBase64: string;
+}) {
+  const env = getEnv();
+  const storage = createLocalDocumentStorage({
+    rootDir: path.resolve(env.DOCUMENT_STORAGE_DIR),
+    publicBaseUrl: env.DOCUMENT_STORAGE_PUBLIC_BASE_URL || undefined,
+  });
+  return storage.putObject({
+    key: buildDocumentStorageKey(input),
+    body: decodeBase64Payload(input.fileBase64),
+    contentType: input.mimeType,
+  });
+}

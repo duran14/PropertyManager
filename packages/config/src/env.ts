@@ -28,6 +28,12 @@ const envSchema = z.object({
   API_URL: z.string().url(),
   WEB_URL: z.string().url(),
 
+  // --- Document/object storage ---
+  DOCUMENT_STORAGE_DIR: z.string().default('.storage/documents'),
+  DOCUMENT_STORAGE_PUBLIC_BASE_URL: z
+    .union([z.string().url(), z.literal('')])
+    .default(''),
+
   // --- Autenticación ---
   JWT_ACCESS_SECRET: z.string().min(16),
   JWT_REFRESH_SECRET: z.string().min(16),

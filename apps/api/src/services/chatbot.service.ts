@@ -7,6 +7,7 @@
 import type { GlmAdapter, MessagingAdapter, ShowMojoAdapter } from '@property-manager/adapters';
 import { prisma } from '../config/db.js';
 import { writeAudit } from './audit.service.js';
+import { formatKnowledgeContext, rankKnowledgeChunks } from './knowledge-retrieval.service.js';
 import { getAvailableSlots, scheduleTour } from './scheduling.service.js';
 
 export type ConversationState =
@@ -274,7 +275,7 @@ async function callGlm(
   slots?: Record<string, string>;
   next_state?: ConversationState;
 }> {
-  const knowledgeContext = await getTenantKnowledgeContext(ctx.tenantId);
+  const knowledgeContext = await getTenantKnowledgeContext(ctx.tenantId, ctx.userMessage);
   const systemPrompt = buildSystemPrompt(
     ctx.currentState,
     ctx.availableUnits,
@@ -380,14 +381,26 @@ function buildSystemPrompt(
   ].join('\n');
 }
 
-async function getTenantKnowledgeContext(tenantId: string): Promise<string> {
-  const [onboarding, documents] = await Promise.all([
+async function getTenantKnowledgeContext(tenantId: string, query: string): Promise<string> {
+  const [onboarding, documents, chunks] = await Promise.all([
     prisma.tenantOnboardingProfile.findUnique({ where: { tenantId } }),
     prisma.knowledgeDocument.findMany({
       where: { tenantId },
       orderBy: { updatedAt: 'desc' },
       take: 5,
       select: { filename: true, category: true, description: true, textContent: true },
+    }),
+    prisma.knowledgeChunk.findMany({
+      where: { tenantId },
+      orderBy: { updatedAt: 'desc' },
+      take: 300,
+      select: {
+        sourceType: true,
+        sourceId: true,
+        title: true,
+        content: true,
+        chunkIndex: true,
+      },
     }),
   ]);
 
@@ -402,6 +415,10 @@ async function getTenantKnowledgeContext(tenantId: string): Promise<string> {
   for (const document of documents) {
     const detail = document.textContent ?? document.description;
     if (detail) lines.push(`${document.category} document ${document.filename}: ${detail.slice(0, 700)}`);
+  }
+  const rankedChunks = rankKnowledgeChunks(chunks, query).slice(0, 5);
+  if (rankedChunks.length > 0) {
+    lines.push(formatKnowledgeContext(rankedChunks));
   }
   return lines.join('\n');
 }

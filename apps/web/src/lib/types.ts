@@ -113,9 +113,20 @@ export interface KnowledgeDocument {
   entityId: string | null;
   description: string | null;
   textContent: string | null;
+  storageKey: string | null;
   storageUrl: string | null;
+  extractionStatus: 'completed' | 'pending' | 'failed';
   createdAt: string;
   updatedAt: string;
+}
+
+export interface KnowledgeSearchResult {
+  sourceType: string;
+  sourceId: string;
+  title: string;
+  content: string;
+  chunkIndex: number;
+  score: number;
 }
 
 export interface ObsidianExportFile {

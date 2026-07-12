@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from '../lib/apiClient';
 import type {
   KnowledgeDocument,
+  KnowledgeSearchResult,
   ObsidianExportFile,
   PropertyRecord,
   TenantOnboardingProfile,
@@ -63,6 +64,8 @@ export function PropertiesPage() {
   const [unit, setUnit] = useState(emptyUnit);
   const [document, setDocument] = useState(emptyDocument);
   const [obsidianFiles, setObsidianFiles] = useState<ObsidianExportFile[]>([]);
+  const [knowledgeQuery, setKnowledgeQuery] = useState('');
+  const [knowledgeResults, setKnowledgeResults] = useState<KnowledgeSearchResult[]>([]);
   const [editingPropertyId, setEditingPropertyId] = useState<string | null>(null);
   const [editingUnitId, setEditingUnitId] = useState<string | null>(null);
 
@@ -161,6 +164,14 @@ export function PropertiesPage() {
         '/knowledge-base/obsidian-export',
       ),
     onSuccess: (data) => setObsidianFiles(data.files),
+  });
+
+  const searchKnowledge = useMutation({
+    mutationFn: () =>
+      apiFetch<{ results: KnowledgeSearchResult[] }>(
+        `/knowledge-base/search?q=${encodeURIComponent(knowledgeQuery)}`,
+      ),
+    onSuccess: (data) => setKnowledgeResults(data.results),
   });
 
   function loadProfile() {
@@ -433,8 +444,16 @@ export function PropertiesPage() {
               {documents.length === 0 && <p className="text-sm text-slate-400">No documents uploaded yet.</p>}
               {documents.map((doc) => (
                 <div key={doc.id} className="rounded-md border border-slate-200 px-3 py-2 text-sm">
-                  <div className="font-medium text-slate-800">{doc.filename}</div>
-                  <div className="text-xs text-slate-500">{doc.category} / {doc.entityType}</div>
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="font-medium text-slate-800">{doc.filename}</div>
+                    <span className={`rounded-full px-2 py-0.5 text-[11px] ${getExtractionStatusClass(doc.extractionStatus)}`}>
+                      {doc.extractionStatus}
+                    </span>
+                  </div>
+                  <div className="mt-1 text-xs text-slate-500">
+                    {doc.category} / {doc.entityType}
+                    {doc.storageUrl && <span> / stored</span>}
+                  </div>
                 </div>
               ))}
             </div>
@@ -447,6 +466,40 @@ export function PropertiesPage() {
             <p className="text-xs text-slate-500">Preview Obsidian Markdown and stable webhook URLs.</p>
           </div>
           <div className="space-y-4 p-4">
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                searchKnowledge.mutate();
+              }}
+              className="space-y-2"
+            >
+              <TextField
+                label="Knowledge search"
+                value={knowledgeQuery}
+                onChange={setKnowledgeQuery}
+                placeholder="Ask about pet policy, deposits, showings..."
+              />
+              <button
+                type="submit"
+                disabled={searchKnowledge.isPending || !knowledgeQuery.trim()}
+                className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+              >
+                Search knowledge
+              </button>
+            </form>
+            {knowledgeResults.length > 0 && (
+              <div className="space-y-2">
+                {knowledgeResults.map((result) => (
+                  <div key={`${result.sourceId}-${result.chunkIndex}`} className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="font-medium text-slate-800">{result.title}</span>
+                      <span className="text-xs text-slate-500">score {result.score}</span>
+                    </div>
+                    <p className="mt-1 text-xs text-slate-600">{result.content.slice(0, 320)}</p>
+                  </div>
+                ))}
+              </div>
+            )}
             <button
               type="button"
               onClick={() => exportObsidian.mutate()}
@@ -609,4 +662,10 @@ function fileToBase64(file: File): Promise<string> {
     };
     reader.readAsDataURL(file);
   });
+}
+
+function getExtractionStatusClass(status: KnowledgeDocument['extractionStatus']): string {
+  if (status === 'completed') return 'bg-green-50 text-green-700';
+  if (status === 'failed') return 'bg-red-50 text-red-700';
+  return 'bg-amber-50 text-amber-700';
 }

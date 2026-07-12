@@ -42,3 +42,6 @@ playwright-report/
 # Local Docker volumes
 .postgres-data/
 .redis-data/
+
+# Local document/object storage
+.storage/

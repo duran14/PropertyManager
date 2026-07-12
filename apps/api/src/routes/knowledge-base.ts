@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { requireAuth, requireUser } from '../auth/context.js';
 import { prisma } from '../config/db.js';
 import { buildObsidianMarkdownFiles } from '../services/knowledge-base.service.js';
+import { rankKnowledgeChunks } from '../services/knowledge-retrieval.service.js';
 
 export const knowledgeBaseRouter = Router();
 
@@ -32,6 +33,34 @@ knowledgeBaseRouter.get('/obsidian-export', requireAuth, async (req, res, next) 
         documents,
       }),
     });
+  } catch (err) {
+    next(err);
+  }
+});
+
+knowledgeBaseRouter.get('/search', requireAuth, async (req, res, next) => {
+  try {
+    const user = requireUser(req);
+    const query = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+    if (!query) {
+      res.json({ results: [] });
+      return;
+    }
+
+    const chunks = await prisma.knowledgeChunk.findMany({
+      where: { tenantId: user.tenantId },
+      orderBy: { updatedAt: 'desc' },
+      take: 300,
+      select: {
+        sourceType: true,
+        sourceId: true,
+        title: true,
+        content: true,
+        chunkIndex: true,
+      },
+    });
+    const results = rankKnowledgeChunks(chunks, query).slice(0, 5);
+    res.json({ results });
   } catch (err) {
     next(err);
   }

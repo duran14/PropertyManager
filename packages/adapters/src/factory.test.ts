@@ -14,6 +14,8 @@ const baseEnv: Env = {
   API_PORT: 4000,
   API_URL: 'http://localhost:4000',
   WEB_URL: 'http://localhost:5173',
+  DOCUMENT_STORAGE_DIR: '.storage/documents',
+  DOCUMENT_STORAGE_PUBLIC_BASE_URL: '',
   JWT_ACCESS_SECRET: 'change-me-access-secret',
   JWT_REFRESH_SECRET: 'change-me-refresh-secret',
   JWT_ACCESS_TTL: '15m',
