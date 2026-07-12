@@ -44,6 +44,7 @@ model Tenant {
   showings              Showing[]
   listingPhotos         ListingPhoto[]
   onboardingProfile     TenantOnboardingProfile?
+  knowledgeDocuments    KnowledgeDocument[]
 
   @@map("tenants")
 }
@@ -63,6 +64,7 @@ model User {
 
   tenant             Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   conversationEvents ConversationEvent[]
+  assignedLeads      Lead[]              @relation("LeadAssignedUser")
 
   @@index([tenantId])
   @@map("users")
@@ -455,18 +457,45 @@ model Lead {
   // Referencia a ShowMojo cuando se agenda una visita (Fase 10)
   showmojoShowingId String?
   tourUrl           String?
+  operationalStatus String?    @default("needs_review")
+  assignedUserId    String?
   createdAt         DateTime   @default(now())
   updatedAt         DateTime   @updatedAt
 
   tenant             Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   unit               Unit?               @relation(fields: [unitId], references: [id])
+  assignedUser       User?               @relation("LeadAssignedUser", fields: [assignedUserId], references: [id])
   conversations      ChatConversation[]
   conversationEvents ConversationEvent[]
   showings           Showing[]
 
   @@index([tenantId, status])
+  @@index([tenantId, operationalStatus])
+  @@index([tenantId, assignedUserId])
   @@index([tenantId, source])
   @@map("leads")
+}
+
+model KnowledgeDocument {
+  id          String   @id @default(cuid())
+  tenantId    String
+  filename    String
+  mimeType    String
+  category    String
+  entityType  String   @default("tenant")
+  entityId    String?
+  description String?
+  textContent String?
+  storageUrl  String?
+  fileBase64  String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, category])
+  @@index([tenantId, entityType, entityId])
+  @@map("knowledge_documents")
 }
 
 enum LeadSource {

@@ -1,7 +1,12 @@
 import { useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from '../lib/apiClient';
-import type { PropertyRecord, TenantOnboardingProfile } from '../lib/types';
+import type {
+  KnowledgeDocument,
+  ObsidianExportFile,
+  PropertyRecord,
+  TenantOnboardingProfile,
+} from '../lib/types';
 
 const emptyOnboarding = {
   logoUrl: '',
@@ -40,11 +45,24 @@ const emptyUnit = {
   isActive: true,
 };
 
+const emptyDocument = {
+  filename: '',
+  mimeType: '',
+  category: 'policy',
+  entityType: 'tenant',
+  entityId: '',
+  description: '',
+  textContent: '',
+  fileBase64: '',
+};
+
 export function PropertiesPage() {
   const queryClient = useQueryClient();
   const [onboarding, setOnboarding] = useState(emptyOnboarding);
   const [property, setProperty] = useState(emptyProperty);
   const [unit, setUnit] = useState(emptyUnit);
+  const [document, setDocument] = useState(emptyDocument);
+  const [obsidianFiles, setObsidianFiles] = useState<ObsidianExportFile[]>([]);
   const [editingPropertyId, setEditingPropertyId] = useState<string | null>(null);
   const [editingUnitId, setEditingUnitId] = useState<string | null>(null);
 
@@ -57,9 +75,22 @@ export function PropertiesPage() {
     queryKey: ['properties'],
     queryFn: () => apiFetch('/properties'),
   });
+  const { data: documentsData } = useQuery<{ documents: KnowledgeDocument[] }>({
+    queryKey: ['documents'],
+    queryFn: () => apiFetch('/documents'),
+  });
+  const { data: webhookData } = useQuery<{
+    apiUrl: string;
+    targets: Record<string, string>;
+    note: string;
+  }>({
+    queryKey: ['webhook-config'],
+    queryFn: () => apiFetch('/webhook-config'),
+  });
 
   const profile = onboardingData?.profile;
   const properties = propertiesData?.properties ?? [];
+  const documents = documentsData?.documents ?? [];
 
   const saveOnboarding = useMutation({
     mutationFn: () => apiFetch('/onboarding', {
@@ -108,6 +139,30 @@ export function PropertiesPage() {
     },
   });
 
+  const uploadDocument = useMutation({
+    mutationFn: () =>
+      apiFetch('/documents', {
+        method: 'POST',
+        body: JSON.stringify({
+          ...document,
+          entityId: document.entityId || null,
+          storageUrl: '',
+        }),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['documents'] });
+      setDocument(emptyDocument);
+    },
+  });
+
+  const exportObsidian = useMutation({
+    mutationFn: () =>
+      apiFetch<{ files: ObsidianExportFile[]; generatedAt: string }>(
+        '/knowledge-base/obsidian-export',
+      ),
+    onSuccess: (data) => setObsidianFiles(data.files),
+  });
+
   function loadProfile() {
     if (!profile) return;
     setOnboarding({
@@ -138,6 +193,22 @@ export function PropertiesPage() {
   function onCreateUnit(event: FormEvent) {
     event.preventDefault();
     createUnit.mutate();
+  }
+
+  function onUploadDocument(event: FormEvent) {
+    event.preventDefault();
+    uploadDocument.mutate();
+  }
+
+  async function loadDocumentFile(file: File | undefined) {
+    if (!file) return;
+    const base64 = await fileToBase64(file);
+    setDocument((current) => ({
+      ...current,
+      filename: file.name,
+      mimeType: file.type || 'application/octet-stream',
+      fileBase64: base64,
+    }));
   }
 
   function startEditProperty(propertyRecord: PropertyRecord) {
@@ -290,6 +361,127 @@ export function PropertiesPage() {
         </section>
       </div>
 
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+        <section className="rounded-lg border border-slate-200 bg-white">
+          <div className="border-b border-slate-200 px-4 py-3">
+            <h2 className="font-medium">Documents</h2>
+            <p className="text-xs text-slate-500">Upload policies, pricing sheets, compliance files, and property knowledge.</p>
+          </div>
+          <form onSubmit={onUploadDocument} className="grid grid-cols-1 gap-4 p-4 md:grid-cols-2">
+            <label className="md:col-span-2">
+              <span className="mb-1 block text-xs font-medium text-slate-500">File</span>
+              <input
+                type="file"
+                onChange={(event) => loadDocumentFile(event.target.files?.[0])}
+                className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+              />
+            </label>
+            <TextField label="Filename" value={document.filename} onChange={(value) => setDocument({ ...document, filename: value })} required />
+            <TextField label="MIME type" value={document.mimeType} onChange={(value) => setDocument({ ...document, mimeType: value })} required />
+            <label>
+              <span className="mb-1 block text-xs font-medium text-slate-500">Category</span>
+              <select value={document.category} onChange={(event) => setDocument({ ...document, category: event.target.value })} className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm">
+                {['logo', 'pricing', 'policy', 'compliance', 'property', 'unit', 'other'].map((category) => (
+                  <option key={category} value={category}>{category}</option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span className="mb-1 block text-xs font-medium text-slate-500">Attach to</span>
+              <select value={document.entityType} onChange={(event) => setDocument({ ...document, entityType: event.target.value, entityId: '' })} className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm">
+                <option value="tenant">Company</option>
+                <option value="property">Property</option>
+                <option value="unit">Unit</option>
+              </select>
+            </label>
+            {document.entityType === 'property' && (
+              <label className="md:col-span-2">
+                <span className="mb-1 block text-xs font-medium text-slate-500">Property</span>
+                <select value={document.entityId} onChange={(event) => setDocument({ ...document, entityId: event.target.value })} className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm">
+                  <option value="">Select property</option>
+                  {properties.map((propertyRecord) => (
+                    <option key={propertyRecord.id} value={propertyRecord.id}>{propertyRecord.name}</option>
+                  ))}
+                </select>
+              </label>
+            )}
+            {document.entityType === 'unit' && (
+              <label className="md:col-span-2">
+                <span className="mb-1 block text-xs font-medium text-slate-500">Unit</span>
+                <select value={document.entityId} onChange={(event) => setDocument({ ...document, entityId: event.target.value })} className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm">
+                  <option value="">Select unit</option>
+                  {properties.flatMap((propertyRecord) =>
+                    propertyRecord.units.map((unitRecord) => (
+                      <option key={unitRecord.id} value={unitRecord.id}>
+                        {propertyRecord.name} {unitRecord.name}
+                      </option>
+                    )),
+                  )}
+                </select>
+              </label>
+            )}
+            <TextArea label="Description" value={document.description} onChange={(value) => setDocument({ ...document, description: value })} />
+            <TextArea label="Extracted text / notes" value={document.textContent} onChange={(value) => setDocument({ ...document, textContent: value })} />
+            <div className="md:col-span-2">
+              <button disabled={uploadDocument.isPending || !document.filename || !document.mimeType} className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">
+                Save document
+              </button>
+            </div>
+          </form>
+          <div className="border-t border-slate-100 p-4">
+            <div className="space-y-2">
+              {documents.length === 0 && <p className="text-sm text-slate-400">No documents uploaded yet.</p>}
+              {documents.map((doc) => (
+                <div key={doc.id} className="rounded-md border border-slate-200 px-3 py-2 text-sm">
+                  <div className="font-medium text-slate-800">{doc.filename}</div>
+                  <div className="text-xs text-slate-500">{doc.category} / {doc.entityType}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <section className="rounded-lg border border-slate-200 bg-white">
+          <div className="border-b border-slate-200 px-4 py-3">
+            <h2 className="font-medium">Knowledge export & webhooks</h2>
+            <p className="text-xs text-slate-500">Preview Obsidian Markdown and stable webhook URLs.</p>
+          </div>
+          <div className="space-y-4 p-4">
+            <button
+              type="button"
+              onClick={() => exportObsidian.mutate()}
+              disabled={exportObsidian.isPending}
+              className="rounded-md bg-brand-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+            >
+              Generate Obsidian export
+            </button>
+            {obsidianFiles.length > 0 && (
+              <div className="max-h-72 space-y-2 overflow-y-auto">
+                {obsidianFiles.map((file) => (
+                  <details key={file.path} className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
+                    <summary className="cursor-pointer font-medium text-slate-700">{file.path}</summary>
+                    <pre className="mt-2 whitespace-pre-wrap text-xs text-slate-600">{file.content}</pre>
+                  </details>
+                ))}
+              </div>
+            )}
+            {webhookData && (
+              <div>
+                <h3 className="text-sm font-medium text-slate-800">Webhook targets</h3>
+                <div className="mt-2 space-y-1">
+                  {Object.entries(webhookData.targets).map(([key, value]) => (
+                    <div key={key} className="rounded border border-slate-200 bg-slate-50 px-2 py-1 text-xs">
+                      <span className="font-medium text-slate-500">{key}</span>{' '}
+                      <span className="text-slate-700">{value}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </section>
+      </div>
+
       <section className="rounded-lg border border-slate-200 bg-white">
         <div className="border-b border-slate-200 px-4 py-3">
           <h2 className="font-medium">Inventory</h2>
@@ -405,4 +597,16 @@ function TextArea({
       />
     </label>
   );
+}
+
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error);
+    reader.onload = () => {
+      const result = typeof reader.result === 'string' ? reader.result : '';
+      resolve(result.includes(',') ? result.split(',')[1] : result);
+    };
+    reader.readAsDataURL(file);
+  });
 }

@@ -87,6 +87,7 @@ export async function handleInboundMessage(
 
   const glmResult = await callGlm(deps.glm, {
     currentState,
+    tenantId: input.tenantId,
     userMessage: input.body,
     history: conversation.messages.map((m) => ({ role: m.role, content: m.content })),
     existingSlots,
@@ -262,6 +263,7 @@ async function callGlm(
   glm: GlmAdapter,
   ctx: {
     currentState: ConversationState;
+    tenantId: string;
     userMessage: string;
     history: Array<{ role: string; content: string }>;
     existingSlots: Record<string, string>;
@@ -272,7 +274,13 @@ async function callGlm(
   slots?: Record<string, string>;
   next_state?: ConversationState;
 }> {
-  const systemPrompt = buildSystemPrompt(ctx.currentState, ctx.availableUnits, ctx.existingSlots);
+  const knowledgeContext = await getTenantKnowledgeContext(ctx.tenantId);
+  const systemPrompt = buildSystemPrompt(
+    ctx.currentState,
+    ctx.availableUnits,
+    ctx.existingSlots,
+    knowledgeContext,
+  );
   const historyText = ctx.history
     .slice(-10)
     .map((message) => `${message.role}: ${message.content}`)
@@ -329,6 +337,7 @@ function buildSystemPrompt(
   state: ConversationState,
   availableUnits: Array<AvailableUnit>,
   slots: Record<string, string>,
+  knowledgeContext = '',
 ): string {
   const unitsText = availableUnits.length > 0
     ? availableUnits.map((unit) => {
@@ -365,9 +374,36 @@ function buildSystemPrompt(
     'Available units:',
     unitsText,
     slotsText,
+    knowledgeContext ? `\nCompany/property knowledge:\n${knowledgeContext}` : '',
     '',
     'Reply in JSON with: reply (your message), slots (extracted info), next_state (next state).',
   ].join('\n');
+}
+
+async function getTenantKnowledgeContext(tenantId: string): Promise<string> {
+  const [onboarding, documents] = await Promise.all([
+    prisma.tenantOnboardingProfile.findUnique({ where: { tenantId } }),
+    prisma.knowledgeDocument.findMany({
+      where: { tenantId },
+      orderBy: { updatedAt: 'desc' },
+      take: 5,
+      select: { filename: true, category: true, description: true, textContent: true },
+    }),
+  ]);
+
+  const lines: string[] = [];
+  if (onboarding) {
+    if (onboarding.aiTone) lines.push(`Tone: ${onboarding.aiTone}`);
+    if (onboarding.aiInstructions) lines.push(`Instructions: ${onboarding.aiInstructions}`);
+    if (onboarding.pricingNotes) lines.push(`Pricing: ${onboarding.pricingNotes}`);
+    if (onboarding.showingPreferences) lines.push(`Showing preferences: ${onboarding.showingPreferences}`);
+    if (onboarding.petPolicy) lines.push(`Default pet policy: ${onboarding.petPolicy}`);
+  }
+  for (const document of documents) {
+    const detail = document.textContent ?? document.description;
+    if (detail) lines.push(`${document.category} document ${document.filename}: ${detail.slice(0, 700)}`);
+  }
+  return lines.join('\n');
 }
 
 async function getAvailableUnits(

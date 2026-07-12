@@ -34,6 +34,7 @@ import { StripeMockAdapter } from './mocks/stripe.mock.js';
 import { TwilioMockAdapter } from './mocks/twilio.mock.js';
 import { TelegramMockAdapter } from './mocks/telegram.mock.js';
 import { WebChatMockAdapter } from './mocks/webchat.mock.js';
+import { GlmRealAdapter } from './real/glm.real.js';
 import { TelegramRealAdapter } from './real/telegram.real.js';
 import { TwilioRealAdapter } from './real/twilio.real.js';
 
@@ -83,7 +84,14 @@ export function createAdapters(env: Env): Adapters {
     buildium: new BuildiumMockAdapter(),
     qbo: new QboMockAdapter(),
     twilio: twilioAdapter,
-    glm: new GlmMockAdapter(),
+    glm: isIntegrationConfigured(env, 'glm')
+      ? new GlmRealAdapter({
+        apiKey: env.ZAI_API_KEY,
+        baseUrl: env.ZAI_BASE_URL,
+        reasoningModel: env.GLM_REASONING_MODEL,
+        ocrModel: env.GLM_OCR_MODEL,
+      })
+      : new GlmMockAdapter(),
     plaid: new PlaidMockAdapter(),
     stripe: new StripeMockAdapter(),
     photoEnhancement: new PhotoEnhancementMockAdapter(),

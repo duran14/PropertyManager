@@ -140,6 +140,9 @@ export async function listLeads(
         take: 1,
         select: { label: true, detail: true, createdAt: true },
       },
+      assignedUser: {
+        select: { id: true, firstName: true, lastName: true, email: true, role: true },
+      },
     },
   });
 

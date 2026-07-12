@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { createAdapters } from './factory.js';
 import { TwilioMockAdapter } from './mocks/twilio.mock.js';
+import { GlmMockAdapter } from './mocks/glm.mock.js';
+import { GlmRealAdapter } from './real/glm.real.js';
 import { TwilioRealAdapter } from './real/twilio.real.js';
 import type { Env } from '@property-manager/config';
 
@@ -93,5 +95,16 @@ describe('createAdapters', () => {
       body: 'Hello',
       channel: 'whatsapp',
     })).rejects.toThrow('TWILIO_WHATSAPP_FROM is required for real Twilio whatsapp sending');
+  });
+
+  it('uses a real GLM adapter when Z.ai credentials are configured', () => {
+    const adapters = createAdapters({
+      ...baseEnv,
+      ZAI_API_KEY: 'zai-secret',
+    });
+
+    expect(adapters.glm).toBeInstanceOf(GlmRealAdapter);
+    expect(adapters.glm).not.toBeInstanceOf(GlmMockAdapter);
+    expect(adapters.mockModes.glm).toBe(false);
   });
 });

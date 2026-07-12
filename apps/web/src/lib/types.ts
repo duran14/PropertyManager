@@ -74,6 +74,9 @@ export interface Lead {
   message: string | null;
   source: LeadSource;
   status: LeadStatus;
+  operationalStatus?: string | null;
+  assignedUserId?: string | null;
+  assignedUser?: StaffUser | null;
   preferredChannel: string | null;
   createdAt: string;
   unit?: { name: string; property: { name: string } } | null;
@@ -91,6 +94,33 @@ export interface Lead {
     lastChannel?: string;
     conversationState?: string;
   };
+}
+
+export interface StaffUser {
+  id: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+  role: AuthUser['role'];
+}
+
+export interface KnowledgeDocument {
+  id: string;
+  filename: string;
+  mimeType: string;
+  category: string;
+  entityType: string;
+  entityId: string | null;
+  description: string | null;
+  textContent: string | null;
+  storageUrl: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ObsidianExportFile {
+  path: string;
+  content: string;
 }
 
 export interface LeadDetail extends Lead {

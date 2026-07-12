@@ -23,6 +23,10 @@ import { chatRouter } from './routes/chat.js';
 import { showingsRouter } from './routes/showings.js';
 import { propertiesRouter } from './routes/properties.js';
 import { onboardingRouter } from './routes/onboarding.js';
+import { documentsRouter } from './routes/documents.js';
+import { knowledgeBaseRouter } from './routes/knowledge-base.js';
+import { usersRouter } from './routes/users.js';
+import { webhookConfigRouter } from './routes/webhook-config.js';
 
 export function createApp(): express.Application {
   const env = getEnv();
@@ -54,6 +58,10 @@ export function createApp(): express.Application {
   app.use('/units', unitsRouter);
   app.use('/properties', propertiesRouter);
   app.use('/onboarding', onboardingRouter);
+  app.use('/documents', documentsRouter);
+  app.use('/knowledge-base', knowledgeBaseRouter);
+  app.use('/users', usersRouter);
+  app.use('/webhook-config', webhookConfigRouter);
   app.use('/photos', photosRouter);
   app.use('/chat', chatRouter);
   app.use('/showings', showingsRouter);

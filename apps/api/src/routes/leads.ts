@@ -124,6 +124,9 @@ leadsRouter.get('/:id', requireAuth, async (req, res, next) => {
       where: { id: req.params.id, tenantId: user.tenantId },
       include: {
         unit: { select: { name: true, property: { select: { name: true, address: true, city: true } } } },
+        assignedUser: {
+          select: { id: true, firstName: true, lastName: true, email: true, role: true },
+        },
         conversations: {
           orderBy: { updatedAt: 'desc' },
           include: {
@@ -166,6 +169,53 @@ leadsRouter.get('/:id', requireAuth, async (req, res, next) => {
 });
 
 const statusSchema = z.object({ status: z.string() });
+const workflowSchema = z.object({
+  operationalStatus: z
+    .enum(['needs_review', 'assigned', 'waiting_on_prospect', 'needs_handoff', 'closed'])
+    .optional(),
+  assignedUserId: z.string().nullable().optional(),
+});
+
+leadsRouter.patch('/:id/workflow', requireAuth, async (req, res, next) => {
+  try {
+    const user = requireUser(req);
+    const parsed = workflowSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: 'Invalid workflow update', details: parsed.error.flatten() });
+      return;
+    }
+
+    if (parsed.data.assignedUserId) {
+      const assignee = await prisma.user.findFirst({
+        where: { id: parsed.data.assignedUserId, tenantId: user.tenantId, isActive: true },
+        select: { id: true },
+      });
+      if (!assignee) {
+        res.status(404).json({ error: 'Assigned user not found' });
+        return;
+      }
+    }
+
+    const lead = await prisma.lead.updateMany({
+      where: { id: req.params.id, tenantId: user.tenantId },
+      data: {
+        ...(parsed.data.operationalStatus !== undefined
+          ? { operationalStatus: parsed.data.operationalStatus }
+          : {}),
+        ...(parsed.data.assignedUserId !== undefined
+          ? { assignedUserId: parsed.data.assignedUserId }
+          : {}),
+      },
+    });
+    if (lead.count === 0) {
+      res.status(404).json({ error: 'Lead not found' });
+      return;
+    }
+    res.status(204).end();
+  } catch (err) {
+    next(err);
+  }
+});
 
 leadsRouter.patch('/:id/status', requireAuth, async (req, res, next) => {
   try {

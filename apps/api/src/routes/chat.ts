@@ -300,6 +300,12 @@ chatRouter.post('/conversations/:id/handoff', requireAuth, async (req, res, next
       where: { id: conversation.id },
       data: { state: 'handoff', updatedAt: new Date() },
     });
+    if (conversation.leadId) {
+      await prisma.lead.update({
+        where: { id: conversation.leadId },
+        data: { operationalStatus: 'needs_handoff' },
+      });
+    }
 
     res.status(201).json({ event });
   } catch (err) {

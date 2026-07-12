@@ -1,5 +1,6 @@
 export * from './contracts.js';
 export * from './factory.js';
+export * from './real/glm.real.js';
 export * from './mocks/buildium.mock.js';
 export * from './mocks/qbo.mock.js';
 export * from './mocks/glm.mock.js';
