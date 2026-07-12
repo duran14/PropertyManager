@@ -9,7 +9,8 @@ export type ConversationEventType =
   | 'showing.confirmed'
   | 'showing.cancelled'
   | 'staff.reply_sent'
-  | 'handoff.requested';
+  | 'handoff.requested'
+  | 'note.internal_added';
 
 export interface CreateConversationEventInput {
   tenantId: string;
@@ -105,6 +106,12 @@ export function buildConversationEventPresentation(
         label: 'Human handoff requested',
         detail: formatText(payload.reason) ?? 'Conversation needs staff attention',
         tone: 'attention',
+      };
+    case 'note.internal_added':
+      return {
+        label: 'Internal note added',
+        detail: truncate(formatText(payload.note) ?? 'Staff added a note'),
+        tone: 'neutral',
       };
   }
 }

@@ -1,6 +1,6 @@
 # Project Handoff - Property Manager
 
-Last updated: 2026-07-11 22:30, America/Vancouver.
+Last updated: 2026-07-11 22:45, America/Vancouver.
 
 This document is for a future AI agent or developer continuing the project after the current Codex session. It summarizes what was built, what is currently working, how to verify it, and what should come next.
 
@@ -15,11 +15,12 @@ The app is still in mock/prototype mode for intelligence and most third-party in
 - Local path: `C:\Users\duran\Documents\Proyectos IA\ZCodeProject\Property Manager`
 - GitHub remote: `https://github.com/duran14/PropertyManager.git`
 - Branch: `main`
-- Latest confirmed feature commit before this handoff document: pending current commit with conversation activity history filters.
+- Latest confirmed feature commit before this handoff document: `Add lead operations and inventory edits`.
 
 Important recent commits:
 
-- pending: conversations include an activity history section filtered by operational category
+- current: `Add lead operations and inventory edits`
+- `07f914f Add conversation activity history filters`
 - `0b4a8bb Dedupe persisted showing activity`
 - `438c5a0 Persist conversation event log`
 - `62c3589 Add conversation recent activity feed`
@@ -135,6 +136,9 @@ Staff can now create a manual/internal showing directly from a conversation:
 - Conversation detail now includes `Activity history` below `Recent activity`.
 - Activity history can be filtered by `All`, `Staff actions`, `Messages`, `Lead profile`, and `Showings`.
 - Activity feed labels, priorities, category assignment, filtering, and date normalization live in `@property-manager/core/conversation-activity`.
+- Staff can now add internal notes from the conversation detail.
+- Staff can request human handoff from the conversation detail; the conversation state is set to `handoff`.
+- Internal notes and handoff requests are persisted as conversation events and appear in `Activity history` under `Staff actions`.
 
 Primary files:
 
@@ -153,6 +157,24 @@ Primary files:
 - `packages/core/src/conversation-activity.ts`
 - `packages/core/src/conversation-activity.test.ts`
 
+### Lead detail and dashboard activity
+
+The Leads dashboard now surfaces operational activity:
+
+- `/leads` includes `latestActivity` derived from the newest persisted conversation event for each lead.
+- The Leads table links each prospect name to `/leads/:id`.
+- The Lead Detail page shows profile/contact information, latest activity, full event history, recent conversation messages, showings, and internal notes.
+
+Primary files:
+
+- `apps/api/src/routes/leads.ts`
+- `apps/api/src/services/leads.service.ts`
+- `apps/api/src/services/leads.service.test.ts`
+- `apps/web/src/pages/LeadsPage.tsx`
+- `apps/web/src/pages/LeadDetailPage.tsx`
+- `apps/web/src/lib/types.ts`
+- `apps/web/src/App.tsx`
+
 ### Onboarding and property inventory
 
 The app now has a `Properties & Onboarding` page for the PM/broker team:
@@ -161,6 +183,8 @@ The app now has a `Properties & Onboarding` page for the PM/broker team:
 - Property creation: name, address, city, province, postal code.
 - Unit creation: rent, bedrooms, bathrooms, square feet, available date, amenities, pet policy, parking, utilities, active flag.
 - Inventory list grouped by property.
+- Property records can be loaded from Inventory into the property form and saved through `PATCH /properties/:propertyId`.
+- Unit records can be loaded from Inventory into the unit form and saved through `PATCH /properties/units/:unitId`.
 
 Primary files:
 
@@ -300,7 +324,12 @@ Manual UI check:
 7. Confirm the conversation detail shows `Conversation timeline` chips for lead, unit, tour, and pending reply state.
 8. Confirm the conversation detail shows `Recent activity` with newest events first.
 9. Confirm `Activity history` filters events by `Staff actions`, `Messages`, `Lead profile`, and `Showings`.
-10. Trigger a lead status change or showing action and confirm a persisted staff/action event appears after the conversation detail refetches.
+10. Add an internal note and confirm it appears under `Staff actions`.
+11. Request handoff and confirm the conversation state changes to `Human handoff`.
+12. Trigger a lead status change or showing action and confirm a persisted staff/action event appears after the conversation detail refetches.
+13. Open `Leads`, confirm the `Latest activity` column is populated for leads with conversation events.
+14. Click a lead name and confirm `/leads/:id` shows profile, conversations, showings, activity history, and notes.
+15. Open `Properties`, edit a property and a unit from Inventory, then confirm the list refreshes with the saved values.
 
 Messaging smoke tests:
 
@@ -385,7 +414,7 @@ Then:
 2. Deepen property intake/onboarding.
    - Add actual file/document upload for logos, policies, pricing sheets, and compliance documents.
    - Add assistant role if the product needs a fourth RBAC role.
-   - Add edit/delete flows for properties and units; current UI focuses on create/list.
+   - Add delete/archive flows for properties and units; edit flows now exist.
 
 3. Improve chatbot matching against real inventory.
    - Add amenities and exact availability-date matching.
@@ -409,7 +438,7 @@ Then:
 
 - Cloudflare quick tunnel is temporary and can break.
 - Current AI is still mock, not real LLM behavior.
-- Properties & Onboarding can create/list records, but edit/delete and document upload are not implemented yet.
+- Properties & Onboarding can create/list/edit records, but delete/archive and document upload are not implemented yet.
 - `.env` contains live credentials locally; never commit it.
 - User had trouble connecting GitHub through ChatGPT, but direct git push works to `duran14/PropertyManager.git`.
 - Twilio trial may have limitations around numbers and verified recipients.

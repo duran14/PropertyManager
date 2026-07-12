@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { buildLeadProspectProfile, isLeadStatus } from './leads.service.js';
+import {
+  buildLeadProspectProfile,
+  summarizeLatestLeadActivity,
+  isLeadStatus,
+} from './leads.service.js';
 
 describe('lead prospect profile', () => {
   it('summarizes captured chatbot slots from the most recent conversations', () => {
@@ -39,5 +43,26 @@ describe('lead prospect profile', () => {
   it('accepts only known lead funnel statuses', () => {
     expect(isLeadStatus('tour_scheduled')).toBe(true);
     expect(isLeadStatus('needs_callback')).toBe(false);
+  });
+
+  it('summarizes the newest lead activity event', () => {
+    const activity = summarizeLatestLeadActivity([
+      {
+        label: 'Internal note added',
+        detail: 'Call after 4 p.m.',
+        createdAt: new Date('2026-07-10T08:30:00.000Z'),
+      },
+      {
+        label: 'Human handoff requested',
+        detail: 'Needs broker follow-up',
+        createdAt: new Date('2026-07-10T09:30:00.000Z'),
+      },
+    ]);
+
+    expect(activity).toEqual({
+      label: 'Human handoff requested',
+      detail: 'Needs broker follow-up',
+      createdAt: '2026-07-10T09:30:00.000Z',
+    });
   });
 });

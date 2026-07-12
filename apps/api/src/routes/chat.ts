@@ -187,6 +187,14 @@ const showingScheduleSchema = z.object({
   durationMinutes: z.number().int().optional(),
 });
 
+const internalNoteSchema = z.object({
+  note: z.string().trim().min(1).max(1000),
+});
+
+const handoffSchema = z.object({
+  reason: z.string().trim().max(500).optional(),
+});
+
 chatRouter.post('/conversations/:id/showing', requireAuth, async (req, res, next) => {
   try {
     const user = requireUser(req);
@@ -219,6 +227,82 @@ chatRouter.post('/conversations/:id/showing', requireAuth, async (req, res, next
         return;
       }
     }
+    next(err);
+  }
+});
+
+chatRouter.post('/conversations/:id/notes', requireAuth, async (req, res, next) => {
+  try {
+    const user = requireUser(req);
+    const parsed = internalNoteSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: 'Note is required' });
+      return;
+    }
+
+    const conversation = await prisma.chatConversation.findFirst({
+      where: { id: req.params.id, tenantId: user.tenantId },
+      select: { id: true, leadId: true },
+    });
+    if (!conversation) {
+      res.status(404).json({ error: 'Conversation not found' });
+      return;
+    }
+
+    const event = await createConversationEvent({
+      tenantId: user.tenantId,
+      conversationId: conversation.id,
+      leadId: conversation.leadId,
+      actorUserId: user.userId,
+      type: 'note.internal_added',
+      payload: { note: parsed.data.note },
+    });
+
+    await prisma.chatConversation.update({
+      where: { id: conversation.id },
+      data: { updatedAt: new Date() },
+    });
+
+    res.status(201).json({ event });
+  } catch (err) {
+    next(err);
+  }
+});
+
+chatRouter.post('/conversations/:id/handoff', requireAuth, async (req, res, next) => {
+  try {
+    const user = requireUser(req);
+    const parsed = handoffSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: 'Invalid handoff reason' });
+      return;
+    }
+
+    const conversation = await prisma.chatConversation.findFirst({
+      where: { id: req.params.id, tenantId: user.tenantId },
+      select: { id: true, leadId: true },
+    });
+    if (!conversation) {
+      res.status(404).json({ error: 'Conversation not found' });
+      return;
+    }
+
+    const event = await createConversationEvent({
+      tenantId: user.tenantId,
+      conversationId: conversation.id,
+      leadId: conversation.leadId,
+      actorUserId: user.userId,
+      type: 'handoff.requested',
+      payload: { reason: parsed.data.reason },
+    });
+
+    await prisma.chatConversation.update({
+      where: { id: conversation.id },
+      data: { state: 'handoff', updatedAt: new Date() },
+    });
+
+    res.status(201).json({ event });
+  } catch (err) {
     next(err);
   }
 });

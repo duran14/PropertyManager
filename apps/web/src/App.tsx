@@ -8,6 +8,7 @@ import { BillsPage } from './pages/BillsPage';
 import { ReconciliationPage } from './pages/ReconciliationPage';
 import { AuditPage } from './pages/AuditPage';
 import { LeadsPage } from './pages/LeadsPage';
+import { LeadDetailPage } from './pages/LeadDetailPage';
 import { SentinelPage } from './pages/SentinelPage';
 import { LeasesPage } from './pages/LeasesPage';
 import { PhotosPage } from './pages/PhotosPage';
@@ -56,6 +57,7 @@ function ProtectedRoutes() {
         <Route path="/properties" element={<PropertiesPage />} />
         <Route path="/photos" element={<PhotosRoute />} />
         <Route path="/leads" element={<LeadsPage />} />
+        <Route path="/leads/:id" element={<LeadDetailPage />} />
         <Route path="/showings" element={<ShowingsPage />} />
         <Route path="/conversations" element={<ConversationsPage />} />
         <Route path="/sentinel" element={<SentinelPage />} />

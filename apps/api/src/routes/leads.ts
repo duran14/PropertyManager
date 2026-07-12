@@ -17,6 +17,8 @@ import { getAdapters } from '../config/adapters.js';
 import { requireAuth, requireUser } from '../auth/context.js';
 import {
   createLeadFromUnitUrl,
+  buildLeadProspectProfile,
+  summarizeLatestLeadActivity,
   isLeadStatus,
   listLeads,
   updateLeadStatus,
@@ -110,6 +112,54 @@ leadsRouter.get('/', requireAuth, async (req, res, next) => {
       source: typeof req.query.source === 'string' ? req.query.source : undefined,
     });
     res.json({ leads });
+  } catch (err) {
+    next(err);
+  }
+});
+
+leadsRouter.get('/:id', requireAuth, async (req, res, next) => {
+  try {
+    const user = requireUser(req);
+    const lead = await prisma.lead.findFirst({
+      where: { id: req.params.id, tenantId: user.tenantId },
+      include: {
+        unit: { select: { name: true, property: { select: { name: true, address: true, city: true } } } },
+        conversations: {
+          orderBy: { updatedAt: 'desc' },
+          include: {
+            slots: { select: { key: true, value: true } },
+            messages: {
+              orderBy: { createdAt: 'desc' },
+              take: 5,
+              select: { id: true, role: true, content: true, createdAt: true },
+            },
+          },
+        },
+        showings: {
+          orderBy: { scheduledAt: 'asc' },
+          include: {
+            unit: { select: { name: true, property: { select: { name: true, address: true, city: true } } } },
+          },
+        },
+        conversationEvents: {
+          orderBy: { createdAt: 'desc' },
+          include: { actorUser: { select: { firstName: true, lastName: true } } },
+        },
+      },
+    });
+    if (!lead) {
+      res.status(404).json({ error: 'Lead not found' });
+      return;
+    }
+
+    res.json({
+      lead: {
+        ...lead,
+        prospectProfile: buildLeadProspectProfile(lead.conversations),
+        latestActivity: summarizeLatestLeadActivity(lead.conversationEvents),
+        notes: lead.conversationEvents.filter((event) => event.type === 'note.internal_added'),
+      },
+    });
   } catch (err) {
     next(err);
   }

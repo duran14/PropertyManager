@@ -73,6 +73,37 @@ propertiesRouter.post('/', requireAuth, async (req, res, next) => {
   }
 });
 
+propertiesRouter.patch('/:propertyId', requireAuth, async (req, res, next) => {
+  try {
+    const user = requireUser(req);
+    const parsed = propertySchema.partial().safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: 'Invalid property', details: parsed.error.flatten() });
+      return;
+    }
+
+    const existing = await prisma.property.findFirst({
+      where: { id: req.params.propertyId, tenantId: user.tenantId },
+    });
+    if (!existing) {
+      res.status(404).json({ error: 'Property not found' });
+      return;
+    }
+
+    const property = await prisma.property.update({
+      where: { id: existing.id },
+      data: {
+        ...parsed.data,
+        postalCode: parsed.data.postalCode === '' ? null : parsed.data.postalCode,
+      },
+      include: { units: true },
+    });
+    res.json({ property });
+  } catch (err) {
+    next(err);
+  }
+});
+
 propertiesRouter.post('/:propertyId/units', requireAuth, async (req, res, next) => {
   try {
     const user = requireUser(req);

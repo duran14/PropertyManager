@@ -23,11 +23,23 @@ export interface LeadProspectProfile {
   conversationState?: string;
 }
 
+export interface LeadLatestActivity {
+  label: string;
+  detail: string;
+  createdAt: string;
+}
+
 interface LeadConversationSummary {
   channel: string;
   state: string;
   updatedAt: Date;
   slots: Array<{ key: string; value: string }>;
+}
+
+interface LeadActivityEventSummary {
+  label: string;
+  detail: string;
+  createdAt: Date;
 }
 
 export const LEAD_STATUSES = ['new_', 'contacted', 'tour_scheduled', 'qualified', 'converted', 'lost'] as const;
@@ -123,13 +135,31 @@ export async function listLeads(
           slots: { select: { key: true, value: true } },
         },
       },
+      conversationEvents: {
+        orderBy: { createdAt: 'desc' },
+        take: 1,
+        select: { label: true, detail: true, createdAt: true },
+      },
     },
   });
 
   return leads.map((lead) => ({
     ...lead,
     prospectProfile: buildLeadProspectProfile(lead.conversations),
+    latestActivity: summarizeLatestLeadActivity(lead.conversationEvents),
   }));
+}
+
+export function summarizeLatestLeadActivity(
+  events: LeadActivityEventSummary[],
+): LeadLatestActivity | null {
+  const event = [...events].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0];
+  if (!event) return null;
+  return {
+    label: event.label,
+    detail: event.detail,
+    createdAt: event.createdAt.toISOString(),
+  };
 }
 
 export function buildLeadProspectProfile(conversations: LeadConversationSummary[]): LeadProspectProfile {

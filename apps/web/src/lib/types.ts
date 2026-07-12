@@ -77,6 +77,11 @@ export interface Lead {
   preferredChannel: string | null;
   createdAt: string;
   unit?: { name: string; property: { name: string } } | null;
+  latestActivity?: {
+    label: string;
+    detail: string;
+    createdAt: string;
+  } | null;
   prospectProfile?: {
     budget?: string;
     moveInDate?: string;
@@ -86,6 +91,41 @@ export interface Lead {
     lastChannel?: string;
     conversationState?: string;
   };
+}
+
+export interface LeadDetail extends Lead {
+  unit?: { name: string; property: { name: string; address: string; city: string } } | null;
+  conversations: Array<{
+    id: string;
+    channel: string;
+    state: string;
+    updatedAt: string;
+    slots: Array<{ key: string; value: string }>;
+    messages: Array<{ id: string; role: string; content: string; createdAt: string }>;
+  }>;
+  showings: Array<{
+    id: string;
+    scheduledAt: string;
+    durationMinutes: number;
+    status: string;
+    unit: { name: string; property: { name: string; address: string; city: string } } | null;
+  }>;
+  conversationEvents: Array<{
+    id: string;
+    type: string;
+    label: string;
+    detail: string;
+    tone: string;
+    createdAt: string;
+    actorUser?: { firstName: string; lastName: string } | null;
+  }>;
+  notes: Array<{
+    id: string;
+    detail: string;
+    payload?: Record<string, unknown>;
+    createdAt: string;
+    actorUser?: { firstName: string; lastName: string } | null;
+  }>;
 }
 
 export interface TenantOnboardingProfile {

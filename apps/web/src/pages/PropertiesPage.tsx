@@ -45,6 +45,8 @@ export function PropertiesPage() {
   const [onboarding, setOnboarding] = useState(emptyOnboarding);
   const [property, setProperty] = useState(emptyProperty);
   const [unit, setUnit] = useState(emptyUnit);
+  const [editingPropertyId, setEditingPropertyId] = useState<string | null>(null);
+  const [editingUnitId, setEditingUnitId] = useState<string | null>(null);
 
   const { data: onboardingData } = useQuery<{ profile: TenantOnboardingProfile | null }>({
     queryKey: ['onboarding'],
@@ -68,37 +70,41 @@ export function PropertiesPage() {
   });
 
   const createProperty = useMutation({
-    mutationFn: () => apiFetch('/properties', {
-      method: 'POST',
-      body: JSON.stringify(property),
-    }),
+    mutationFn: () =>
+      apiFetch(editingPropertyId ? `/properties/${editingPropertyId}` : '/properties', {
+        method: editingPropertyId ? 'PATCH' : 'POST',
+        body: JSON.stringify(property),
+      }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['properties'] });
       setProperty(emptyProperty);
+      setEditingPropertyId(null);
     },
   });
 
   const createUnit = useMutation({
-    mutationFn: () => apiFetch(`/properties/${unit.propertyId}/units`, {
-      method: 'POST',
-      body: JSON.stringify({
-        name: unit.name,
-        rentCents: Math.round(Number(unit.rent || 0) * 100),
-        bedrooms: unit.bedrooms ? Number(unit.bedrooms) : null,
-        bathrooms: unit.bathrooms ? Number(unit.bathrooms) : null,
-        squareFeet: unit.squareFeet ? Number(unit.squareFeet) : null,
-        availableFrom: unit.availableFrom ? new Date(unit.availableFrom).toISOString() : '',
-        amenities: unit.amenities,
-        petPolicy: unit.petPolicy,
-        parking: unit.parking,
-        utilities: unit.utilities,
-        isActive: unit.isActive,
+    mutationFn: () =>
+      apiFetch(editingUnitId ? `/properties/units/${editingUnitId}` : `/properties/${unit.propertyId}/units`, {
+        method: editingUnitId ? 'PATCH' : 'POST',
+        body: JSON.stringify({
+          name: unit.name,
+          rentCents: Math.round(Number(unit.rent || 0) * 100),
+          bedrooms: unit.bedrooms ? Number(unit.bedrooms) : null,
+          bathrooms: unit.bathrooms ? Number(unit.bathrooms) : null,
+          squareFeet: unit.squareFeet ? Number(unit.squareFeet) : null,
+          availableFrom: unit.availableFrom ? new Date(unit.availableFrom).toISOString() : '',
+          amenities: unit.amenities,
+          petPolicy: unit.petPolicy,
+          parking: unit.parking,
+          utilities: unit.utilities,
+          isActive: unit.isActive,
+        }),
       }),
-    }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['properties'] });
       queryClient.invalidateQueries({ queryKey: ['units'] });
       setUnit(emptyUnit);
+      setEditingUnitId(null);
     },
   });
 
@@ -132,6 +138,35 @@ export function PropertiesPage() {
   function onCreateUnit(event: FormEvent) {
     event.preventDefault();
     createUnit.mutate();
+  }
+
+  function startEditProperty(propertyRecord: PropertyRecord) {
+    setEditingPropertyId(propertyRecord.id);
+    setProperty({
+      name: propertyRecord.name,
+      address: propertyRecord.address,
+      city: propertyRecord.city,
+      province: propertyRecord.province,
+      postalCode: propertyRecord.postalCode ?? '',
+    });
+  }
+
+  function startEditUnit(propertyId: string, unitRecord: PropertyRecord['units'][number]) {
+    setEditingUnitId(unitRecord.id);
+    setUnit({
+      propertyId,
+      name: unitRecord.name,
+      rent: String(unitRecord.rentCents / 100),
+      bedrooms: unitRecord.bedrooms === null ? '' : String(unitRecord.bedrooms),
+      bathrooms: unitRecord.bathrooms === null ? '' : String(unitRecord.bathrooms),
+      squareFeet: unitRecord.squareFeet === null ? '' : String(unitRecord.squareFeet),
+      availableFrom: unitRecord.availableFrom ? unitRecord.availableFrom.slice(0, 10) : '',
+      amenities: unitRecord.amenities.join(', '),
+      petPolicy: unitRecord.petPolicy ?? '',
+      parking: unitRecord.parking ?? '',
+      utilities: unitRecord.utilities ?? '',
+      isActive: unitRecord.isActive,
+    });
   }
 
   return (
@@ -178,7 +213,7 @@ export function PropertiesPage() {
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
         <section className="rounded-lg border border-slate-200 bg-white">
           <div className="border-b border-slate-200 px-4 py-3">
-            <h2 className="font-medium">Add property</h2>
+            <h2 className="font-medium">{editingPropertyId ? 'Edit property' : 'Add property'}</h2>
           </div>
           <form onSubmit={onCreateProperty} className="grid grid-cols-1 gap-4 p-4 md:grid-cols-2">
             <TextField label="Property name" value={property.name} onChange={(value) => setProperty({ ...property, name: value })} required />
@@ -188,15 +223,27 @@ export function PropertiesPage() {
             <TextField label="Postal code" value={property.postalCode} onChange={(value) => setProperty({ ...property, postalCode: value })} />
             <div className="md:col-span-2">
               <button disabled={createProperty.isPending} className="rounded-md bg-brand-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">
-                Create property
+                {editingPropertyId ? 'Save property' : 'Create property'}
               </button>
+              {editingPropertyId && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditingPropertyId(null);
+                    setProperty(emptyProperty);
+                  }}
+                  className="ml-2 rounded-md border border-slate-200 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+              )}
             </div>
           </form>
         </section>
 
         <section className="rounded-lg border border-slate-200 bg-white">
           <div className="border-b border-slate-200 px-4 py-3">
-            <h2 className="font-medium">Add unit</h2>
+            <h2 className="font-medium">{editingUnitId ? 'Edit unit' : 'Add unit'}</h2>
           </div>
           <form onSubmit={onCreateUnit} className="grid grid-cols-1 gap-4 p-4 md:grid-cols-3">
             <label className="md:col-span-3">
@@ -224,8 +271,20 @@ export function PropertiesPage() {
             </label>
             <div className="md:col-span-3">
               <button disabled={createUnit.isPending || properties.length === 0} className="rounded-md bg-brand-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">
-                Create unit
+                {editingUnitId ? 'Save unit' : 'Create unit'}
               </button>
+              {editingUnitId && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditingUnitId(null);
+                    setUnit(emptyUnit);
+                  }}
+                  className="ml-2 rounded-md border border-slate-200 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+              )}
             </div>
           </form>
         </section>
@@ -245,16 +304,34 @@ export function PropertiesPage() {
                   <h3 className="font-medium text-slate-900">{propertyRecord.name}</h3>
                   <p className="text-sm text-slate-500">{propertyRecord.address}, {propertyRecord.city}, {propertyRecord.province}</p>
                 </div>
-                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">{propertyRecord.units.length} units</span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => startEditProperty(propertyRecord)}
+                    className="rounded-md border border-slate-200 px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50"
+                  >
+                    Edit
+                  </button>
+                  <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">{propertyRecord.units.length} units</span>
+                </div>
               </div>
               <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
                 {propertyRecord.units.map((unitRecord) => (
                   <div key={unitRecord.id} className="rounded-md border border-slate-200 p-3">
                     <div className="flex items-center justify-between">
                       <div className="font-medium text-sm">{unitRecord.name}</div>
-                      <span className={`rounded-full px-2 py-0.5 text-[11px] ${unitRecord.isActive ? 'bg-green-50 text-green-700' : 'bg-slate-100 text-slate-500'}`}>
-                        {unitRecord.isActive ? 'Active' : 'Inactive'}
-                      </span>
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => startEditUnit(propertyRecord.id, unitRecord)}
+                          className="rounded border border-slate-200 px-1.5 py-0.5 text-[11px] font-medium text-slate-600 hover:bg-slate-50"
+                        >
+                          Edit
+                        </button>
+                        <span className={`rounded-full px-2 py-0.5 text-[11px] ${unitRecord.isActive ? 'bg-green-50 text-green-700' : 'bg-slate-100 text-slate-500'}`}>
+                          {unitRecord.isActive ? 'Active' : 'Inactive'}
+                        </span>
+                      </div>
                     </div>
                     <div className="mt-1 text-sm text-slate-600">${(unitRecord.rentCents / 100).toLocaleString('en-CA')}/month</div>
                     <div className="mt-2 flex flex-wrap gap-1 text-[11px] text-slate-500">

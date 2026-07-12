@@ -175,7 +175,8 @@ function categoryForEventType(type: string): Exclude<ConversationActivityCategor
     type.startsWith('lead.') ||
     type.startsWith('unit.') ||
     type.startsWith('staff.') ||
-    type.startsWith('handoff.')
+    type.startsWith('handoff.') ||
+    type.startsWith('note.')
   ) {
     return 'staff';
   }

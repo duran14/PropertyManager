@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from '../lib/apiClient';
 import type { Lead, LeadStatus } from '../lib/types';
@@ -107,6 +108,7 @@ export function LeadsPage() {
               <th className="text-left px-4 py-3 font-medium">Profile</th>
               <th className="text-left px-4 py-3 font-medium">First source</th>
               <th className="text-left px-4 py-3 font-medium">Unit</th>
+              <th className="text-left px-4 py-3 font-medium">Latest activity</th>
               <th className="text-center px-4 py-3 font-medium">Status</th>
               <th className="text-left px-4 py-3 font-medium">Date</th>
               <th className="text-center px-4 py-3 font-medium">Action</th>
@@ -114,10 +116,10 @@ export function LeadsPage() {
           </thead>
           <tbody className="divide-y divide-slate-100">
             {isLoading && (
-              <tr><td colSpan={8} className="px-4 py-8 text-center text-slate-400">Loading...</td></tr>
+              <tr><td colSpan={9} className="px-4 py-8 text-center text-slate-400">Loading...</td></tr>
             )}
             {!isLoading && leads.length === 0 && (
-              <tr><td colSpan={8} className="px-4 py-8 text-center text-slate-400">
+              <tr><td colSpan={9} className="px-4 py-8 text-center text-slate-400">
                 No leads yet. Leads arrive from WhatsApp, public unit pages, or ShowMojo.
               </td></tr>
             )}
@@ -129,7 +131,9 @@ export function LeadsPage() {
               return (
                 <tr key={lead.id} className="hover:bg-slate-50">
                   <td className="px-4 py-3">
-                    <div className="font-medium">{lead.name ?? 'Anonymous'}</div>
+                    <Link to={`/leads/${lead.id}`} className="font-medium text-slate-900 hover:text-brand-700">
+                      {lead.name ?? 'Anonymous'}
+                    </Link>
                     {lead.message && (
                       <div className="text-xs text-slate-400 truncate max-w-xs">"{lead.message}"</div>
                     )}
@@ -162,6 +166,16 @@ export function LeadsPage() {
                   </td>
                   <td className="px-4 py-3 text-slate-600 text-xs">
                     {lead.unit ? `${lead.unit.name} / ${lead.unit.property.name}` : '-'}
+                  </td>
+                  <td className="px-4 py-3 text-xs">
+                    {lead.latestActivity ? (
+                      <div className="max-w-[220px]">
+                        <div className="font-medium text-slate-700">{lead.latestActivity.label}</div>
+                        <div className="truncate text-slate-500">{lead.latestActivity.detail}</div>
+                      </div>
+                    ) : (
+                      <span className="text-slate-400">-</span>
+                    )}
                   </td>
                   <td className="px-4 py-3 text-center">
                     <span className={`inline-block rounded-full px-2 py-0.5 text-xs ${statusMeta.color}`}>

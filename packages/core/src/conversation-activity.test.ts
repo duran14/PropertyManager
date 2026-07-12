@@ -176,4 +176,27 @@ describe('buildConversationActivity', () => {
     ]);
     expect(filterConversationActivity(activity, 'all')).toHaveLength(activity.length);
   });
+
+  it('groups internal notes with staff actions', () => {
+    const activity = buildConversationActivity({
+      lead: null,
+      recommendedUnit: null,
+      slots: [],
+      messages: [],
+      showings: [],
+      events: [
+        {
+          id: 'event_1',
+          type: 'note.internal_added',
+          label: 'Internal note added',
+          detail: 'Call after 4 p.m.',
+          createdAt: '2026-07-10T08:40:00.000Z',
+        },
+      ],
+    });
+
+    expect(filterConversationActivity(activity, 'staff').map((item) => item.label)).toEqual([
+      'Internal note added',
+    ]);
+  });
 });

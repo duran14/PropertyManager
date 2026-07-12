@@ -151,6 +151,13 @@ function slotValue(slots: Array<{ key: string; value: string }>, key: string): s
   return slots.find((slot) => slot.key === key)?.value;
 }
 
+function slotUpdatedAt(
+  slots: Array<{ key: string; value: string; updatedAt?: string }>,
+  key: string,
+): string | undefined {
+  return slots.find((slot) => slot.key === key)?.updatedAt;
+}
+
 function defaultShowingDateTime(): string {
   const date = new Date();
   date.setDate(date.getDate() + 1);
@@ -217,6 +224,8 @@ export function ConversationsPage() {
   const [showingDateTime, setShowingDateTime] = useState(defaultShowingDateTime);
   const [showingDuration, setShowingDuration] = useState(30);
   const [activityCategory, setActivityCategory] = useState<ConversationActivityCategory>('all');
+  const [internalNote, setInternalNote] = useState('');
+  const [handoffReason, setHandoffReason] = useState('');
 
   const { data, isLoading } = useQuery<{ conversations: Conversation[] }>({
     queryKey: ['conversations'],
@@ -351,6 +360,36 @@ export function ConversationsPage() {
     },
   });
 
+  const addNoteMutation = useMutation({
+    mutationFn: ({ id, note }: { id: string; note: string }) =>
+      apiFetch(`/chat/conversations/${id}/notes`, {
+        method: 'POST',
+        body: JSON.stringify({ note }),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['conversation', selectedId] });
+      queryClient.invalidateQueries({ queryKey: ['conversations'] });
+      queryClient.invalidateQueries({ queryKey: ['leads'] });
+      setInternalNote('');
+      setActivityCategory('staff');
+    },
+  });
+
+  const handoffMutation = useMutation({
+    mutationFn: ({ id, reason }: { id: string; reason?: string }) =>
+      apiFetch(`/chat/conversations/${id}/handoff`, {
+        method: 'POST',
+        body: JSON.stringify({ reason }),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['conversation', selectedId] });
+      queryClient.invalidateQueries({ queryKey: ['conversations'] });
+      queryClient.invalidateQueries({ queryKey: ['leads'] });
+      setHandoffReason('');
+      setActivityCategory('staff');
+    },
+  });
+
   const updateShowingStatus = (showingId: string, status: ShowingSummary['status']) => {
     queryClient.setQueryData<{ conversation: Conversation }>(
       ['conversation', selectedId],
@@ -437,7 +476,7 @@ export function ConversationsPage() {
           ? {
               unitName: selected.unit.name,
               propertyName: selected.unit.property.name,
-              updatedAt: selected.updatedAt,
+              updatedAt: slotUpdatedAt(selected.slots, 'recommended_unit_id') ?? selected.updatedAt,
             }
           : null,
         slots: selected.slots,
@@ -755,6 +794,69 @@ export function ConversationsPage() {
                   </div>
                 </div>
               )}
+
+              <div className="border-b border-slate-100 bg-white px-4 py-3">
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                  <div>
+                    <label
+                      htmlFor="internal-note"
+                      className="text-[11px] font-medium uppercase text-slate-400"
+                    >
+                      Internal note
+                    </label>
+                    <textarea
+                      id="internal-note"
+                      value={internalNote}
+                      onChange={(event) => setInternalNote(event.target.value)}
+                      rows={3}
+                      placeholder="Add staff-only context..."
+                      className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-violet-500"
+                    />
+                    <button
+                      type="button"
+                      onClick={() =>
+                        internalNote.trim() &&
+                        addNoteMutation.mutate({ id: selected.id, note: internalNote.trim() })
+                      }
+                      disabled={!internalNote.trim() || addNoteMutation.isPending}
+                      className="mt-2 inline-flex items-center gap-1 rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
+                    >
+                      <Icon name="document" size={14} />
+                      Add note
+                    </button>
+                  </div>
+                  <div>
+                    <label
+                      htmlFor="handoff-reason"
+                      className="text-[11px] font-medium uppercase text-slate-400"
+                    >
+                      Human handoff
+                    </label>
+                    <textarea
+                      id="handoff-reason"
+                      value={handoffReason}
+                      onChange={(event) => setHandoffReason(event.target.value)}
+                      rows={3}
+                      placeholder="Reason for staff follow-up..."
+                      className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-violet-500"
+                    />
+                    <button
+                      type="button"
+                      onClick={() =>
+                        handoffMutation.mutate({
+                          id: selected.id,
+                          reason: handoffReason.trim() || undefined,
+                        })
+                      }
+                      disabled={handoffMutation.isPending}
+                      className="mt-2 inline-flex items-center gap-1 rounded-md bg-amber-600 px-3 py-2 text-sm font-medium text-white hover:bg-amber-700 disabled:opacity-50"
+                    >
+                      <Icon name="hitl" size={14} />
+                      Request handoff
+                    </button>
+                  </div>
+                </div>
+              </div>
 
               <div className="border-b border-slate-100 bg-white px-4 py-3">
                 <div className="flex flex-wrap items-end gap-2">
