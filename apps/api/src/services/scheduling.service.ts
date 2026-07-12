@@ -4,6 +4,7 @@
 import type { ShowMojoAdapter, ShowMojoSlot } from '@property-manager/adapters';
 import { prisma } from '../config/db.js';
 import { writeAudit } from './audit.service.js';
+import { createConversationEvent } from './conversation-events.service.js';
 
 export interface AvailableSlotsResult {
   slots: Array<{
@@ -72,7 +73,8 @@ export async function createManualShowingFromConversation(input: {
     include: { lead: true, unit: true },
   });
   if (!conversation) throw new Error('Conversation not found');
-  if (!conversation.leadId || !conversation.lead) throw new Error('Conversation has no linked lead');
+  if (!conversation.leadId || !conversation.lead)
+    throw new Error('Conversation has no linked lead');
 
   const unitId = conversation.unitId ?? conversation.lead.unitId;
   if (!unitId) throw new Error('Conversation has no recommended unit');
@@ -90,7 +92,9 @@ export async function createManualShowingFromConversation(input: {
       },
       include: {
         lead: { select: { name: true, phone: true, email: true } },
-        unit: { select: { name: true, property: { select: { name: true, address: true, city: true } } } },
+        unit: {
+          select: { name: true, property: { select: { name: true, address: true, city: true } } },
+        },
       },
     });
 
@@ -117,6 +121,20 @@ export async function createManualShowingFromConversation(input: {
     payload: {
       conversationId: input.conversationId,
       leadId: showing.leadId,
+      unitId,
+      scheduledAt: input.scheduledAt.toISOString(),
+      durationMinutes,
+    },
+  });
+
+  await createConversationEvent({
+    tenantId: input.tenantId,
+    conversationId: input.conversationId,
+    leadId: showing.leadId,
+    actorUserId: input.actorId,
+    type: 'showing.scheduled',
+    payload: {
+      showingId: showing.id,
       unitId,
       scheduledAt: input.scheduledAt.toISOString(),
       durationMinutes,
@@ -248,7 +266,8 @@ export async function confirmShowing(
     where: { id: showingId, tenantId },
   });
   if (!showing) throw new Error('Showing not found');
-  if (!canConfirmShowingStatus(showing.status)) throw new Error(`Showing cannot be confirmed from status: ${showing.status}`);
+  if (!canConfirmShowingStatus(showing.status))
+    throw new Error(`Showing cannot be confirmed from status: ${showing.status}`);
 
   if (showing.showmojoId) {
     await adapters.showmojo.confirmShowing(showing.showmojoId);
@@ -268,6 +287,15 @@ export async function confirmShowing(
     entityId: showingId,
     payload: { brokerUserId },
   });
+
+  await createShowingConversationEvent({
+    tenantId,
+    showingId,
+    leadId: showing.leadId,
+    actorUserId: brokerUserId,
+    type: 'showing.confirmed',
+    scheduledAt: showing.scheduledAt,
+  });
 }
 
 export async function cancelShowing(
@@ -282,7 +310,8 @@ export async function cancelShowing(
     where: { id: showingId, tenantId },
   });
   if (!showing) throw new Error('Showing not found');
-  if (!canCancelShowingStatus(showing.status)) throw new Error(`Showing cannot be cancelled from status: ${showing.status}`);
+  if (!canCancelShowingStatus(showing.status))
+    throw new Error(`Showing cannot be cancelled from status: ${showing.status}`);
 
   if (showing.showmojoId) {
     await adapters.showmojo.cancelShowing(showing.showmojoId, reason);
@@ -302,6 +331,16 @@ export async function cancelShowing(
     entityId: showingId,
     payload: { reason },
   });
+
+  await createShowingConversationEvent({
+    tenantId,
+    showingId,
+    leadId: showing.leadId,
+    actorUserId: userId,
+    type: 'showing.cancelled',
+    scheduledAt: showing.scheduledAt,
+    payload: { reason },
+  });
 }
 
 export async function listShowings(
@@ -317,14 +356,54 @@ export async function listShowings(
     orderBy: { scheduledAt: 'asc' },
     include: {
       lead: { select: { name: true, phone: true, email: true } },
-      unit: { select: { name: true, property: { select: { name: true, address: true, city: true } } } },
+      unit: {
+        select: { name: true, property: { select: { name: true, address: true, city: true } } },
+      },
     },
   });
 }
 
 function formatSlotLabel(slot: ShowMojoSlot): string {
   const start = new Date(slot.startAt);
-  const dayName = start.toLocaleDateString('en-CA', { weekday: 'short', month: 'short', day: 'numeric' });
-  const time = start.toLocaleTimeString('en-CA', { hour: 'numeric', minute: '2-digit', hour12: true });
+  const dayName = start.toLocaleDateString('en-CA', {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+  });
+  const time = start.toLocaleTimeString('en-CA', {
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  });
   return `${dayName} at ${time}${slot.brokerName ? ` (${slot.brokerName})` : ''}`;
+}
+
+async function createShowingConversationEvent(input: {
+  tenantId: string;
+  showingId: string;
+  leadId: string;
+  actorUserId: string;
+  type: 'showing.confirmed' | 'showing.cancelled';
+  scheduledAt: Date;
+  payload?: Record<string, unknown>;
+}): Promise<void> {
+  const conversation = await prisma.chatConversation.findFirst({
+    where: { tenantId: input.tenantId, leadId: input.leadId },
+    orderBy: { updatedAt: 'desc' },
+    select: { id: true },
+  });
+  if (!conversation) return;
+
+  await createConversationEvent({
+    tenantId: input.tenantId,
+    conversationId: conversation.id,
+    leadId: input.leadId,
+    actorUserId: input.actorUserId,
+    type: input.type,
+    payload: {
+      showingId: input.showingId,
+      scheduledAt: input.scheduledAt.toISOString(),
+      ...(input.payload ?? {}),
+    },
+  });
 }

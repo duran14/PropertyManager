@@ -1,6 +1,6 @@
 # Project Handoff - Property Manager
 
-Last updated: 2026-07-11 17:06, America/Vancouver.
+Last updated: 2026-07-11 20:27, America/Vancouver.
 
 This document is for a future AI agent or developer continuing the project after the current Codex session. It summarizes what was built, what is currently working, how to verify it, and what should come next.
 
@@ -15,11 +15,12 @@ The app is still in mock/prototype mode for intelligence and most third-party in
 - Local path: `C:\Users\duran\Documents\Proyectos IA\ZCodeProject\Property Manager`
 - GitHub remote: `https://github.com/duran14/PropertyManager.git`
 - Branch: `main`
-- Latest confirmed feature commit before this handoff document: pending current commit with conversation recent activity.
+- Latest confirmed feature commit before this handoff document: pending current commit with persisted conversation event log.
 
 Important recent commits:
 
-- pending: conversations show a derived recent activity feed from messages, profile slots, unit recommendations, and showings
+- pending: conversations persist staff/action events and show them in recent activity
+- `62c3589 Add conversation recent activity feed`
 - `8de86ff Add conversation timeline summary`
 - `4686afa Stage suggested replies and reschedule tours`
 - `d9b0966 Suggest replies for showing actions`
@@ -124,15 +125,21 @@ Staff can now create a manual/internal showing directly from a conversation:
 - Suggested showing reply copy lives in `@property-manager/core/showing-messages` so it can later be reused by AI-assisted reply generation.
 - Conversation detail now includes a compact `Conversation timeline` with lead capture, unit recommendation, tour status, and pending reply state.
 - Timeline copy and status priority live in `@property-manager/core/conversation-timeline` so it can later be reused in other operational views.
-- Conversation detail now includes a derived `Recent activity` feed ordered newest-first.
-- The activity feed currently derives events from existing conversation messages, profile slots, the active unit recommendation, lead creation, and linked showings; it does not yet persist a dedicated event table.
+- Conversation detail now includes `Recent activity` ordered newest-first.
+- Recent activity combines persisted staff/action events with derived events from existing conversation messages, profile slots, the active unit recommendation, lead creation, and linked showings.
+- Persisted conversation events live in the new `conversation_events` table with tenant/conversation/lead/actor links and RLS policies.
+- The app currently records events for lead status changes, staff unit overrides, manual staff replies, manual showing creation, showing confirmation, and showing cancellation.
 - Activity feed labels, priorities, and date normalization live in `@property-manager/core/conversation-activity`.
 
 Primary files:
 
 - `apps/api/src/routes/chat.ts`
+- `apps/api/src/routes/leads.ts`
 - `apps/api/src/services/scheduling.service.ts`
 - `apps/api/src/services/scheduling.service.test.ts`
+- `apps/api/src/services/conversation-events.service.ts`
+- `apps/api/src/services/conversation-events.service.test.ts`
+- `apps/api/prisma/migrations/20260712032000_add_conversation_events/migration.sql`
 - `apps/web/src/pages/ConversationsPage.tsx`
 - `packages/core/src/showing-messages.ts`
 - `packages/core/src/showing-messages.test.ts`
@@ -287,6 +294,7 @@ Manual UI check:
 6. Confirm visible prospect slots appear in list previews and detail summary cards.
 7. Confirm the conversation detail shows `Conversation timeline` chips for lead, unit, tour, and pending reply state.
 8. Confirm the conversation detail shows `Recent activity` with newest events first.
+9. Trigger a lead status change or showing action and confirm a persisted staff/action event appears after the conversation detail refetches.
 
 Messaging smoke tests:
 

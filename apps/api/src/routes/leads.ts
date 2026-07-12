@@ -15,8 +15,14 @@ import { z } from 'zod';
 import { prisma } from '../config/db.js';
 import { getAdapters } from '../config/adapters.js';
 import { requireAuth, requireUser } from '../auth/context.js';
-import { createLeadFromUnitUrl, isLeadStatus, listLeads, updateLeadStatus } from '../services/leads.service.js';
+import {
+  createLeadFromUnitUrl,
+  isLeadStatus,
+  listLeads,
+  updateLeadStatus,
+} from '../services/leads.service.js';
 import { handleInboundMessage } from '../services/chatbot.service.js';
+import { createConversationEvent } from '../services/conversation-events.service.js';
 
 export const publicRouter = Router();
 export const leadsRouter = Router();
@@ -123,7 +129,30 @@ leadsRouter.patch('/:id/status', requireAuth, async (req, res, next) => {
       res.status(400).json({ error: 'Invalid lead status' });
       return;
     }
+    const lead = await prisma.lead.findFirst({
+      where: { id: req.params.id, tenantId: user.tenantId },
+      select: {
+        id: true,
+        status: true,
+        conversations: {
+          orderBy: { updatedAt: 'desc' },
+          take: 1,
+          select: { id: true },
+        },
+      },
+    });
     await updateLeadStatus(req.params.id, user.tenantId, parsed.data.status);
+    const conversation = lead?.conversations[0];
+    if (lead && conversation && lead.status !== parsed.data.status) {
+      await createConversationEvent({
+        tenantId: user.tenantId,
+        conversationId: conversation.id,
+        leadId: lead.id,
+        actorUserId: user.userId,
+        type: 'lead.status_changed',
+        payload: { fromStatus: lead.status, toStatus: parsed.data.status },
+      });
+    }
     res.status(204).end();
   } catch (err) {
     next(err);

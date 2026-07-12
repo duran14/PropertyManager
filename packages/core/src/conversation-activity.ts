@@ -11,6 +11,17 @@ export interface ConversationActivityInput {
     createdAt?: string;
     updatedAt?: string;
   }>;
+  events?: ConversationActivityEventInput[];
+}
+
+export interface ConversationActivityEventInput {
+  id: string;
+  type: string;
+  label: string;
+  detail: string;
+  actorName?: string | null;
+  createdAt: string;
+  tone?: ConversationActivityTone;
 }
 
 export interface ConversationActivityItem {
@@ -19,6 +30,8 @@ export interface ConversationActivityItem {
   detail: string;
   occurredAt: string;
   tone: ConversationActivityTone;
+  source?: 'event' | 'derived';
+  actorName?: string | null;
 }
 
 const PROFILE_SLOT_LABELS: Record<string, string> = {
@@ -32,7 +45,15 @@ const PROFILE_SLOT_LABELS: Record<string, string> = {
 export function buildConversationActivity(
   input: ConversationActivityInput,
 ): ConversationActivityItem[] {
-  const activity: ConversationActivityItem[] = [];
+  const activity: ConversationActivityItem[] = (input.events ?? []).map((event) => ({
+    key: `event-${event.id}`,
+    label: event.label,
+    detail: event.detail,
+    occurredAt: event.createdAt,
+    tone: event.tone ?? toneForEventType(event.type),
+    source: 'event',
+    actorName: event.actorName,
+  }));
 
   input.showings.forEach((showing, index) => {
     const label = buildShowingLabel(showing.status);
@@ -42,6 +63,7 @@ export function buildConversationActivity(
       detail: formatActivityDateTime(showing.scheduledAt),
       occurredAt: showing.updatedAt ?? showing.createdAt ?? showing.scheduledAt,
       tone: buildShowingTone(showing.status),
+      source: 'derived',
     });
   });
 
@@ -55,6 +77,7 @@ export function buildConversationActivity(
       detail: truncateDetail(latestUserMessage.content),
       occurredAt: latestUserMessage.createdAt,
       tone: 'neutral',
+      source: 'derived',
     });
   }
 
@@ -69,6 +92,7 @@ export function buildConversationActivity(
         .join(', '),
       occurredAt: latestTimestamp(profileSlots.map((slot) => slot.updatedAt)),
       tone: 'done',
+      source: 'derived',
     });
   }
 
@@ -79,6 +103,7 @@ export function buildConversationActivity(
       detail: `${input.recommendedUnit.propertyName} ${input.recommendedUnit.unitName}`,
       occurredAt: input.recommendedUnit.updatedAt ?? '',
       tone: 'done',
+      source: 'derived',
     });
   }
 
@@ -89,6 +114,7 @@ export function buildConversationActivity(
       detail: formatLeadStatus(input.lead.status),
       occurredAt: input.lead.createdAt ?? '',
       tone: 'done',
+      source: 'derived',
     });
   }
 
@@ -109,6 +135,13 @@ function buildShowingTone(status: string): ConversationActivityTone {
   if (status === 'cancelled' || status === 'no_show') return 'attention';
   if (status === 'scheduled') return 'active';
   return 'done';
+}
+
+function toneForEventType(type: string): ConversationActivityTone {
+  if (type.includes('cancelled') || type.includes('handoff')) return 'attention';
+  if (type.includes('scheduled') || type.includes('status_changed')) return 'active';
+  if (type.includes('confirmed') || type.includes('recommended')) return 'done';
+  return 'neutral';
 }
 
 function latestTimestamp(values: Array<string | undefined>): string {

@@ -26,41 +26,43 @@ model Tenant {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  users              User[]
-  properties         Property[]
-  owners             Owner[]
-  tenants            TenantRecord[]
-  transactions       Transaction[]
-  bills              Bill[]
+  users                 User[]
+  properties            Property[]
+  owners                Owner[]
+  tenants               TenantRecord[]
+  transactions          Transaction[]
+  bills                 Bill[]
   reconciliationBatches ReconciliationBatch[]
-  discrepancies      Discrepancy[]
-  approvalRequests   ApprovalRequest[]
-  auditEntries       AuditEntry[]
-  integrationConfigs IntegrationConfig[]
-  leases             Lease[]
-  leads              Lead[]
-  chatConversations  ChatConversation[]
-  showings           Showing[]
-  listingPhotos      ListingPhoto[]
-  onboardingProfile  TenantOnboardingProfile?
+  discrepancies         Discrepancy[]
+  approvalRequests      ApprovalRequest[]
+  auditEntries          AuditEntry[]
+  integrationConfigs    IntegrationConfig[]
+  leases                Lease[]
+  leads                 Lead[]
+  chatConversations     ChatConversation[]
+  conversationEvents    ConversationEvent[]
+  showings              Showing[]
+  listingPhotos         ListingPhoto[]
+  onboardingProfile     TenantOnboardingProfile?
 
   @@map("tenants")
 }
 
 model User {
-  id            String   @id @default(cuid())
-  tenantId      String
-  email         String   @unique
-  passwordHash  String
-  firstName     String
-  lastName      String
-  role          UserRole // property_manager | bookkeeper | broker
-  isActive      Boolean  @default(true)
-  lastLoginAt   DateTime?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id           String    @id @default(cuid())
+  tenantId     String
+  email        String    @unique
+  passwordHash String
+  firstName    String
+  lastName     String
+  role         UserRole // property_manager | bookkeeper | broker
+  isActive     Boolean   @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
-  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant             Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  conversationEvents ConversationEvent[]
 
   @@index([tenantId])
   @@map("users")
@@ -77,15 +79,15 @@ enum UserRole {
 // =============================================================================
 
 model Property {
-  id        String   @id @default(cuid())
-  tenantId  String
-  name      String
-  address   String
-  city      String
-  province  String   @default("BC")
+  id         String   @id @default(cuid())
+  tenantId   String
+  name       String
+  address    String
+  city       String
+  province   String   @default("BC")
   postalCode String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   units  Unit[]
@@ -96,21 +98,21 @@ model Property {
 }
 
 model TenantOnboardingProfile {
-  id        String   @id @default(cuid())
-  tenantId  String   @unique
-  logoUrl   String?
-  services  String[] @default([])
-  values    String[] @default([])
-  pricingNotes String?
+  id                 String   @id @default(cuid())
+  tenantId           String   @unique
+  logoUrl            String?
+  services           String[] @default([])
+  values             String[] @default([])
+  pricingNotes       String?
   showingPreferences String?
-  petPolicy String?
-  handoffName String?
-  handoffEmail String?
-  handoffPhone String?
-  aiTone String?
-  aiInstructions String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  petPolicy          String?
+  handoffName        String?
+  handoffEmail       String?
+  handoffPhone       String?
+  aiTone             String?
+  aiInstructions     String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
@@ -118,31 +120,31 @@ model TenantOnboardingProfile {
 }
 
 model Unit {
-  id         String   @id @default(cuid())
-  propertyId String
-  tenantId   String
-  name       String // ej: "Apt 302"
-  rentCents  Int
-  bedrooms   Int?
-  bathrooms  Float?
-  squareFeet Int?
+  id            String    @id @default(cuid())
+  propertyId    String
+  tenantId      String
+  name          String // ej: "Apt 302"
+  rentCents     Int
+  bedrooms      Int?
+  bathrooms     Float?
+  squareFeet    Int?
   availableFrom DateTime?
-  amenities  String[] @default([])
-  petPolicy  String?
-  parking    String?
-  utilities  String?
+  amenities     String[]  @default([])
+  petPolicy     String?
+  parking       String?
+  utilities     String?
   // URL slug única para SEO (Módulo A). Se genera a partir de property + unit.
-  slug       String
-  isActive   Boolean  @default(true)
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  slug          String
+  isActive      Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
-  property Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
-  leases   Lease[]
-  leads    Lead[]
+  property          Property           @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  leases            Lease[]
+  leads             Lead[]
   chatConversations ChatConversation[]
-  showings Showing[]
-  listingPhotos ListingPhoto[]
+  showings          Showing[]
+  listingPhotos     ListingPhoto[]
 
   @@unique([tenantId, slug])
   @@index([tenantId, propertyId])
@@ -154,26 +156,26 @@ model Unit {
 // =============================================================================
 
 model Lease {
-  id           String   @id @default(cuid())
-  tenantId     String
-  unitId       String
-  tenantRecordId String
-  startDate    DateTime
-  endDate      DateTime
-  rentCents    Int
-  depositCents Int?
-  status       LeaseStatus @default(active)
+  id                 String      @id @default(cuid())
+  tenantId           String
+  unitId             String
+  tenantRecordId     String
+  startDate          DateTime
+  endDate            DateTime
+  rentCents          Int
+  depositCents       Int?
+  status             LeaseStatus @default(active)
   // Documento RTA generado (borrador, requiere firma del Broker).
-  rtaDraftDocRef String?
-  signedDocRef   String?
+  rtaDraftDocRef     String?
+  signedDocRef       String?
   // DocuSign — envelope para firma electrónica (Fase 11)
   docusignEnvelopeId String?
   docusignStatus     String? // sent | delivered | completed | declined | voided
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  createdAt          DateTime    @default(now())
+  updatedAt          DateTime    @updatedAt
 
-  tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  unit        Unit         @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  tenant       Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  unit         Unit         @relation(fields: [unitId], references: [id], onDelete: Cascade)
   tenantRecord TenantRecord @relation(fields: [tenantRecordId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, unitId])
@@ -188,16 +190,16 @@ enum LeaseStatus {
 }
 
 model TenantRecord {
-  id        String   @id @default(cuid())
-  tenantId  String
-  firstName String
-  lastName  String
-  email     String?
-  phone     String?
+  id                String   @id @default(cuid())
+  tenantId          String
+  firstName         String
+  lastName          String
+  email             String?
+  phone             String?
   // FINTRAC: evidencia de identificación capturada (la validación la hace un humano).
   idVerificationRef String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 
   tenant Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   leases Lease[]
@@ -227,18 +229,18 @@ model Owner {
 // =============================================================================
 
 model Transaction {
-  id          String   @id @default(cuid())
-  tenantId    String
-  type        TransactionType
-  source      TransactionSource // buildium | qbo | bank | manual
-  amountCents Int // positivo = entrada, negativo = salida
-  currency    String   @default("CAD")
-  reference   String // ID externo (Buildium/QBO doc id, e-Transfer ref)
-  unitId      String?
-  occurredAt  DateTime
+  id                    String            @id @default(cuid())
+  tenantId              String
+  type                  TransactionType
+  source                TransactionSource // buildium | qbo | bank | manual
+  amountCents           Int // positivo = entrada, negativo = salida
+  currency              String            @default("CAD")
+  reference             String // ID externo (Buildium/QBO doc id, e-Transfer ref)
+  unitId                String?
+  occurredAt            DateTime
   // Matching: a qué ReconciliationBatch pertenece, si ya se reconcilió.
   reconciliationBatchId String?
-  createdAt   DateTime @default(now())
+  createdAt             DateTime          @default(now())
 
   tenant              Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   reconciliationBatch ReconciliationBatch? @relation(fields: [reconciliationBatchId], references: [id])
@@ -270,29 +272,29 @@ enum TransactionSource {
 }
 
 model Bill {
-  id              String   @id @default(cuid())
-  tenantId        String
-  vendorName      String
-  billDate        DateTime
-  dueDate         DateTime?
-  totalCents      Int
-  currency        String   @default("CAD")
-  category        String // AccountCategory del core
-  unitId          String?
+  id                String     @id @default(cuid())
+  tenantId          String
+  vendorName        String
+  billDate          DateTime
+  dueDate           DateTime?
+  totalCents        Int
+  currency          String     @default("CAD")
+  category          String // AccountCategory del core
+  unitId            String?
   // OCR: datos de extracción
-  ocrConfidence   Float?
-  sourceDocRef    String? // referencia al recibo original (PDF/imagen)
+  ocrConfidence     Float?
+  sourceDocRef      String? // referencia al recibo original (PDF/imagen)
   // QBO sync
-  qboBillId       String?
-  qboSyncedAt     DateTime?
+  qboBillId         String?
+  qboSyncedAt       DateTime?
   // HITL: si el OCR pidió revisión humana antes de crear en QBO
   approvalRequestId String?
-  status          BillStatus @default(pending_ocr)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  status            BillStatus @default(pending_ocr)
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
 
-  tenant           Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  approvalRequest  ApprovalRequest? @relation(fields: [approvalRequestId], references: [id])
+  tenant          Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  approvalRequest ApprovalRequest? @relation(fields: [approvalRequestId], references: [id])
 
   @@index([tenantId, status])
   @@map("bills")
@@ -307,19 +309,19 @@ enum BillStatus {
 }
 
 model ReconciliationBatch {
-  id          String   @id @default(cuid())
-  tenantId    String
-  runDate     DateTime // fecha del matching diario
-  status      String   @default("completed") // completed | partial | failed
+  id                   String   @id @default(cuid())
+  tenantId             String
+  runDate              DateTime // fecha del matching diario
+  status               String   @default("completed") // completed | partial | failed
   // Resumen del triple balance
-  qboBalanceCents     Int
-  bankBalanceCents    Int
+  qboBalanceCents      Int
+  bankBalanceCents     Int
   buildiumBalanceCents Int
-  balanced   Boolean
-  createdAt   DateTime @default(now())
+  balanced             Boolean
+  createdAt            DateTime @default(now())
 
-  tenant       Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  transactions Transaction[]
+  tenant        Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  transactions  Transaction[]
   discrepancies Discrepancy[]
 
   @@index([tenantId, runDate])
@@ -327,17 +329,17 @@ model ReconciliationBatch {
 }
 
 model Discrepancy {
-  id                  String   @id @default(cuid())
-  tenantId            String
+  id                    String    @id @default(cuid())
+  tenantId              String
   reconciliationBatchId String
-  kind                String // missing_in_qbo | missing_in_buildium | missing_in_bank | amount_mismatch
-  entryReference      String
-  entryAmountCents    Int
-  relatedReferences   String[] // otros entries del mismo evento
-  resolved            Boolean  @default(false)
-  resolvedByUserId    String?
-  resolvedAt          DateTime?
-  createdAt           DateTime @default(now())
+  kind                  String // missing_in_qbo | missing_in_buildium | missing_in_bank | amount_mismatch
+  entryReference        String
+  entryAmountCents      Int
+  relatedReferences     String[] // otros entries del mismo evento
+  resolved              Boolean   @default(false)
+  resolvedByUserId      String?
+  resolvedAt            DateTime?
+  createdAt             DateTime  @default(now())
 
   tenant              Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   reconciliationBatch ReconciliationBatch @relation(fields: [reconciliationBatchId], references: [id], onDelete: Cascade)
@@ -351,21 +353,21 @@ model Discrepancy {
 // =============================================================================
 
 model ApprovalRequest {
-  id            String   @id @default(cuid())
-  tenantId      String
+  id                String         @id @default(cuid())
+  tenantId          String
   // Qué acción se quiere ejecutar (namespace.accion)
-  action        String // ej: "qbo.create_bill", "buildium.mark_paid"
+  action            String // ej: "qbo.create_bill", "buildium.mark_paid"
   // Payload propuesto por la IA (lo que haría si se aprueba)
-  proposedPayload Json
+  proposedPayload   Json
   // Resultado del confidence scoring
-  confidenceScore Float
+  confidenceScore   Float
   confidenceReasons String[]
-  status        ApprovalStatus @default(pending)
-  decidedByUserId String?
-  decidedAt     DateTime?
-  decisionNote  String?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  status            ApprovalStatus @default(pending)
+  decidedByUserId   String?
+  decidedAt         DateTime?
+  decisionNote      String?
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   bills  Bill[]
@@ -386,18 +388,18 @@ enum ApprovalStatus {
 // =============================================================================
 
 model AuditEntry {
-  id          String   @id @default(cuid())
-  tenantId    String
-  actorId     String // userId o agentId
-  actorType   String // user | system | ai_agent
-  action      String // namespace.accion
-  entityType  String
-  entityId    String
-  payload     Json
-  occurredAt  DateTime
+  id           String   @id @default(cuid())
+  tenantId     String
+  actorId      String // userId o agentId
+  actorType    String // user | system | ai_agent
+  action       String // namespace.accion
+  entityType   String
+  entityId     String
+  payload      Json
+  occurredAt   DateTime
   previousHash String
-  hash        String
-  createdAt   DateTime @default(now())
+  hash         String
+  createdAt    DateTime @default(now())
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
@@ -412,17 +414,17 @@ model AuditEntry {
 // =============================================================================
 
 model IntegrationConfig {
-  id             String   @id @default(cuid())
-  tenantId       String
-  provider       String // buildium | qbo | twilio | plaid | stripe
+  id                    String    @id @default(cuid())
+  tenantId              String
+  provider              String // buildium | qbo | twilio | plaid | stripe
   // Credenciales cifradas con INTEGRATION_ENCRYPTION_KEY (simétrico AES).
-  encryptedCredentials String
+  encryptedCredentials  String
   // Tokens OAuth (refresh) cuando aplique, también cifrados.
   encryptedRefreshToken String?
-  status         String   @default("pending") // pending | connected | error
-  lastSyncedAt   DateTime?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  status                String    @default("pending") // pending | connected | error
+  lastSyncedAt          DateTime?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
@@ -436,30 +438,31 @@ model IntegrationConfig {
 // =============================================================================
 
 model Lead {
-  id        String   @id @default(cuid())
-  tenantId  String
-  unitId    String?
+  id                String     @id @default(cuid())
+  tenantId          String
+  unitId            String?
   // Datos del prospecto
-  name      String?
-  email     String?
-  phone     String?
-  message   String?
+  name              String?
+  email             String?
+  phone             String?
+  message           String?
   // De dónde vino el lead
-  source    LeadSource
+  source            LeadSource
   // Canal de comunicación preferido
-  preferredChannel String?
+  preferredChannel  String?
   // Estado del funnel
-  status    LeadStatus @default(new_)
+  status            LeadStatus @default(new_)
   // Referencia a ShowMojo cuando se agenda una visita (Fase 10)
   showmojoShowingId String?
   tourUrl           String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
 
-  tenant       Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  unit         Unit?             @relation(fields: [unitId], references: [id])
-  conversations ChatConversation[]
-  showings     Showing[]
+  tenant             Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  unit               Unit?               @relation(fields: [unitId], references: [id])
+  conversations      ChatConversation[]
+  conversationEvents ConversationEvent[]
+  showings           Showing[]
 
   @@index([tenantId, status])
   @@index([tenantId, source])
@@ -467,47 +470,48 @@ model Lead {
 }
 
 enum LeadSource {
-  unit_url      // llegó por la URL pública de una unidad
-  whatsapp      // chatbot de WhatsApp
-  sms           // chatbot de SMS
-  telegram      // chatbot de Telegram
-  web           // chat web embebido
-  email         // contacto por email
-  showmojo      // registro de visita en ShowMojo
-  manual        // cargado a mano
+  unit_url // llegó por la URL pública de una unidad
+  whatsapp // chatbot de WhatsApp
+  sms // chatbot de SMS
+  telegram // chatbot de Telegram
+  web // chat web embebido
+  email // contacto por email
+  showmojo // registro de visita en ShowMojo
+  manual // cargado a mano
 }
 
 enum LeadStatus {
-  new_          // @map("new") — "new" es palabra reservada
-  contacted     // primer contacto hecho
+  new_ // @map("new") — "new" es palabra reservada
+  contacted // primer contacto hecho
   tour_scheduled // visita agendada
-  qualified     // calificado
-  converted     // se convirtió en inquilino
-  lost          // descartado
+  qualified // calificado
+  converted // se convirtió en inquilino
+  lost // descartado
 }
 
 model ChatConversation {
-  id           String   @id @default(cuid())
-  tenantId     String
+  id         String              @id @default(cuid())
+  tenantId   String
   // Identificador externo: número de teléfono (WhatsApp/SMS), chat id (Telegram), session id (web)
-  externalId   String
-  channel      ChatChannel
+  externalId String
+  channel    ChatChannel
   // Contexto: sobre qué unidad pregunta (si se identificó)
-  unitId       String?
+  unitId     String?
   // Estado de la conversación para el chatbot FSM
-  state        String   @default("greeting") // greeting → collecting_budget → collecting_movein → proposing_units → proposing_tour → scheduling → handoff
+  state      String              @default("greeting") // greeting → collecting_budget → collecting_movein → proposing_units → proposing_tour → scheduling → handoff
   // Slots recolectados por el FSM (budget, move-in date, etc.)
-  slots        ConversationSlot[]
+  slots      ConversationSlot[]
   // Mensajes intercambiados
-  messages     ChatMessage[]
+  messages   ChatMessage[]
+  events     ConversationEvent[]
   // Lead asociado (nullable hasta que se crea el lead)
-  leadId       String?
-  lead         Lead?     @relation(fields: [leadId], references: [id])
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  leadId     String?
+  lead       Lead?               @relation(fields: [leadId], references: [id])
+  createdAt  DateTime            @default(now())
+  updatedAt  DateTime            @updatedAt
 
-  tenant Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  unit   Unit?   @relation(fields: [unitId], references: [id])
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  unit   Unit?  @relation(fields: [unitId], references: [id])
 
   @@unique([tenantId, externalId])
   @@index([tenantId])
@@ -525,7 +529,7 @@ enum ChatChannel {
 model ConversationSlot {
   id             String   @id @default(cuid())
   conversationId String
-  key            String   // ej: budget, move_in_date, occupants, pets
+  key            String // ej: budget, move_in_date, occupants, pets
   value          String
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
@@ -537,13 +541,13 @@ model ConversationSlot {
 }
 
 model ChatMessage {
-  id              String   @id @default(cuid())
-  conversationId  String
-  role            String   // user | assistant | system
-  content         String
+  id             String   @id @default(cuid())
+  conversationId String
+  role           String // user | assistant | system
+  content        String
   // URLs de imágenes/media si el mensaje las incluye (MMS, WhatsApp media, etc.)
-  mediaUrls       String[]
-  createdAt       DateTime @default(now())
+  mediaUrls      String[]
+  createdAt      DateTime @default(now())
 
   conversation ChatConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
 
@@ -551,23 +555,46 @@ model ChatMessage {
   @@map("chat_messages")
 }
 
+model ConversationEvent {
+  id             String   @id @default(cuid())
+  tenantId       String
+  conversationId String
+  leadId         String?
+  actorUserId    String?
+  type           String
+  label          String
+  detail         String
+  tone           String
+  payload        Json     @default("{}")
+  createdAt      DateTime @default(now())
+
+  tenant       Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  conversation ChatConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  lead         Lead?            @relation(fields: [leadId], references: [id])
+  actorUser    User?            @relation(fields: [actorUserId], references: [id])
+
+  @@index([tenantId, conversationId, createdAt])
+  @@index([tenantId, leadId, createdAt])
+  @@map("conversation_events")
+}
+
 // Modelo para visitas agendadas (ShowMojo o manual)
 model Showing {
-  id              String   @id @default(cuid())
+  id              String        @id @default(cuid())
   tenantId        String
   leadId          String
   unitId          String?
   // Referencia externa en ShowMojo
   showmojoId      String?
   scheduledAt     DateTime
-  durationMinutes Int      @default(30)
+  durationMinutes Int           @default(30)
   // Broker/PM asignado a la visita
   brokerUserId    String?
   status          ShowingStatus @default(scheduled)
   // URL de la visita en ShowMojo (si aplica)
   showmojoUrl     String?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   lead   Lead   @relation(fields: [leadId], references: [id], onDelete: Cascade)
@@ -588,23 +615,23 @@ enum ShowingStatus {
 
 // Fotos de unidades para listings (originales + mejoradas con IA)
 model ListingPhoto {
-  id              String   @id @default(cuid())
-  tenantId        String
-  unitId          String
+  id                 String          @id @default(cuid())
+  tenantId           String
+  unitId             String
   // URL de la imagen original subida por el PM
-  originalUrl     String
+  originalUrl        String
   // URL de la imagen mejorada por Autoenhance.ai
-  enhancedUrl     String?
+  enhancedUrl        String?
   // Tipo de mejora solicitada
-  enhancementType EnhancementType @default(none)
+  enhancementType    EnhancementType @default(none)
   // Estado del procesamiento
-  status          PhotoStatus @default(uploaded)
+  status             PhotoStatus     @default(uploaded)
   // ID de orden en Autoenhance (para correlacionar con el webhook)
   autoenhanceOrderId String?
   // ¿Es la foto principal del listing?
-  isPrimary       Boolean  @default(false)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  isPrimary          Boolean         @default(false)
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   unit   Unit   @relation(fields: [unitId], references: [id], onDelete: Cascade)
@@ -614,15 +641,15 @@ model ListingPhoto {
 }
 
 enum EnhancementType {
-  none            // sin mejora (foto original)
-  enhance         // HDR, corrección de iluminación, sky replacement
-  object_removal  // quitar muebles, cajas, objetos que estorban
+  none // sin mejora (foto original)
+  enhance // HDR, corrección de iluminación, sky replacement
+  object_removal // quitar muebles, cajas, objetos que estorban
   virtual_staging // añadir muebles virtuales a habitaciones vacías
 }
 
 enum PhotoStatus {
-  uploaded       // subida, sin procesar
-  processing     // enviada a Autoenhance, esperando webhook
-  enhanced       // procesada, enhancedUrl disponible
-  failed         // el procesamiento falló
+  uploaded // subida, sin procesar
+  processing // enviada a Autoenhance, esperando webhook
+  enhanced // procesada, enhancedUrl disponible
+  failed // el procesamiento falló
 }

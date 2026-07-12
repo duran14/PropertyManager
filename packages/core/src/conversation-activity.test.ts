@@ -61,7 +61,41 @@ describe('buildConversationActivity', () => {
         detail: 'Jul 12, 10:00 a.m.',
         occurredAt: '2026-07-10T10:00:00.000Z',
         tone: 'attention',
+        source: 'derived',
       },
     ]);
+  });
+
+  it('prioritizes persisted staff events with actor names', () => {
+    const activity = buildConversationActivity({
+      lead: null,
+      recommendedUnit: null,
+      slots: [],
+      messages: [
+        { role: 'user', content: 'Can I tour today?', createdAt: '2026-07-10T09:00:00.000Z' },
+      ],
+      showings: [],
+      events: [
+        {
+          id: 'event_1',
+          type: 'lead.status_changed',
+          label: 'Lead status changed',
+          detail: 'Contacted to qualified',
+          actorName: 'Diana Reyes',
+          createdAt: '2026-07-10T09:05:00.000Z',
+          tone: 'active',
+        },
+      ],
+    });
+
+    expect(activity[0]).toEqual({
+      key: 'event-event_1',
+      label: 'Lead status changed',
+      detail: 'Contacted to qualified',
+      occurredAt: '2026-07-10T09:05:00.000Z',
+      tone: 'active',
+      source: 'event',
+      actorName: 'Diana Reyes',
+    });
   });
 });

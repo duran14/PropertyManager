@@ -19,6 +19,7 @@ import {
   getReplyAddressFromConversation,
   handleInboundMessage,
 } from '../services/chatbot.service.js';
+import { createConversationEvent } from '../services/conversation-events.service.js';
 import { createManualShowingFromConversation } from '../services/scheduling.service.js';
 
 export const chatRouter = Router();
@@ -104,7 +105,14 @@ chatRouter.get('/conversations', requireAuth, async (req, res, next) => {
       take: 50,
       include: {
         lead: { select: { name: true, phone: true, status: true } },
-        unit: { select: { id: true, name: true, rentCents: true, property: { select: { name: true, city: true } } } },
+        unit: {
+          select: {
+            id: true,
+            name: true,
+            rentCents: true,
+            property: { select: { name: true, city: true } },
+          },
+        },
         messages: { orderBy: { createdAt: 'asc' }, take: 50 },
         slots: true,
       },
@@ -122,9 +130,21 @@ chatRouter.get('/conversations/:id', requireAuth, async (req, res, next) => {
       where: { id: req.params.id, tenantId: user.tenantId },
       include: {
         lead: true,
-        unit: { select: { id: true, name: true, rentCents: true, property: { select: { name: true, city: true } } } },
+        unit: {
+          select: {
+            id: true,
+            name: true,
+            rentCents: true,
+            property: { select: { name: true, city: true } },
+          },
+        },
         messages: { orderBy: { createdAt: 'asc' } },
         slots: true,
+        events: {
+          orderBy: { createdAt: 'desc' },
+          take: 20,
+          include: { actorUser: { select: { firstName: true, lastName: true } } },
+        },
       },
     });
     if (!conversation) {
@@ -137,7 +157,12 @@ chatRouter.get('/conversations/:id', requireAuth, async (req, res, next) => {
           orderBy: { scheduledAt: 'asc' },
           include: {
             lead: { select: { name: true, phone: true, email: true } },
-            unit: { select: { name: true, property: { select: { name: true, address: true, city: true } } } },
+            unit: {
+              select: {
+                name: true,
+                property: { select: { name: true, address: true, city: true } },
+              },
+            },
           },
         })
       : [];
@@ -186,7 +211,10 @@ chatRouter.post('/conversations/:id/showing', requireAuth, async (req, res, next
         res.status(404).json({ error: err.message });
         return;
       }
-      if (err.message.startsWith('Conversation has no') || err.message.startsWith('Showing duration')) {
+      if (
+        err.message.startsWith('Conversation has no') ||
+        err.message.startsWith('Showing duration')
+      ) {
         res.status(400).json({ error: err.message });
         return;
       }
@@ -222,6 +250,7 @@ chatRouter.patch('/conversations/:id/recommended-unit', requireAuth, async (req,
     }
 
     const matchReason = buildStaffOverrideMatchReason(unit.property.name, unit.name);
+    const previousUnitId = conversation.unitId;
     const updatedConversation = await prisma.$transaction(async (tx) => {
       await tx.chatConversation.update({
         where: { id: conversation.id },
@@ -236,7 +265,9 @@ chatRouter.patch('/conversations/:id/recommended-unit', requireAuth, async (req,
       }
 
       await tx.conversationSlot.upsert({
-        where: { conversationId_key: { conversationId: conversation.id, key: 'recommended_unit_id' } },
+        where: {
+          conversationId_key: { conversationId: conversation.id, key: 'recommended_unit_id' },
+        },
         update: { value: unit.id },
         create: { conversationId: conversation.id, key: 'recommended_unit_id', value: unit.id },
       });
@@ -251,11 +282,31 @@ chatRouter.patch('/conversations/:id/recommended-unit', requireAuth, async (req,
         where: { id: conversation.id },
         include: {
           lead: true,
-          unit: { select: { id: true, name: true, rentCents: true, property: { select: { name: true, city: true } } } },
+          unit: {
+            select: {
+              id: true,
+              name: true,
+              rentCents: true,
+              property: { select: { name: true, city: true } },
+            },
+          },
           messages: { orderBy: { createdAt: 'asc' } },
           slots: true,
         },
       });
+    });
+
+    await createConversationEvent({
+      tenantId: user.tenantId,
+      conversationId: conversation.id,
+      leadId: conversation.leadId,
+      actorUserId: user.userId,
+      type: 'unit.recommended_overridden',
+      payload: {
+        previousUnitId,
+        unitId: unit.id,
+        unitLabel: `${unit.property.name} ${unit.name}`,
+      },
     });
 
     res.json({ conversation: updatedConversation });
@@ -295,9 +346,19 @@ chatRouter.post('/conversations/:id/reply', requireAuth, async (req, res, next) 
       data: { updatedAt: new Date() },
     });
 
+    await createConversationEvent({
+      tenantId: user.tenantId,
+      conversationId: conversation.id,
+      leadId: conversation.leadId,
+      actorUserId: user.userId,
+      type: 'staff.reply_sent',
+      payload: { message: parsed.data.message },
+    });
+
     // Send through the matching channel.
     const adapters = getAdapters();
-    const messagingAdapter = adapters.messaging[conversation.channel as 'whatsapp' | 'sms' | 'telegram' | 'web' | 'email'];
+    const messagingAdapter =
+      adapters.messaging[conversation.channel as 'whatsapp' | 'sms' | 'telegram' | 'web' | 'email'];
     if (messagingAdapter) {
       await messagingAdapter.send({
         to: getReplyAddressFromConversation(conversation.externalId),

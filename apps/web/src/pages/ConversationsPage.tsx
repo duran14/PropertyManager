@@ -1,7 +1,10 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { buildConversationActivity } from '@property-manager/core/conversation-activity';
-import type { ConversationActivityTone } from '@property-manager/core/conversation-activity';
+import type {
+  ConversationActivityEventInput,
+  ConversationActivityTone,
+} from '@property-manager/core/conversation-activity';
 import { buildConversationTimeline } from '@property-manager/core/conversation-timeline';
 import type { ConversationTimelineTone } from '@property-manager/core/conversation-timeline';
 import {
@@ -41,7 +44,18 @@ interface Conversation {
   messages: ChatMessage[];
   slots: Array<{ key: string; value: string; updatedAt?: string }>;
   showings?: ShowingSummary[];
+  events?: ConversationEventSummary[];
   updatedAt: string;
+}
+
+interface ConversationEventSummary {
+  id: string;
+  type: string;
+  label: string;
+  detail: string;
+  tone: ConversationActivityTone;
+  createdAt: string;
+  actorUser?: { firstName: string; lastName: string } | null;
 }
 
 interface ShowingSummary {
@@ -153,6 +167,20 @@ function formatActivityTime(iso: string): string {
     minute: '2-digit',
     hour12: true,
   });
+}
+
+function toConversationActivityEvent(
+  event: ConversationEventSummary,
+): ConversationActivityEventInput {
+  return {
+    id: event.id,
+    type: event.type,
+    label: event.label,
+    detail: event.detail,
+    tone: event.tone,
+    createdAt: event.createdAt,
+    actorName: event.actorUser ? `${event.actorUser.firstName} ${event.actorUser.lastName}` : null,
+  };
 }
 
 function canConfirmShowing(status: ShowingSummary['status']): boolean {
@@ -400,6 +428,7 @@ export function ConversationsPage() {
         slots: selected.slots,
         messages: selected.messages,
         showings: selected.showings ?? [],
+        events: (selected.events ?? []).map(toConversationActivityEvent),
       }).slice(0, 5)
     : [];
 
@@ -636,7 +665,9 @@ export function ConversationsPage() {
                         />
                         <div className="min-w-0">
                           <div className="font-medium text-slate-700">{item.label}</div>
-                          <div className="truncate text-slate-500">{item.detail}</div>
+                          <div className="truncate text-slate-500">
+                            {item.actorName ? `${item.actorName}: ${item.detail}` : item.detail}
+                          </div>
                         </div>
                         <time className="whitespace-nowrap text-slate-400">
                           {formatActivityTime(item.occurredAt)}
