@@ -1,6 +1,6 @@
 # Project Handoff - Property Manager
 
-Last updated: 2026-07-12 09:06, America/Vancouver.
+Last updated: 2026-07-15, America/Vancouver.
 
 This document is for a future AI agent or developer continuing the project after the current Codex session. It summarizes what was built, what is currently working, how to verify it, and what should come next.
 
@@ -15,11 +15,11 @@ The app is still in mock/prototype mode for intelligence and most third-party in
 - Local path: `C:\Users\duran\Documents\Proyectos IA\ZCodeProject\Property Manager`
 - GitHub remote: `https://github.com/duran14/PropertyManager.git`
 - Branch: `main`
-- Latest confirmed feature commit before this handoff document: pending current commit with document object storage, document extraction status, searchable knowledge chunks, and chatbot RAG context.
+- Latest confirmed feature commit: `dc0a25d Add document storage and knowledge retrieval`.
 
 Important recent commits:
 
-- pending: document object storage, extraction status, knowledge search, and chatbot RAG context
+- `dc0a25d Add document storage and knowledge retrieval`
 - `2cf7773 Add document knowledge and lead workflow`
 - `45443f0 Add lead operations and inventory edits`
 - `07f914f Add conversation activity history filters`
@@ -51,7 +51,7 @@ git status --short
 git log --oneline -8
 ```
 
-The working tree was clean before creating this handoff document.
+The feature work through `dc0a25d` is pushed to `origin/main`. Recovery documentation and the Windows-safe `127.0.0.1` database example were prepared and verified on 2026-07-15.
 
 ## Verified Capabilities
 
@@ -353,22 +353,23 @@ pnpm test
 pnpm build
 ```
 
-Current verification after the document storage/RAG work:
+Current verification after Docker/WSL recovery on 2026-07-15:
 
 - `pnpm typecheck` passed.
+- `pnpm test` passed: 29 test files and 84 tests.
 - `pnpm build` passed.
-- Focused API tests passed:
-  `pnpm --filter @property-manager/api test -- src/config/twilio-routing.test.ts src/config/telegram-routing.test.ts src/services/document-storage.service.test.ts src/services/document-extraction.service.test.ts src/services/knowledge-retrieval.service.test.ts`
-- `pnpm test` partially passed but could not complete because local Postgres was not listening on `localhost:5433`; DB-backed `bills.service.test.ts` failed with `Can't reach database server at localhost:5433`.
+- `prisma migrate deploy` found all 9 migrations applied and no pending migrations.
+- `prisma generate` completed successfully.
+- Postgres and Redis were healthy in Docker Compose.
 
-Important pending local step:
+Database maintenance commands:
 
 ```powershell
 pnpm --dir apps/api exec prisma migrate deploy
 pnpm --dir apps/api exec prisma generate
 ```
 
-The migration file is already committed in the workspace at `apps/api/prisma/migrations/20260712162000_add_document_storage_and_knowledge_chunks/migration.sql`; it just needs a running Postgres.
+Use `127.0.0.1:5433` rather than `localhost:5433` in this Windows environment; the latter resolved through IPv6 and previously caused Prisma `P1001` despite a healthy Postgres container.
 
 Manual UI check:
 
@@ -502,6 +503,8 @@ Then:
    - Add links to commits and exact verification commands.
 
 ## Known Gaps And Watchouts
+
+- Windows Docker/WSL recovery, including the confirmed missing `system.vhd` / `modules.vhd` repair and the Prisma IPv6 `localhost` issue, is documented in `docs/TROUBLESHOOTING_DOCKER_WSL_WINDOWS.md`.
 
 - Cloudflare quick tunnel is temporary and can break.
 - Current AI remains mock unless `ZAI_API_KEY` is configured; real GLM adapter exists but has not been live-smoke-tested in this session.
