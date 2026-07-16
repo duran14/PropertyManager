@@ -16,6 +16,13 @@ import { getAdapters } from '../config/adapters.js';
 import { getEnv } from '../config/env.js';
 import { handleInboundMessage } from '../services/chatbot.service.js';
 import { createLeadFromShowMojo } from '../services/leads.service.js';
+import {
+  buildTwilioWebhookUrl,
+  claimTwilioMessage,
+  completeTwilioMessage,
+  failTwilioMessage,
+  validateTwilioWebhookSignature,
+} from '../services/twilio-webhook-security.service.js';
 
 // Re-export para que el route de chat use el mismo helper.
 export { getTenantId };
@@ -71,7 +78,7 @@ webhooksRouter.post('/twilio/sms', async (req, res, next) => {
   try {
     const result = await processTwilioMessage(req, 'sms');
     if (!result.ok) {
-      res.status(400).json({ error: result.error });
+      res.status(result.status).json({ error: result.error });
       return;
     }
     sendTwilioWebhookAccepted(res);
@@ -84,7 +91,7 @@ webhooksRouter.post('/twilio/whatsapp', async (req, res, next) => {
   try {
     const result = await processTwilioMessage(req, 'whatsapp');
     if (!result.ok) {
-      res.status(400).json({ error: result.error });
+      res.status(result.status).json({ error: result.error });
       return;
     }
     sendTwilioWebhookAccepted(res);
@@ -99,7 +106,7 @@ webhooksRouter.post('/twilio', async (req, res, next) => {
     const channel = from.startsWith('whatsapp:') ? 'whatsapp' : 'sms';
     const result = await processTwilioMessage(req, channel);
     if (!result.ok) {
-      res.status(400).json({ error: result.error });
+      res.status(result.status).json({ error: result.error });
       return;
     }
     sendTwilioWebhookAccepted(res);
@@ -135,27 +142,48 @@ webhooksRouter.post('/showmojo', async (req, res, next) => {
 async function processTwilioMessage(
   req: Request,
   channel: 'sms' | 'whatsapp',
-): Promise<{ ok: true } | { ok: false; error: string }> {
+): Promise<{ ok: true } | { ok: false; status: 400 | 403 | 409; error: string }> {
+  if (!hasValidTwilioSignature(req)) {
+    return { ok: false, status: 403, error: 'Invalid Twilio signature' };
+  }
+
   if (!hasRequiredTwilioPayload(req.body)) {
-    return { ok: false, error: 'From and Body are required' };
+    return { ok: false, status: 400, error: 'From and Body are required; MessageSid is required' };
   }
 
   const tenantId = getTwilioTenantId(req);
+  const messageSid = (req.body as Record<string, string>).MessageSid;
+  const claim = await claimTwilioMessage(tenantId, messageSid);
+  if (claim.state === 'completed') {
+    return { ok: true };
+  }
+  if (claim.state === 'processing') {
+    return { ok: false, status: 409, error: 'Twilio message is still processing' };
+  }
+  if (claim.state === 'failed') {
+    return { ok: false, status: 409, error: 'Twilio message requires manual retry' };
+  }
+
   const adapters = getAdapters();
   const messagingAdapter = channel === 'whatsapp' ? adapters.messaging.whatsapp : adapters.messaging.sms;
-  const inbound = await messagingAdapter.parseWebhook(headersToRecord(req), req.body);
-
-  await handleInboundMessage(
-    {
-      tenantId,
-      from: inbound.from,
-      body: inbound.body,
-      channel,
-      mediaUrls: collectTwilioMediaUrls(req.body),
-    },
-    { glm: adapters.glm, messaging: messagingAdapter, showmojo: adapters.showmojo },
-  );
-  return { ok: true };
+  try {
+    const inbound = await messagingAdapter.parseWebhook(headersToRecord(req), req.body);
+    await handleInboundMessage(
+      {
+        tenantId,
+        from: inbound.from,
+        body: inbound.body,
+        channel,
+        mediaUrls: collectTwilioMediaUrls(req.body),
+      },
+      { glm: adapters.glm, messaging: messagingAdapter, showmojo: adapters.showmojo },
+    );
+    await completeTwilioMessage(tenantId, messageSid, claim.claimToken);
+    return { ok: true };
+  } catch (error) {
+    await failTwilioMessage(tenantId, messageSid, claim.claimToken);
+    throw error;
+  }
 }
 
 function hasRequiredTwilioPayload(body: unknown): boolean {
@@ -164,15 +192,34 @@ function hasRequiredTwilioPayload(body: unknown): boolean {
   }
   const payload = body as Record<string, unknown>;
   return typeof payload.From === 'string' && payload.From.length > 0
-    && typeof payload.Body === 'string' && payload.Body.length > 0;
+    && typeof payload.Body === 'string' && payload.Body.length > 0
+    && typeof payload.MessageSid === 'string' && payload.MessageSid.length > 0;
 }
 
 function getTwilioTenantId(req: Request): string {
+  const env = getEnv();
   const tenantId = req.headers['x-tenant-id'];
-  if (typeof tenantId === 'string' && tenantId) {
+  if (!env.TWILIO_AUTH_TOKEN && typeof tenantId === 'string' && tenantId) {
     return tenantId;
   }
-  return getEnv().TWILIO_DEFAULT_TENANT_ID;
+  return env.TWILIO_DEFAULT_TENANT_ID;
+}
+
+function hasValidTwilioSignature(req: Request): boolean {
+  const env = getEnv();
+  if (!env.TWILIO_AUTH_TOKEN) {
+    return true;
+  }
+  const signature = req.headers['x-twilio-signature'];
+  if (typeof signature !== 'string' || !req.body || typeof req.body !== 'object') {
+    return false;
+  }
+  return validateTwilioWebhookSignature({
+    authToken: env.TWILIO_AUTH_TOKEN,
+    url: buildTwilioWebhookUrl(env.API_URL, req.originalUrl),
+    body: req.body as Record<string, unknown>,
+    signature,
+  });
 }
 
 function headersToRecord(req: Request): Record<string, string> {

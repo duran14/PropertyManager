@@ -46,6 +46,7 @@ model Tenant {
   onboardingProfile     TenantOnboardingProfile?
   knowledgeDocuments    KnowledgeDocument[]
   knowledgeChunks       KnowledgeChunk[]
+  webhookReceipts       WebhookReceipt[]
 
   @@map("tenants")
 }
@@ -603,6 +604,23 @@ model ChatMessage {
 
   @@index([conversationId])
   @@map("chat_messages")
+}
+
+model WebhookReceipt {
+  id                String   @id @default(cuid())
+  tenantId          String
+  provider          String
+  providerMessageId String
+  status            String   @default("processing")
+  claimToken        String
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, provider, providerMessageId])
+  @@index([tenantId, createdAt])
+  @@map("webhook_receipts")
 }
 
 model ConversationEvent {

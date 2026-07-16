@@ -504,6 +504,7 @@ Then:
 
 ## Known Gaps And Watchouts
 
+- Twilio webhooks now validate `X-Twilio-Signature` whenever `TWILIO_AUTH_TOKEN` is configured and deduplicate `MessageSid` through RLS-scoped `webhook_receipts`. Receipts track `processing`/`completed`/`failed`; completed retries receive empty TwiML, while concurrent or failed retries receive `409`. Failures require controlled manual replay so automatic retries cannot repeat partial side effects. This is an at-most-once guarantee; a transactional outbox is still required for recoverable exactly-once-style delivery. `API_URL` must match the public callback origin. Receipt retention/cleanup and equivalent protection for future Telegram webhooks remain pending.
 - Windows Docker/WSL recovery, including the confirmed missing `system.vhd` / `modules.vhd` repair and the Prisma IPv6 `localhost` issue, is documented in `docs/TROUBLESHOOTING_DOCKER_WSL_WINDOWS.md`.
 
 - Cloudflare quick tunnel is temporary and can break.

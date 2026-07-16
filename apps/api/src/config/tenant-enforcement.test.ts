@@ -9,6 +9,7 @@ const sensitiveFiles = [
   'services/reconciliation.service.ts',
   'routes/bills.ts',
   'routes/reconciliation.ts',
+  'services/twilio-webhook-security.service.ts',
 ];
 
 describe('tenant context enforcement', () => {
@@ -23,7 +24,7 @@ describe('tenant context enforcement', () => {
 
   it('does not bypass tenant context with direct sensitive Prisma model access', () => {
     const directSensitiveAccess =
-      /\bprisma\.(bill|approvalRequest|transaction|reconciliationBatch|discrepancy|auditEntry)\b/;
+      /\bprisma\.(bill|approvalRequest|transaction|reconciliationBatch|discrepancy|auditEntry|webhookReceipt)\b/;
 
     for (const file of sensitiveFiles) {
       const source = readFileSync(join(apiSrc, file), 'utf8');

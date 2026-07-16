@@ -28,6 +28,7 @@ const tenantScopedTables = [
   'showings',
   'listing_photos',
   'tenant_onboarding_profiles',
+  'webhook_receipts',
 ];
 
 const childTablesScopedByConversation = ['conversation_slots', 'chat_messages'];

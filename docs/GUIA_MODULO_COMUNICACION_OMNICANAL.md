@@ -466,15 +466,15 @@ La otra IA no debe copiar estas simplificaciones como si fueran decisiones de pr
 
 ### Seguridad de webhooks
 
-- No se verifica actualmente `X-Twilio-Signature`.
+- Twilio SMS/WhatsApp valida `X-Twilio-Signature` con HMAC-SHA1 y comparación timing-safe cuando `TWILIO_AUTH_TOKEN` está configurado.
+- En modo Twilio real se usa `TWILIO_DEFAULT_TENANT_ID`; no se acepta que un header público `x-tenant-id` cambie el tenant.
 - El endpoint Telegram de webhook no tiene secreto real implementado.
-- `x-tenant-id` no es una identidad segura para tráfico público.
 
-Implementar firma, comparación timing-safe, timestamp/replay protection y resolución confiable del tenant.
+Pendiente: resolución por número receptor/configuración de integración cuando haya números por tenant y protección equivalente para el futuro webhook de Telegram.
 
 ### Idempotencia
 
-Aunque se captura `MessageSid`/`messageId`, no se persiste con índice único. Un retry del proveedor puede duplicar mensajes, respuestas y acciones. Añadir `providerMessageId`, `provider`, índice único por tenant/proveedor y una transacción/idempotency record.
+Los webhooks Twilio reclaman `MessageSid` en `webhook_receipts` mediante un índice único por tenant/proveedor y estados `processing`/`completed`/`failed`. Un retry ya procesado recibe el mismo TwiML vacío sin crear otra respuesta; un retry concurrente o fallido recibe `409`. Los fallos quedan registrados para reproceso manual controlado, evitando que un retry automático repita efectos parciales o envíos. Cada concesión usa un `claimToken` y todas las operaciones usan el contexto RLS del tenant. La garantía actual es **at-most-once**, no exactamente una vez. Pendiente: transactional outbox para entrega recuperable, política de retención/limpieza y extender el patrón a otros proveedores.
 
 ### Transacciones y fallos parciales
 
