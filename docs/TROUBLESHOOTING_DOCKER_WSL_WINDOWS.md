@@ -215,6 +215,51 @@ Diagnostic distinction:
 - If `docker info` has no working server section, repair Docker/WSL first.
 - If Docker works and PostgreSQL is healthy but Prisma reports P1001, test `127.0.0.1` before changing credentials, migrations, or database contents.
 
+## Secondary issue: Vite dev server only listening on IPv6
+
+After the web dev server (`pnpm --filter @property-manager/web dev`) started, the API worked but the browser showed the app as empty or the page failed with `ERR_CONNECTION_REFUSED`. The root cause is the same Windows IPv4/IPv6 split that affects Prisma.
+
+By default Vite binds only to `[::1]` (IPv6) on this machine:
+
+```text
+TCP    [::1]:5173             LISTENING
+```
+
+Some browsers resolve `localhost` to `127.0.0.1` (IPv4), so the connection to the web server is refused even though `curl http://localhost:5173` succeeds from a shell that resolves `localhost` to `[::1]`.
+
+Fast diagnosis:
+
+```bash
+# IPv4 — fails when only IPv6 is bound
+curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:5173/    # 000 / refused
+# IPv6 — works
+curl -s -o /dev/null -w "%{http_code}" http://[::1]:5173/        # 200
+# Listener shows only IPv6
+netstat -ano | grep ":5173" | grep LISTEN
+```
+
+Confirmed fix — set `host: true` in `apps/web/vite.config.ts` so Vite binds to all interfaces (IPv4 `0.0.0.0` and IPv6 `[::]`):
+
+```ts
+server: {
+  port: 5173,
+  host: true,
+  // ...proxy config
+},
+```
+
+This is already applied in this repository. The equivalent one-off (without editing the config) is `pnpm --filter @property-manager/web exec vite --host`.
+
+After the fix, verify both stacks answer `200`:
+
+```bash
+curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:5173/    # 200
+curl -s -o /dev/null -w "%{http_code}" http://[::1]:5173/        # 200
+netstat -ano | grep ":5173" | grep LISTEN                        # 0.0.0.0 and [::]
+```
+
+The Express API already binds to all interfaces, so it does not need this change; only the Vite dev server did.
+
 ## Property Manager recovery verification
 
 The complete recovery for this repository was verified with:

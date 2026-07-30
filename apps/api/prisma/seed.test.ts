@@ -17,6 +17,7 @@ describe('demo seed', () => {
       'chatConversation',
       'chatMessage',
       'conversationSlot',
+      'conversationEvent',
       'showing',
       'bill',
       'reconciliationBatch',

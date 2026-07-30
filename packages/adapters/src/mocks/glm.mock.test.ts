@@ -58,4 +58,39 @@ describe('GlmMockAdapter chatbot flow', () => {
     expect(result.next_state).toBe('handoff');
     expect(result.reply).toContain('human leasing specialist');
   });
+
+  it('discloses its AI nature in the greeting', async () => {
+    const result = await getChatbotReply('Current user message: hi');
+
+    expect(result.next_state).toBe('collecting_budget');
+    expect(result.reply.toLowerCase()).toMatch(/virtual leasing assistant|ai leasing assistant/);
+  });
+
+  it('formats the budget with locale thousands separators', async () => {
+    const result = await getChatbotReply('Current user message: My budget is $2600');
+
+    expect(result.slots.budget).toBe('2600');
+    expect(result.reply).toContain('$2,600');
+  });
+
+  it('rotates reply variants so a live conversation does not repeat verbatim', async () => {
+    const adapter = new GlmMockAdapter();
+    const call = () =>
+      adapter
+        .reason({
+          systemPrompt: 'Current conversation state: collecting_budget',
+          userPrompt: 'Current user message: My budget is $2400',
+          responseSchema: chatbotSchema,
+          temperature: 0.7,
+        })
+        .then((res) => (JSON.parse(res.content) as { reply: string }).reply);
+
+    const first = await call();
+    const second = await call();
+    const third = await call();
+
+    // Three distinct variants exist for the collecting_movein branch.
+    expect(new Set([first, second, third]).size).toBe(3);
+    expect(first).toContain('move in');
+  });
 });

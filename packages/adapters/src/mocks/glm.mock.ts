@@ -5,6 +5,10 @@
  * - structured chatbot replies when a response schema is provided;
  * - free-form reasoning for non-chatbot callers;
  * - deterministic receipt extraction for Bills tests.
+ *
+ * The chatbot replies rotate between variants so a live conversation does not
+ * sound repetitive, and they disclose the AI nature early (per the project's
+ * handoff decision: warm but never pretending to be human).
  */
 import type {
   GlmAdapter,
@@ -63,6 +67,7 @@ export class GlmMockAdapter implements GlmAdapter {
     const pets = this.extractPets(currentMessage) ?? existingPets;
     const wantsTour = /showing|tour|view|visit|appointment|schedule|book|yes|sounds good|that works|available time/i.test(currentMessage);
     const needsHuman = /human|person|agent|broker|manager|legal|law|contract|lease terms|complaint|emergency/i.test(currentMessage);
+    const isGreeting = /hi|hello|good morning|good afternoon|hey/i.test(currentMessage) && currentMessage.length < 40;
 
     const slots: Record<string, string> = {};
     if (budget) slots.budget = budget;
@@ -73,23 +78,36 @@ export class GlmMockAdapter implements GlmAdapter {
 
     if (needsHuman) {
       return {
-        reply: 'I can connect you with a human leasing specialist for that. I will flag this conversation for follow-up.',
+        reply: this.pick([
+          'I can connect you with a human leasing specialist for that. I will flag this conversation for follow-up so the right person reaches out.',
+          'That is a great question for our team. I am an assistant, so I will hand this off to a human leasing specialist who can help with the details.',
+          'Happy to get a person involved here. I will mark this conversation for follow-up and a leasing specialist will take it from here.',
+        ]),
         slots,
         next_state: 'handoff',
       };
     }
 
-    if (/hi|hello|good morning|good afternoon|hey/i.test(currentMessage) && currentMessage.length < 40) {
+    if (isGreeting) {
       return {
-        reply: 'Hi, I am the virtual leasing assistant. What type of home are you looking for, and what monthly budget should I keep in mind?',
+        reply: this.pick([
+          'Hi there! I am the virtual leasing assistant for our British Columbia rentals. What kind of home are you looking for, and what monthly budget should I keep in mind?',
+          'Hello! I am an AI leasing assistant here to help you find a place in BC. To get started, what monthly rent budget works for you?',
+          'Hey! I am the virtual leasing assistant. Tell me a bit about what you are looking for — which area, and what monthly budget do you have in mind?',
+        ]),
         slots,
         next_state: 'collecting_budget',
       };
     }
 
     if (budget && !moveInDate) {
+      const budgetText = this.formatBudget(budget);
       return {
-        reply: `Great, I will look around $${budget}/month. When would you like to move in?`,
+        reply: this.pick([
+          `Great, I will keep it around $${budgetText}/month. When are you hoping to move in?`,
+          `Got it, around $${budgetText} a month. What move-in date works for you?`,
+          `Thanks! I will search around $${budgetText}/month. When would you ideally like to move in?`,
+        ]),
         slots,
         next_state: 'collecting_movein',
       };
@@ -97,7 +115,11 @@ export class GlmMockAdapter implements GlmAdapter {
 
     if (wantsTour && budget && moveInDate) {
       return {
-        reply: 'Great. I will look for available tour times and send you the best options here.',
+        reply: this.pick([
+          'Great. I will look for available tour times and send you the best options here.',
+          'Sounds good! Let me pull together the available tour slots for you.',
+          'Perfect. I will gather the open tour times and share the best options right here.',
+        ]),
         slots,
         next_state: 'scheduling',
       };
@@ -107,7 +129,11 @@ export class GlmMockAdapter implements GlmAdapter {
       const areaText = preferredArea ? ` near ${preferredArea}` : '';
       const petsText = pets && pets !== 'none' ? ` I will also keep your ${pets} in mind.` : '';
       return {
-        reply: `Thanks. Based on your budget and move-in timing, I found a few available homes${areaText} that may fit.${petsText} Would you like to schedule a tour?`,
+        reply: this.pick([
+          `Thanks. Based on your budget and move-in timing, I found a few available homes${areaText} that may fit.${petsText} Would you like to schedule a tour?`,
+          `Perfect. With that budget and timing, there are some available homes${areaText} worth a look.${petsText} Shall I set up a tour?`,
+          `Good news — your budget and move-in window line up with a few available homes${areaText}.${petsText} Want me to arrange a tour?`,
+        ]),
         slots,
         next_state: 'proposing_tour',
       };
@@ -115,17 +141,38 @@ export class GlmMockAdapter implements GlmAdapter {
 
     if (wantsTour) {
       return {
-        reply: 'Great. I will look for available tour times and send you the best options here.',
+        reply: this.pick([
+          'Great. I will look for available tour times and send you the best options here.',
+          'Sounds good! Let me find the open tour slots for you.',
+          'Happy to help with that. I will gather the available tour times and share them here.',
+        ]),
         slots,
         next_state: 'scheduling',
       };
     }
 
     return {
-      reply: 'Thanks for your message. To help narrow this down, what monthly rent budget should I use?',
+      reply: this.pick([
+        'Thanks for your message. To help narrow this down, what monthly rent budget should I use?',
+        'Thanks for reaching out! I am the virtual leasing assistant. What monthly budget do you have in mind?',
+        'Glad to help. So I can suggest the right homes, what monthly rent budget works for you?',
+      ]),
       slots,
       next_state: 'collecting_budget',
     };
+  }
+
+  private pick(options: string[]): string {
+    // Deterministic rotation keeps tests stable while avoiding repetition in
+    // live demos: each call advances the index within a single adapter run.
+    this.replyIndex = (this.replyIndex + 1) % options.length;
+    return options[this.replyIndex];
+  }
+
+  private replyIndex = -1;
+
+  private formatBudget(value: string): string {
+    return Number(value).toLocaleString('en-CA');
   }
 
   private extractCurrentMessage(prompt: string): string {

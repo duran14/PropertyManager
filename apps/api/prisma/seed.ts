@@ -72,6 +72,10 @@ async function main() {
     },
   });
 
+  // ============================================================
+  // Properties (8) — broader BC geography: Vancouver, Burnaby,
+  // Richmond, Surrey, North Vancouver, Victoria, Kelowna.
+  // ============================================================
   const cedarCourt = await prisma.property.create({
     data: {
       id: 'property_cedar_court',
@@ -105,7 +109,67 @@ async function main() {
       postalCode: 'V6K 1B5',
     },
   });
+  const burnabyHeights = await prisma.property.create({
+    data: {
+      id: 'property_burnaby_heights',
+      tenantId: tenant.id,
+      name: 'Burnaby Heights Lofts',
+      address: '410 Hastings St E',
+      city: 'Burnaby',
+      province: 'BC',
+      postalCode: 'V5C 2K4',
+    },
+  });
+  const richmondGardens = await prisma.property.create({
+    data: {
+      id: 'property_richmond_gardens',
+      tenantId: tenant.id,
+      name: 'Richmond Garden Towers',
+      address: '6500 No 3 Rd',
+      city: 'Richmond',
+      province: 'BC',
+      postalCode: 'V6Y 2C6',
+    },
+  });
+  const surreyCrossing = await prisma.property.create({
+    data: {
+      id: 'property_surrey_crossing',
+      tenantId: tenant.id,
+      name: 'Surrey Crossing Residences',
+      address: '10253 King George Blvd',
+      city: 'Surrey',
+      province: 'BC',
+      postalCode: 'V3T 2W3',
+    },
+  });
+  const northVanBluffs = await prisma.property.create({
+    data: {
+      id: 'property_northvan_bluffs',
+      tenantId: tenant.id,
+      name: 'North Van Bluffs Estates',
+      address: '1455 Marine Dr W',
+      city: 'North Vancouver',
+      province: 'BC',
+      postalCode: 'V7P 1T5',
+    },
+  });
+  const kelownaVista = await prisma.property.create({
+    data: {
+      id: 'property_kelowna_vista',
+      tenantId: tenant.id,
+      name: 'Kelowna Lakeside Vista',
+      address: '1500 Abbott St',
+      city: 'Kelowna',
+      province: 'BC',
+      postalCode: 'V1Y 8X5',
+    },
+  });
 
+  // ============================================================
+  // Units (15) — every field the chatbot uses for matching is
+  // populated: bedrooms, bathrooms, squareFeet, availableFrom,
+  // amenities, petPolicy, parking, utilities, isActive.
+  // ============================================================
   const unit101 = await prisma.unit.create({
     data: {
       id: 'unit_cedar_101',
@@ -114,6 +178,14 @@ async function main() {
       name: 'Apt 101',
       rentCents: 240000,
       slug: 'cedar-court-apt-101',
+      bedrooms: 1,
+      bathrooms: 1,
+      squareFeet: 620,
+      availableFrom: new Date('2026-08-01'),
+      amenities: ['in-suite laundry', 'dishwasher', 'storage locker'],
+      petPolicy: 'Cats allowed',
+      parking: 'Street permit parking',
+      utilities: 'Tenant pays hydro',
     },
   });
   const unit102 = await prisma.unit.create({
@@ -124,6 +196,14 @@ async function main() {
       name: 'Apt 102',
       rentCents: 265000,
       slug: 'cedar-court-apt-102',
+      bedrooms: 2,
+      bathrooms: 1,
+      squareFeet: 850,
+      availableFrom: new Date('2026-07-15'),
+      amenities: ['in-suite laundry', 'dishwasher', 'balcony'],
+      petPolicy: 'Pet friendly',
+      parking: '1 stall included',
+      utilities: 'Tenant pays hydro',
     },
   });
   const unitPH = await prisma.unit.create({
@@ -134,6 +214,14 @@ async function main() {
       name: 'Penthouse 4',
       rentCents: 385000,
       slug: 'harbour-view-penthouse-4',
+      bedrooms: 2,
+      bathrooms: 2,
+      squareFeet: 1200,
+      availableFrom: new Date('2026-09-01'),
+      amenities: ['in-suite laundry', 'dishwasher', 'conciege', 'rooftop deck', 'gym'],
+      petPolicy: 'No pets',
+      parking: '2 secured stalls included',
+      utilities: 'Heat and hot water included',
     },
   });
   const unitKits = await prisma.unit.create({
@@ -144,6 +232,212 @@ async function main() {
       name: 'Suite 203',
       rentCents: 295000,
       slug: 'kits-point-suite-203',
+      bedrooms: 2,
+      bathrooms: 1,
+      squareFeet: 910,
+      availableFrom: new Date('2026-08-15'),
+      amenities: ['shared laundry', 'dishwasher', 'patio'],
+      petPolicy: 'Pet friendly',
+      parking: '1 stall included',
+      utilities: 'Tenant pays hydro',
+    },
+  });
+  const unitBurnaby301 = await prisma.unit.create({
+    data: {
+      id: 'unit_burnaby_301',
+      tenantId: tenant.id,
+      propertyId: burnabyHeights.id,
+      name: 'Loft 301',
+      rentCents: 255000,
+      slug: 'burnaby-heights-loft-301',
+      bedrooms: 1,
+      bathrooms: 1,
+      squareFeet: 700,
+      availableFrom: new Date('2026-08-01'),
+      amenities: ['in-suite laundry', 'dishwasher', 'hardwood floors'],
+      petPolicy: 'Cats allowed',
+      parking: '1 secured stall included',
+      utilities: 'Tenant pays hydro',
+    },
+  });
+  const unitBurnaby410 = await prisma.unit.create({
+    data: {
+      id: 'unit_burnaby_410',
+      tenantId: tenant.id,
+      propertyId: burnabyHeights.id,
+      name: 'Loft 410',
+      rentCents: 275000,
+      slug: 'burnaby-heights-loft-410',
+      bedrooms: 2,
+      bathrooms: 2,
+      squareFeet: 980,
+      availableFrom: new Date('2026-08-15'),
+      amenities: ['in-suite laundry', 'dishwasher', 'city view balcony'],
+      petPolicy: 'Pet friendly',
+      parking: '1 stall included',
+      utilities: 'Heat included',
+    },
+  });
+  const unitRichmond502 = await prisma.unit.create({
+    data: {
+      id: 'unit_richmond_502',
+      tenantId: tenant.id,
+      propertyId: richmondGardens.id,
+      name: 'Tower 502',
+      rentCents: 225000,
+      slug: 'richmond-garden-tower-502',
+      bedrooms: 1,
+      bathrooms: 1,
+      squareFeet: 590,
+      availableFrom: new Date('2026-07-20'),
+      amenities: ['gym', 'shared laundry', 'bike storage'],
+      petPolicy: 'No pets',
+      parking: 'Paid parking available',
+      utilities: 'Tenant pays hydro',
+    },
+  });
+  const unitRichmond611 = await prisma.unit.create({
+    data: {
+      id: 'unit_richmond_611',
+      tenantId: tenant.id,
+      propertyId: richmondGardens.id,
+      name: 'Tower 611',
+      rentCents: 320000,
+      slug: 'richmond-garden-tower-611',
+      bedrooms: 3,
+      bathrooms: 2,
+      squareFeet: 1150,
+      availableFrom: new Date('2026-09-15'),
+      amenities: ['gym', 'in-suite laundry', 'dishwasher', 'balcony'],
+      petPolicy: 'Pet friendly',
+      parking: '2 stalls included',
+      utilities: 'Heat included',
+    },
+  });
+  const unitSurrey204 = await prisma.unit.create({
+    data: {
+      id: 'unit_surrey_204',
+      tenantId: tenant.id,
+      propertyId: surreyCrossing.id,
+      name: 'Suite 204',
+      rentCents: 205000,
+      slug: 'surrey-crossing-suite-204',
+      bedrooms: 1,
+      bathrooms: 1,
+      squareFeet: 560,
+      availableFrom: new Date('2026-08-01'),
+      amenities: ['shared laundry', 'bike storage'],
+      petPolicy: 'Cats allowed',
+      parking: 'Street permit parking',
+      utilities: 'Tenant pays hydro',
+    },
+  });
+  const unitSurrey305 = await prisma.unit.create({
+    data: {
+      id: 'unit_surrey_305',
+      tenantId: tenant.id,
+      propertyId: surreyCrossing.id,
+      name: 'Suite 305',
+      rentCents: 245000,
+      slug: 'surrey-crossing-suite-305',
+      bedrooms: 2,
+      bathrooms: 1,
+      squareFeet: 820,
+      availableFrom: new Date('2026-08-15'),
+      amenities: ['in-suite laundry', 'dishwasher'],
+      petPolicy: 'No pets',
+      parking: '1 stall included',
+      utilities: 'Tenant pays hydro',
+    },
+  });
+  const unitNorthVan101 = await prisma.unit.create({
+    data: {
+      id: 'unit_northvan_101',
+      tenantId: tenant.id,
+      propertyId: northVanBluffs.id,
+      name: 'Estates 101',
+      rentCents: 310000,
+      slug: 'northvan-bluffs-estates-101',
+      bedrooms: 2,
+      bathrooms: 2,
+      squareFeet: 1000,
+      availableFrom: new Date('2026-08-10'),
+      amenities: ['in-suite laundry', 'dishwasher', 'mountain view', 'gym'],
+      petPolicy: 'Pet friendly',
+      parking: '1 secured stall included',
+      utilities: 'Heat and hot water included',
+    },
+  });
+  const unitNorthVan202 = await prisma.unit.create({
+    data: {
+      id: 'unit_northvan_202',
+      tenantId: tenant.id,
+      propertyId: northVanBluffs.id,
+      name: 'Estates 202',
+      rentCents: 345000,
+      slug: 'northvan-bluffs-estates-202',
+      bedrooms: 3,
+      bathrooms: 2,
+      squareFeet: 1280,
+      availableFrom: new Date('2026-09-01'),
+      amenities: ['in-suite laundry', 'dishwasher', 'patio', 'gym'],
+      petPolicy: 'Pet friendly',
+      parking: '2 stalls included',
+      utilities: 'Heat included',
+    },
+  });
+  const unitKelowna303 = await prisma.unit.create({
+    data: {
+      id: 'unit_kelowna_303',
+      tenantId: tenant.id,
+      propertyId: kelownaVista.id,
+      name: 'Lakeside 303',
+      rentCents: 215000,
+      slug: 'kelowna-lakeside-vista-303',
+      bedrooms: 1,
+      bathrooms: 1,
+      squareFeet: 580,
+      availableFrom: new Date('2026-08-01'),
+      amenities: ['shared laundry', 'lake view', 'bike storage'],
+      petPolicy: 'Cats allowed',
+      parking: 'Street permit parking',
+      utilities: 'Tenant pays hydro',
+    },
+  });
+  const unitKelowna404 = await prisma.unit.create({
+    data: {
+      id: 'unit_kelowna_404',
+      tenantId: tenant.id,
+      propertyId: kelownaVista.id,
+      name: 'Lakeside 404',
+      rentCents: 265000,
+      slug: 'kelowna-lakeside-vista-404',
+      bedrooms: 2,
+      bathrooms: 2,
+      squareFeet: 940,
+      availableFrom: new Date('2026-08-20'),
+      amenities: ['in-suite laundry', 'dishwasher', 'lake view balcony'],
+      petPolicy: 'Pet friendly',
+      parking: '1 stall included',
+      utilities: 'Heat included',
+    },
+  });
+  const unitCedar305 = await prisma.unit.create({
+    data: {
+      id: 'unit_cedar_305',
+      tenantId: tenant.id,
+      propertyId: cedarCourt.id,
+      name: 'Apt 305',
+      rentCents: 420000,
+      slug: 'cedar-court-apt-305',
+      bedrooms: 3,
+      bathrooms: 2,
+      squareFeet: 1400,
+      availableFrom: new Date('2026-09-15'),
+      amenities: ['in-suite laundry', 'dishwasher', 'balcony', 'storage locker'],
+      petPolicy: 'Pet friendly',
+      parking: '2 stalls included',
+      utilities: 'Heat included',
     },
   });
 
@@ -180,6 +474,39 @@ async function main() {
         enhancementType: 'virtual_staging',
         status: 'processing',
         autoenhanceOrderId: 'ae_demo_ph_view',
+        isPrimary: true,
+      },
+      {
+        id: 'photo_burnaby_301_living',
+        tenantId: tenant.id,
+        unitId: unitBurnaby301.id,
+        originalUrl: 'https://images.unsplash.com/photo-1493809842364-78817add7ffb',
+        enhancedUrl: 'https://images.unsplash.com/photo-1560448204-e02f11c3d0e2',
+        enhancementType: 'enhance',
+        status: 'enhanced',
+        autoenhanceOrderId: 'ae_demo_burnaby_301',
+        isPrimary: true,
+      },
+      {
+        id: 'photo_richmond_611_patio',
+        tenantId: tenant.id,
+        unitId: unitRichmond611.id,
+        originalUrl: 'https://images.unsplash.com/photo-1502672260266-1c1ef2d93688',
+        enhancedUrl: null,
+        enhancementType: 'virtual_staging',
+        status: 'processing',
+        autoenhanceOrderId: 'ae_demo_richmond_611',
+        isPrimary: true,
+      },
+      {
+        id: 'photo_kelowna_404_view',
+        tenantId: tenant.id,
+        unitId: unitKelowna404.id,
+        originalUrl: 'https://images.unsplash.com/photo-1512917774080-9991f1c4c750',
+        enhancedUrl: 'https://images.unsplash.com/photo-1600585154340-be6161a56a0c',
+        enhancementType: 'enhance',
+        status: 'enhanced',
+        autoenhanceOrderId: 'ae_demo_kelowna_404',
         isPrimary: true,
       },
     ],
@@ -262,6 +589,9 @@ async function main() {
     ],
   });
 
+  // ============================================================
+  // Leads (11) — spread across the full funnel and channels.
+  // ============================================================
   const leadMaya = await prisma.lead.create({
     data: {
       id: 'lead_maya',
@@ -322,12 +652,117 @@ async function main() {
       status: 'converted',
     },
   });
+  const leadAiden = await prisma.lead.create({
+    data: {
+      id: 'lead_aiden',
+      tenantId: tenant.id,
+      unitId: unitBurnaby301.id,
+      name: 'Aiden Walker',
+      email: 'aiden.walker@example.ca',
+      phone: '+16045551005',
+      message: 'Budget around $2,600. Moving in August near Burnaby, 2 people and a cat.',
+      source: 'whatsapp',
+      preferredChannel: 'whatsapp',
+      status: 'tour_scheduled',
+      operationalStatus: 'assigned',
+      assignedUserId: pm.id,
+    },
+  });
+  const leadSofia = await prisma.lead.create({
+    data: {
+      id: 'lead_sofia',
+      tenantId: tenant.id,
+      unitId: unitRichmond611.id,
+      name: 'Sofia Rossi',
+      email: 'sofia.rossi@example.ca',
+      phone: '+16045551006',
+      message: 'Family of 4 looking for a 3-bedroom in Richmond, pet-friendly.',
+      source: 'sms',
+      preferredChannel: 'sms',
+      status: 'contacted',
+    },
+  });
+  const leadMarcus = await prisma.lead.create({
+    data: {
+      id: 'lead_marcus',
+      tenantId: tenant.id,
+      unitId: unitKelowna404.id,
+      name: 'Marcus Lee',
+      email: 'marcus.lee@example.ca',
+      phone: '+16045551007',
+      message: 'Relocating to Kelowna, wants a 2-bed with lake view, flexible on dates.',
+      source: 'telegram',
+      preferredChannel: 'telegram',
+      status: 'qualified',
+    },
+  });
+  await prisma.lead.create({
+    data: {
+      id: 'lead_olivia',
+      tenantId: tenant.id,
+      unitId: unitSurrey204.id,
+      name: 'Olivia Brown',
+      email: 'olivia.brown@example.ca',
+      phone: '+16045551008',
+      message: 'Budget tight, needs something under $2,200 in Surrey.',
+      source: 'web',
+      preferredChannel: 'web',
+      status: 'new_',
+      operationalStatus: 'needs_review',
+    },
+  });
+  const leadJamal = await prisma.lead.create({
+    data: {
+      id: 'lead_jamal',
+      tenantId: tenant.id,
+      unitId: unitNorthVan101.id,
+      name: 'Jamal Ahmed',
+      email: 'jamal.ahmed@example.ca',
+      phone: '+16045551009',
+      message: 'Looking in North Vancouver, $3,000 budget, has a medium dog.',
+      source: 'whatsapp',
+      preferredChannel: 'whatsapp',
+      status: 'contacted',
+    },
+  });
+  await prisma.lead.create({
+    data: {
+      id: 'lead_chloe',
+      tenantId: tenant.id,
+      unitId: unitCedar305.id,
+      name: 'Chloe Dubois',
+      email: 'chloe.dubois@example.ca',
+      phone: '+16045551010',
+      message: 'Wanted a 3-bedroom downtown but budget did not align.',
+      source: 'showmojo',
+      preferredChannel: 'email',
+      status: 'lost',
+    },
+  });
+  const leadRavi = await prisma.lead.create({
+    data: {
+      id: 'lead_ravi',
+      tenantId: tenant.id,
+      unitId: unitBurnaby410.id,
+      name: 'Ravi Patel',
+      email: 'ravi.patel@example.ca',
+      phone: '+16045551011',
+      message: 'Interested in a 2-bed loft in Burnaby Heights, move-in September.',
+      source: 'unit_url',
+      preferredChannel: 'sms',
+      status: 'tour_scheduled',
+    },
+  });
 
+  // ============================================================
+  // Conversations (6) — each with messages + enriched slots in
+  // different FSM states so the inbox feels alive.
+  // ============================================================
   const conversationMaya = await prisma.chatConversation.create({
     data: {
       id: 'conv_maya_whatsapp',
       tenantId: tenant.id,
-      externalId: '+16045551001',
+      externalId: 'whatsapp:+16045551001',
       channel: 'whatsapp',
       unitId: unit102.id,
       state: 'scheduling',
@@ -347,9 +782,58 @@ async function main() {
       updatedAt: new Date('2026-07-09T11:05:00-07:00'),
     },
   });
+  const conversationAiden = await prisma.chatConversation.create({
+    data: {
+      id: 'conv_aiden_whatsapp',
+      tenantId: tenant.id,
+      externalId: 'whatsapp:+16045551005',
+      channel: 'whatsapp',
+      unitId: unitBurnaby301.id,
+      state: 'proposing_tour',
+      leadId: leadAiden.id,
+      updatedAt: new Date('2026-07-09T09:48:00-07:00'),
+    },
+  });
+  const conversationSofia = await prisma.chatConversation.create({
+    data: {
+      id: 'conv_sofia_sms',
+      tenantId: tenant.id,
+      externalId: 'sms:+16045551006',
+      channel: 'sms',
+      unitId: unitRichmond611.id,
+      state: 'collecting_movein',
+      leadId: leadSofia.id,
+      updatedAt: new Date('2026-07-09T08:22:00-07:00'),
+    },
+  });
+  const conversationJamal = await prisma.chatConversation.create({
+    data: {
+      id: 'conv_jamal_whatsapp',
+      tenantId: tenant.id,
+      externalId: 'whatsapp:+16045551009',
+      channel: 'whatsapp',
+      unitId: unitNorthVan101.id,
+      state: 'handoff',
+      leadId: leadJamal.id,
+      updatedAt: new Date('2026-07-09T14:15:00-07:00'),
+    },
+  });
+  const conversationRavi = await prisma.chatConversation.create({
+    data: {
+      id: 'conv_ravi_sms',
+      tenantId: tenant.id,
+      externalId: 'sms:+16045551011',
+      channel: 'sms',
+      unitId: unitBurnaby410.id,
+      state: 'scheduling',
+      leadId: leadRavi.id,
+      updatedAt: new Date('2026-07-09T12:40:00-07:00'),
+    },
+  });
 
   await prisma.chatMessage.createMany({
     data: [
+      // Maya (scheduling)
       {
         id: 'msg_maya_1',
         conversationId: conversationMaya.id,
@@ -378,6 +862,7 @@ async function main() {
         content: 'Tomorrow at 3 works.',
         createdAt: new Date('2026-07-09T10:16:00-07:00'),
       },
+      // Noah (collecting_budget)
       {
         id: 'msg_noah_1',
         conversationId: conversationNoah.id,
@@ -392,6 +877,80 @@ async function main() {
         content: 'One parking stall is included. What monthly budget are you targeting?',
         createdAt: new Date('2026-07-09T11:01:25-07:00'),
       },
+      // Aiden (proposing_tour) — full enriched profile example
+      {
+        id: 'msg_aiden_1',
+        conversationId: conversationAiden.id,
+        role: 'user',
+        content: 'Hi, I am looking for a place in Burnaby for August.',
+        createdAt: new Date('2026-07-09T09:40:00-07:00'),
+      },
+      {
+        id: 'msg_aiden_2',
+        conversationId: conversationAiden.id,
+        role: 'assistant',
+        content: 'Happy to help you find a home in Burnaby! What monthly budget should I keep in mind?',
+        createdAt: new Date('2026-07-09T09:40:30-07:00'),
+      },
+      {
+        id: 'msg_aiden_3',
+        conversationId: conversationAiden.id,
+        role: 'user',
+        content: 'Around $2,600. 2 occupants and one cat.',
+        createdAt: new Date('2026-07-09T09:41:00-07:00'),
+      },
+      {
+        id: 'msg_aiden_4',
+        conversationId: conversationAiden.id,
+        role: 'assistant',
+        content: 'Thanks! Based on your budget and your cat, Loft 301 in Burnaby Heights looks like a great fit ($2,550/month, 1 bed, cats allowed). Would you like to schedule a tour?',
+        createdAt: new Date('2026-07-09T09:41:40-07:00'),
+      },
+      // Sofia (collecting_movein)
+      {
+        id: 'msg_sofia_1',
+        conversationId: conversationSofia.id,
+        role: 'user',
+        content: 'We are a family of 4 looking for a 3-bedroom in Richmond, pet-friendly.',
+        createdAt: new Date('2026-07-09T08:18:00-07:00'),
+      },
+      {
+        id: 'msg_sofia_2',
+        conversationId: conversationSofia.id,
+        role: 'assistant',
+        content: 'Got it. Tower 611 in Richmond Garden Towers is pet-friendly and has 3 bedrooms. When would you like to move in?',
+        createdAt: new Date('2026-07-09T08:18:40-07:00'),
+      },
+      // Jamal (handoff)
+      {
+        id: 'msg_jamal_1',
+        conversationId: conversationJamal.id,
+        role: 'user',
+        content: 'I have a medium dog. Can I see the lease terms before booking?',
+        createdAt: new Date('2026-07-09T14:10:00-07:00'),
+      },
+      {
+        id: 'msg_jamal_2',
+        conversationId: conversationJamal.id,
+        role: 'assistant',
+        content: 'Of course. Lease terms and pet policies can vary, so I will connect you with a human leasing specialist who can share the full details.',
+        createdAt: new Date('2026-07-09T14:10:45-07:00'),
+      },
+      // Ravi (scheduling)
+      {
+        id: 'msg_ravi_1',
+        conversationId: conversationRavi.id,
+        role: 'user',
+        content: 'Interested in the Burnaby Heights Loft 410. Is September move-in possible?',
+        createdAt: new Date('2026-07-09T12:35:00-07:00'),
+      },
+      {
+        id: 'msg_ravi_2',
+        conversationId: conversationRavi.id,
+        role: 'assistant',
+        content: 'Yes, Loft 410 is available from August 15 and works well for a September move-in. I can offer a tour Thursday at 11:00 AM or Friday at 4:00 PM.',
+        createdAt: new Date('2026-07-09T12:35:40-07:00'),
+      },
     ],
   });
 
@@ -401,9 +960,32 @@ async function main() {
       { id: 'slot_maya_movein', conversationId: conversationMaya.id, key: 'move_in_date', value: '2026-07-15' },
       { id: 'slot_maya_occupants', conversationId: conversationMaya.id, key: 'occupants', value: '2' },
       { id: 'slot_noah_area', conversationId: conversationNoah.id, key: 'preferred_area', value: 'Victoria waterfront' },
+      // Aiden — full enriched profile, the showcase example.
+      { id: 'slot_aiden_budget', conversationId: conversationAiden.id, key: 'budget', value: '2600 CAD' },
+      { id: 'slot_aiden_movein', conversationId: conversationAiden.id, key: 'move_in_date', value: 'August' },
+      { id: 'slot_aiden_area', conversationId: conversationAiden.id, key: 'preferred_area', value: 'Burnaby' },
+      { id: 'slot_aiden_occupants', conversationId: conversationAiden.id, key: 'occupants', value: '2' },
+      { id: 'slot_aiden_pets', conversationId: conversationAiden.id, key: 'pets', value: 'cat' },
+      { id: 'slot_aiden_rec', conversationId: conversationAiden.id, key: 'recommended_unit_id', value: unitBurnaby301.id },
+      { id: 'slot_aiden_reason', conversationId: conversationAiden.id, key: 'match_reason', value: 'fits the $2,600 budget, matches the Burnaby area, supports cat needs' },
+      // Sofia
+      { id: 'slot_sofia_occupants', conversationId: conversationSofia.id, key: 'occupants', value: '4' },
+      { id: 'slot_sofia_pets', conversationId: conversationSofia.id, key: 'pets', value: 'pet-friendly' },
+      { id: 'slot_sofia_area', conversationId: conversationSofia.id, key: 'preferred_area', value: 'Richmond' },
+      // Jamal
+      { id: 'slot_jamal_budget', conversationId: conversationJamal.id, key: 'budget', value: '3000 CAD' },
+      { id: 'slot_jamal_area', conversationId: conversationJamal.id, key: 'preferred_area', value: 'North Vancouver' },
+      { id: 'slot_jamal_pets', conversationId: conversationJamal.id, key: 'pets', value: 'dog' },
+      // Ravi
+      { id: 'slot_ravi_budget', conversationId: conversationRavi.id, key: 'budget', value: '2750 CAD' },
+      { id: 'slot_ravi_movein', conversationId: conversationRavi.id, key: 'move_in_date', value: 'September' },
+      { id: 'slot_ravi_area', conversationId: conversationRavi.id, key: 'preferred_area', value: 'Burnaby' },
     ],
   });
 
+  // ============================================================
+  // Showings (7) — linked to leads across statuses.
+  // ============================================================
   await prisma.showing.createMany({
     data: [
       {
@@ -441,6 +1023,245 @@ async function main() {
         brokerUserId: broker.id,
         status: 'completed',
         showmojoUrl: 'https://showmojo.example/demo/noah',
+      },
+      {
+        id: 'showing_aiden',
+        tenantId: tenant.id,
+        leadId: leadAiden.id,
+        unitId: unitBurnaby301.id,
+        scheduledAt: new Date('2026-07-10T11:00:00-07:00'),
+        durationMinutes: 30,
+        brokerUserId: broker.id,
+        status: 'scheduled',
+      },
+      {
+        id: 'showing_ravi',
+        tenantId: tenant.id,
+        leadId: leadRavi.id,
+        unitId: unitBurnaby410.id,
+        scheduledAt: new Date('2026-07-11T16:00:00-07:00'),
+        durationMinutes: 30,
+        brokerUserId: broker.id,
+        status: 'scheduled',
+      },
+      {
+        id: 'showing_sofia',
+        tenantId: tenant.id,
+        leadId: leadSofia.id,
+        unitId: unitRichmond611.id,
+        scheduledAt: new Date('2026-07-09T10:00:00-07:00'),
+        durationMinutes: 30,
+        brokerUserId: broker.id,
+        status: 'cancelled',
+      },
+      {
+        id: 'showing_marcus',
+        tenantId: tenant.id,
+        leadId: leadMarcus.id,
+        unitId: unitKelowna404.id,
+        scheduledAt: new Date('2026-07-12T13:00:00-07:00'),
+        durationMinutes: 45,
+        brokerUserId: broker.id,
+        status: 'confirmed',
+      },
+    ],
+  });
+
+  // ============================================================
+  // ConversationEvent (new) — populates Recent activity and
+  // Activity history so conversations feel lived-in. Event
+  // payloads reference showingId to suppress duplicate derived
+  // showing entries in the activity feed.
+  // ============================================================
+  await prisma.conversationEvent.createMany({
+    data: [
+      // Maya — staff reply + status change + scheduled tour.
+      {
+        id: 'event_maya_status',
+        tenantId: tenant.id,
+        conversationId: conversationMaya.id,
+        leadId: leadMaya.id,
+        actorUserId: pm.id,
+        type: 'lead.status_changed',
+        label: 'Lead status changed',
+        detail: 'New to tour scheduled',
+        tone: 'active',
+        payload: { fromStatus: 'new_', toStatus: 'tour_scheduled' } as Prisma.InputJsonValue,
+        createdAt: new Date('2026-07-09T10:17:00-07:00'),
+      },
+      {
+        id: 'event_maya_showing',
+        tenantId: tenant.id,
+        conversationId: conversationMaya.id,
+        leadId: leadMaya.id,
+        actorUserId: pm.id,
+        type: 'showing.scheduled',
+        label: 'Tour scheduled',
+        detail: 'Jul 10, 3:00 PM',
+        tone: 'active',
+        payload: { showingId: 'showing_maya', scheduledAt: '2026-07-10T15:00:00-07:00' } as Prisma.InputJsonValue,
+        createdAt: new Date('2026-07-09T10:18:00-07:00'),
+      },
+      {
+        id: 'event_maya_reply',
+        tenantId: tenant.id,
+        conversationId: conversationMaya.id,
+        leadId: leadMaya.id,
+        actorUserId: pm.id,
+        type: 'staff.reply_sent',
+        label: 'Staff replied',
+        detail: 'Confirmed the 3:00 PM slot and shared the building entry details.',
+        tone: 'neutral',
+        payload: { message: 'Confirmed the 3:00 PM slot and shared the building entry details.' } as Prisma.InputJsonValue,
+        createdAt: new Date('2026-07-09T10:25:00-07:00'),
+      },
+      {
+        id: 'event_maya_note',
+        tenantId: tenant.id,
+        conversationId: conversationMaya.id,
+        leadId: leadMaya.id,
+        actorUserId: pm.id,
+        type: 'note.internal_added',
+        label: 'Internal note added',
+        detail: 'Prospect very responsive on WhatsApp. Strong fit for Apt 102.',
+        tone: 'neutral',
+        payload: { note: 'Prospect very responsive on WhatsApp. Strong fit for Apt 102.' } as Prisma.InputJsonValue,
+        createdAt: new Date('2026-07-09T10:26:00-07:00'),
+      },
+      // Aiden — unit recommendation + scheduling + assignment.
+      {
+        id: 'event_aiden_status',
+        tenantId: tenant.id,
+        conversationId: conversationAiden.id,
+        leadId: leadAiden.id,
+        actorUserId: pm.id,
+        type: 'lead.status_changed',
+        label: 'Lead status changed',
+        detail: 'New to tour scheduled',
+        tone: 'active',
+        payload: { fromStatus: 'new_', toStatus: 'tour_scheduled' } as Prisma.InputJsonValue,
+        createdAt: new Date('2026-07-09T09:42:00-07:00'),
+      },
+      {
+        id: 'event_aiden_showing',
+        tenantId: tenant.id,
+        conversationId: conversationAiden.id,
+        leadId: leadAiden.id,
+        actorUserId: pm.id,
+        type: 'showing.scheduled',
+        label: 'Tour scheduled',
+        detail: 'Jul 10, 11:00 AM',
+        tone: 'active',
+        payload: { showingId: 'showing_aiden', scheduledAt: '2026-07-10T11:00:00-07:00' } as Prisma.InputJsonValue,
+        createdAt: new Date('2026-07-09T09:43:00-07:00'),
+      },
+      {
+        id: 'event_aiden_note',
+        tenantId: tenant.id,
+        conversationId: conversationAiden.id,
+        leadId: leadAiden.id,
+        actorUserId: pm.id,
+        type: 'note.internal_added',
+        label: 'Internal note added',
+        detail: 'Cat-friendly match. Assigned to Diana for follow-up.',
+        tone: 'neutral',
+        payload: { note: 'Cat-friendly match. Assigned to Diana for follow-up.' } as Prisma.InputJsonValue,
+        createdAt: new Date('2026-07-09T09:44:00-07:00'),
+      },
+      // Jamal — handoff requested.
+      {
+        id: 'event_jamal_handoff',
+        tenantId: tenant.id,
+        conversationId: conversationJamal.id,
+        leadId: leadJamal.id,
+        actorUserId: pm.id,
+        type: 'handoff.requested',
+        label: 'Human handoff requested',
+        detail: 'Prospect asked for full lease and pet policy details.',
+        tone: 'attention',
+        payload: { reason: 'Prospect asked for full lease and pet policy details.' } as Prisma.InputJsonValue,
+        createdAt: new Date('2026-07-09T14:11:00-07:00'),
+      },
+      {
+        id: 'event_jamal_note',
+        tenantId: tenant.id,
+        conversationId: conversationJamal.id,
+        leadId: leadJamal.id,
+        actorUserId: pm.id,
+        type: 'note.internal_added',
+        label: 'Internal note added',
+        detail: 'Medium dog — verify breed restrictions before sending lease.',
+        tone: 'neutral',
+        payload: { note: 'Medium dog — verify breed restrictions before sending lease.' } as Prisma.InputJsonValue,
+        createdAt: new Date('2026-07-09T14:12:00-07:00'),
+      },
+      // Sofia — cancelled tour + status.
+      {
+        id: 'event_sofia_cancel',
+        tenantId: tenant.id,
+        conversationId: conversationSofia.id,
+        leadId: leadSofia.id,
+        actorUserId: pm.id,
+        type: 'showing.cancelled',
+        label: 'Tour cancelled',
+        detail: 'Jul 9, 10:00 AM',
+        tone: 'attention',
+        payload: { showingId: 'showing_sofia', scheduledAt: '2026-07-09T10:00:00-07:00' } as Prisma.InputJsonValue,
+        createdAt: new Date('2026-07-09T09:30:00-07:00'),
+      },
+      {
+        id: 'event_sofia_status',
+        tenantId: tenant.id,
+        conversationId: conversationSofia.id,
+        leadId: leadSofia.id,
+        actorUserId: pm.id,
+        type: 'lead.status_changed',
+        label: 'Lead status changed',
+        detail: 'New to contacted',
+        tone: 'active',
+        payload: { fromStatus: 'new_', toStatus: 'contacted' } as Prisma.InputJsonValue,
+        createdAt: new Date('2026-07-09T08:20:00-07:00'),
+      },
+      // Ravi — scheduled + confirmed.
+      {
+        id: 'event_ravi_scheduled',
+        tenantId: tenant.id,
+        conversationId: conversationRavi.id,
+        leadId: leadRavi.id,
+        actorUserId: pm.id,
+        type: 'showing.scheduled',
+        label: 'Tour scheduled',
+        detail: 'Jul 11, 4:00 PM',
+        tone: 'active',
+        payload: { showingId: 'showing_ravi', scheduledAt: '2026-07-11T16:00:00-07:00' } as Prisma.InputJsonValue,
+        createdAt: new Date('2026-07-09T12:38:00-07:00'),
+      },
+      {
+        id: 'event_ravi_reply',
+        tenantId: tenant.id,
+        conversationId: conversationRavi.id,
+        leadId: leadRavi.id,
+        actorUserId: pm.id,
+        type: 'staff.reply_sent',
+        label: 'Staff replied',
+        detail: 'Booked the Friday 4:00 PM slot. Sending confirmation by SMS.',
+        tone: 'neutral',
+        payload: { message: 'Booked the Friday 4:00 PM slot. Sending confirmation by SMS.' } as Prisma.InputJsonValue,
+        createdAt: new Date('2026-07-09T12:41:00-07:00'),
+      },
+      // Noah — minimal, just a status note.
+      {
+        id: 'event_noah_note',
+        tenantId: tenant.id,
+        conversationId: conversationNoah.id,
+        leadId: leadNoah.id,
+        actorUserId: pm.id,
+        type: 'note.internal_added',
+        label: 'Internal note added',
+        detail: 'Waiting on budget confirmation before proposing the penthouse.',
+        tone: 'neutral',
+        payload: { note: 'Waiting on budget confirmation before proposing the penthouse.' } as Prisma.InputJsonValue,
+        createdAt: new Date('2026-07-09T11:03:00-07:00'),
       },
     ],
   });
