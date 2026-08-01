@@ -10,6 +10,7 @@ import { writeAudit } from './audit.service.js';
 import { formatKnowledgeContext, rankKnowledgeChunks } from './knowledge-retrieval.service.js';
 import { getAvailableSlots, scheduleTour } from './scheduling.service.js';
 import { createShortlist, rotateShortlistToken } from './shortlist.service.js';
+import { nextDeliveryRetryAt } from './message-delivery-retry.service.js';
 import { buildOwnershipConversationTurn } from './ownership-conversation.service.js';
 import {
   buildRentalAreaAccepted,
@@ -40,6 +41,51 @@ export type ConversationState =
   | 'proposing_tour'
   | 'scheduling'
   | 'handoff';
+
+const RECOMMENDATION_STATE_SLOT_KEYS = [
+  'selected_unit_id',
+  'recommended_unit_id',
+  'scheduling_unit_id',
+  'pending_slots',
+  'match_reason',
+  'shortlist_scope',
+] as const;
+
+const SEARCH_CRITERIA_SLOT_KEYS = [
+  'preferred_area', 'preferred_province', 'bedrooms', 'bedrooms_min', 'bedrooms_max',
+  'pets', 'budget', 'move_in_date',
+] as const;
+
+export function recommendationStateSlotsToClear(
+  existingSlots: Record<string, string>,
+  incomingSlots: Record<string, string>,
+): string[] {
+  const criteriaChanged = SEARCH_CRITERIA_SLOT_KEYS.some((key) =>
+    Boolean(incomingSlots[key])
+    && Boolean(existingSlots[key])
+    && incomingSlots[key].toLowerCase() !== existingSlots[key].toLowerCase(),
+  );
+  return criteriaChanged ? [...RECOMMENDATION_STATE_SLOT_KEYS] : [];
+}
+
+export function shouldPrioritizeSearchCriteria(
+  _existingSlots: Record<string, string>,
+  incomingSlots: Record<string, string>,
+): boolean {
+  return SEARCH_CRITERIA_SLOT_KEYS.some((key) => Boolean(incomingSlots[key]));
+}
+
+export function canResolveActiveShortlist(state: ConversationState): boolean {
+  return state === 'proposing_tour' || state === 'proposing_units';
+}
+
+export function resolveSingleOptionAffirmation(message: string, unitIds: string[]): string | undefined {
+  if (unitIds.length !== 1) return undefined;
+  const normalized = message.trim().toLowerCase().replace(/[.!?]+$/g, '');
+  return /^(?:yes|y|yeah|yep|sure|ok|okay|that one|the one|option 1|first one)$/.test(normalized)
+    ? unitIds[0]
+    : undefined;
+}
 
 export interface InboundChatMessage {
   tenantId: string;
@@ -608,9 +654,11 @@ async function handleInboundMessageUnlocked(
   const availableUnits = await getAvailableUnits(input.tenantId, existingSlots);
   const currentState = conversationState;
   const focusedUnit = availableUnits.find((unit) => unit.id === conversation.unitId);
+  const contextualSlots = extractContextualConversationSlots(input.body, existingSlots);
+  const searchCriteriaOverride = shouldPrioritizeSearchCriteria(existingSlots, contextualSlots);
 
   const tenantName = await getTenantName(input.tenantId);
-  const latestShortlist = currentState === 'proposing_tour'
+  const latestShortlist = canResolveActiveShortlist(currentState)
     ? await prisma.propertyShortlist.findFirst({ where: { conversationId: conversation.id, status: 'awaiting_preference' }, orderBy: { createdAt: 'desc' } })
     : null;
   const focusedAnswer = buildFocusedPropertyAnswer(input.body, focusedUnit);
@@ -641,7 +689,33 @@ async function handleInboundMessageUnlocked(
     availableUnits,
   });
 
-  if (latestShortlist) {
+  if (searchCriteriaOverride && glmResult.intent === 'select_options') {
+    glmResult = {
+      ...glmResult,
+      intent: 'request_matches',
+      selected_options: undefined,
+      selection_scope: undefined,
+      next_state: 'proposing_tour',
+    };
+  }
+
+  const implicitlySelectedUnitId = latestShortlist && !searchCriteriaOverride
+    ? resolveSingleOptionAffirmation(input.body, latestShortlist.unitIds)
+    : undefined;
+  if (implicitlySelectedUnitId) {
+    await prisma.propertyShortlist.update({
+      where: { id: latestShortlist!.id },
+      data: { selectedUnitId: implicitlySelectedUnitId, status: 'selected' },
+    });
+    glmResult = {
+      reply: "Perfect — let's find a tour time that works for you.",
+      slots: { selected_unit_id: implicitlySelectedUnitId },
+      intent: 'schedule_tour',
+      next_state: 'scheduling',
+    };
+  }
+
+  if (latestShortlist && !searchCriteriaOverride) {
     const shortlistRents = latestShortlist.unitIds.map((id) =>
       availableUnits.find((unit) => unit.id === id)?.rentCents ?? Number.MAX_SAFE_INTEGER
     );
@@ -717,7 +791,6 @@ async function handleInboundMessageUnlocked(
     });
     for (const key of glmResult.clearSlots) delete existingSlots[key];
   }
-  const contextualSlots = extractContextualConversationSlots(input.body, existingSlots);
   if (
     contextualSlots.preferred_area
     && existingSlots.preferred_area
@@ -749,6 +822,15 @@ async function handleInboundMessageUnlocked(
   glmResult.slots = { ...contextualSlots, ...(glmResult.slots ?? {}) };
   glmResult = alignInterpretedSlotsWithExpectedField(glmResult, input.body, existingSlots);
   glmResult = validateInterpretedLocation(glmResult, existingSlots);
+
+  const staleRecommendationSlots = recommendationStateSlotsToClear(existingSlots, glmResult.slots ?? {});
+  if (staleRecommendationSlots.length > 0) {
+    await prisma.conversationSlot.deleteMany({
+      where: { conversationId: conversation.id, key: { in: staleRecommendationSlots } },
+    });
+    await prisma.chatConversation.update({ where: { id: conversation.id }, data: { unitId: null } });
+    for (const key of staleRecommendationSlots) delete existingSlots[key];
+  }
 
   if (glmResult.slots) {
     for (const [key, value] of Object.entries(glmResult.slots)) {
@@ -869,7 +951,10 @@ async function handleInboundMessageUnlocked(
     finalReply = 'Before we choose a tour time, which property would you like to visit?';
     newState = 'proposing_tour';
   } else if (newState === 'scheduling' && currentState !== 'scheduling') {
-    const unitId = conversation.unitId ?? recommendedUnit?.id ?? (await inferUnitFromSlots(input.tenantId, effectiveSlots));
+    const unitId = effectiveSlots.selected_unit_id
+      ?? conversation.unitId
+      ?? recommendedUnit?.id
+      ?? (await inferUnitFromSlots(input.tenantId, effectiveSlots));
     if (unitId) {
       const slotsResult = await getAvailableSlots(input.tenantId, unitId, deps.showmojo);
       if (slotsResult.slots.length > 0) {
@@ -972,8 +1057,13 @@ async function handleInboundMessageUnlocked(
     data: { state: newState, ...(presentedUnit ? { unitId: presentedUnit.id } : {}) },
   });
 
-  await prisma.chatMessage.create({
-    data: { conversationId: conversation.id, role: 'assistant', content: finalReply },
+  const assistantMessage = await prisma.chatMessage.create({
+    data: {
+      conversationId: conversation.id,
+      role: 'assistant',
+      content: finalReply,
+      deliveryStatus: 'pending',
+    },
   });
 
   const leadCreated = await ensureLead(input.tenantId, conversation.id, input.from, input.body, input.channel, presentedUnit?.id);
@@ -1010,19 +1100,44 @@ async function handleInboundMessageUnlocked(
   // El reply se envía como una secuencia de mensajes cortos con pausas y
   // typing indicator para que la conversación se sienta humana. El mensaje
   // completo ya quedó persistido arriba para auditoría/dasboard.
-  if (recommendationPlan) {
-    if (recommendationPlan.intro) {
-      await sendHumanLike(input.from, recommendationPlan.intro, input.channel, deps.messaging);
+  const deliveredMessageIds: string[] = [];
+  try {
+    if (recommendationPlan) {
+      if (recommendationPlan.intro) {
+        deliveredMessageIds.push(...await sendHumanLike(input.from, recommendationPlan.intro, input.channel, deps.messaging));
+      }
+      for (const option of recommendationPlan.options) {
+        deliveredMessageIds.push(...await sendHumanLike(input.from, option.text, input.channel, deps.messaging));
+        await sendPhotoIfAvailable(deps.messaging, input.from, option.photoUrl);
+      }
+      if (recommendationPlan.outro) {
+        deliveredMessageIds.push(...await sendHumanLike(input.from, recommendationPlan.outro, input.channel, deps.messaging));
+      }
+    } else {
+      deliveredMessageIds.push(...await sendHumanLike(input.from, finalReply, input.channel, deps.messaging));
     }
-    for (const option of recommendationPlan.options) {
-      await sendHumanLike(input.from, option.text, input.channel, deps.messaging);
-      await sendPhotoIfAvailable(deps.messaging, input.from, option.photoUrl);
-    }
-    if (recommendationPlan.outro) {
-      await sendHumanLike(input.from, recommendationPlan.outro, input.channel, deps.messaging);
-    }
-  } else {
-    await sendHumanLike(input.from, finalReply, input.channel, deps.messaging);
+    await prisma.chatMessage.update({
+      where: { id: assistantMessage.id },
+      data: {
+        deliveryStatus: 'sent',
+        deliveryError: null,
+        deliveryNextAttemptAt: null,
+        deliveryAttempts: 1,
+        providerMessageIds: deliveredMessageIds,
+      },
+    });
+  } catch (error) {
+    await prisma.chatMessage.update({
+      where: { id: assistantMessage.id },
+      data: {
+        deliveryStatus: 'failed',
+        deliveryError: error instanceof Error ? error.message.slice(0, 1000) : 'Unknown delivery error',
+        deliveryAttempts: 1,
+        deliveryNextAttemptAt: nextDeliveryRetryAt(1),
+        providerMessageIds: deliveredMessageIds,
+      },
+    });
+    throw error;
   }
   if (
     focusedAnswer?.action === 'photos'
@@ -1605,6 +1720,7 @@ export function buildFastQualificationTurn(
     return {
       reply: "I have your preferences. I'll show you the best available matches.",
       slots: {},
+      intent: /\b(?:more|else|other|additional)\b/i.test(message) ? 'request_more_options' : 'request_matches',
       next_state: 'proposing_tour',
     };
   }
@@ -1981,7 +2097,9 @@ export function buildNoMatchAdjustmentTurn(
       && normalized.includes(slots.preferred_area.toLowerCase())
       && /\b(?:want|need|prefer|keep)\b/.test(normalized),
     );
-    const yesLike = yes || /^(?:ok|okay|sure|works|that works|fine)\b/.test(normalized);
+    const explicitlyAcceptsTiming = /\b(?:timing|date)\s+(?:yes|works|is fine|okay|ok)\b/.test(normalized)
+      || /\byes\s+(?:to|for)\s+(?:the\s+)?(?:timing|date)\b/.test(normalized);
+    const yesLike = yes || explicitlyAcceptsTiming || /^(?:ok|okay|sure|works|that works|fine)\b/.test(normalized);
     const noLike = no || /^(?:no|nope)\b/.test(normalized);
 
     if (yesLike && suggestedMoveInDate) {
@@ -2831,7 +2949,9 @@ export function buildRecommendationDeliveryPlan(
   return {
     intro: `Thanks for walking me through what you need. I found ${topUnits.length === 1 ? 'one option' : 'a few options'} worth a look:${spaceCaution}`,
     options,
-    outro: `*My top pick is Option 1* because it ${reason}. Which would you like to explore: ${formatOptionChoices(topUnits.length)}?`,
+    outro: topUnits.length === 1
+      ? `This home is a strong match because it ${reason}. Would you like to explore it?`
+      : `*My top pick is Option 1* because it ${reason}. Which would you like to explore: ${formatOptionChoices(topUnits.length)}?`,
   };
 }
 
@@ -2855,14 +2975,27 @@ export function buildUnitRecommendationReply(units: AvailableUnit[], slots: Reco
   }));
 }
 
+export async function sendWithRetry<T>(operation: () => Promise<T>, maxAttempts = 3): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError;
+}
+
 async function sendHumanLike(
   to: string,
   reply: string,
   channel: string,
   messaging: MessagingAdapter,
-): Promise<void> {
+): Promise<string[]> {
   const chunks = splitIntoChunks(reply);
   const sendTyping = typeof messaging.sendTyping === 'function' ? messaging.sendTyping.bind(messaging) : undefined;
+  const messageIds: string[] = [];
 
   for (const chunk of chunks) {
     const delay = typingDelayFor(chunk);
@@ -2882,8 +3015,10 @@ async function sendHumanLike(
       await sleep(delay);
     }
 
-    await messaging.send({ to, body: chunk, channel: channel as never });
+    const sent = await sendWithRetry(() => messaging.send({ to, body: chunk, channel: channel as never }));
+    messageIds.push(sent.messageId);
   }
+  return messageIds;
 }
 
 /** Pausa visual breve que conserva un ritmo humano sin ocultar latencia real. */

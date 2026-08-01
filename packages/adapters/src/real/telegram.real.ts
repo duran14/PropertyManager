@@ -28,7 +28,6 @@ export class TelegramRealAdapter implements MessagingAdapter {
       body: JSON.stringify({
         chat_id: message.to,
         text: message.body,
-        parse_mode: 'Markdown',
       }),
     });
     if (!res.ok) {
@@ -57,6 +56,30 @@ export class TelegramRealAdapter implements MessagingAdapter {
   }
 
   async sendPhoto(chatId: string, photoUrl: string, caption?: string): Promise<void> {
+    if (photoUrl.startsWith('/')) {
+      const webUrl = process.env.WEB_URL ?? 'http://localhost:5173';
+      const localAssetUrl = new URL(photoUrl, webUrl).toString();
+      const asset = await fetch(localAssetUrl);
+      if (!asset.ok) {
+        throw new Error(`Could not load local listing photo: ${localAssetUrl}`);
+      }
+
+      const form = new FormData();
+      form.append('chat_id', chatId);
+      form.append('photo', await asset.blob(), photoUrl.split('/').at(-1) ?? 'listing-photo.png');
+      if (caption) form.append('caption', caption);
+
+      const res = await fetch(`${this.baseUrl}/sendPhoto`, {
+        method: 'POST',
+        body: form,
+      });
+      if (!res.ok) {
+        const err = await res.text();
+        throw new Error(`Telegram sendPhoto failed: ${err}`);
+      }
+      return;
+    }
+
     const res = await fetch(`${this.baseUrl}/sendPhoto`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -64,7 +87,6 @@ export class TelegramRealAdapter implements MessagingAdapter {
         chat_id: chatId,
         photo: photoUrl,
         caption,
-        parse_mode: 'Markdown',
       }),
     });
     if (!res.ok) {

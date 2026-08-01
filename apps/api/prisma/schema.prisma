@@ -626,6 +626,11 @@ model ChatMessage {
   content        String
   // URLs de imágenes/media si el mensaje las incluye (MMS, WhatsApp media, etc.)
   mediaUrls      String[]
+  deliveryStatus String   @default("sent") // pending | sent | failed
+  deliveryError  String?
+  deliveryAttempts Int @default(0)
+  deliveryNextAttemptAt DateTime?
+  providerMessageIds String[] @default([])
   createdAt      DateTime @default(now())
 
   conversation ChatConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
