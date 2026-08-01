@@ -45,3 +45,9 @@ playwright-report/
 
 # Local document/object storage
 .storage/
+
+# Local planning artifacts
+.zcode/
+
+# Local QA screenshots
+shortlist_*.png

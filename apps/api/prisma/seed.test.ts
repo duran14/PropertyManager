@@ -34,4 +34,22 @@ describe('demo seed', () => {
     expect(seedSource).toContain('createdAt: new Date(entry.occurredAt)');
     expect(seedSource).toContain('buildAuditEntry({ ...input, occurredAt }, last?.hash)');
   });
+
+  it('gives the main shortlist options realistic multi-photo galleries', () => {
+    for (const unitKey of [
+      'cedar_101',
+      'cedar_102',
+      'harbour_ph',
+      'burnaby_301',
+      'richmond_611',
+      'northvan_202',
+      'cedar_305',
+      'surrey_305',
+      'surrey_204',
+      'kelowna_404',
+    ]) {
+      const photoIds = seedSource.match(new RegExp(`id: 'photo_${unitKey}_[^']+'`, 'g')) ?? [];
+      expect(photoIds).toHaveLength(4);
+    }
+  });
 });

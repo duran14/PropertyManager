@@ -18,6 +18,8 @@ import { PropertiesPage } from './pages/PropertiesPage';
 import { useQuery } from '@tanstack/react-query';
 import { apiFetch } from './lib/apiClient';
 import type { Lease } from './lib/types';
+import { PublicListingPage } from './pages/PublicListingPage';
+import { ShortlistPage } from './pages/ShortlistPage';
 
 interface Unit {
   id: string;
@@ -77,6 +79,8 @@ export default function App() {
       <AuthProvider>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
+          <Route path="/listings/:slug" element={<PublicListingPage />} />
+          <Route path="/shortlist/:token" element={<ShortlistPage />} />
           <Route path="/*" element={<ProtectedRoutes />} />
         </Routes>
       </AuthProvider>

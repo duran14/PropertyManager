@@ -177,6 +177,14 @@ export interface MessagingAdapter {
   readonly channel: ChatChannel;
   send(message: OutboundMessage): Promise<{ messageId: string }>;
   parseWebhook(headers: Record<string, string>, body: unknown): Promise<InboundMessage>;
+  /**
+   * Muestra el indicador de "escribiendo…" en el canal del usuario.
+   * Opcional: solo los canales que lo soportan nativamente (Telegram) lo implementan.
+   * Los adapters que no lo implementan simplemente dejan que el caller lo salte vía `?.`.
+   */
+  sendTyping?(chatId: string): Promise<void>;
+  /** Envía una fotografía pública con un caption breve cuando el canal lo permite. */
+  sendPhoto?(chatId: string, photoUrl: string, caption?: string): Promise<void>;
 }
 
 // =============================================================================

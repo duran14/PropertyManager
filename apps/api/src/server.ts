@@ -5,6 +5,7 @@ import { createApp } from './app.js';
 import { getEnv } from './config/env.js';
 import { startWorkers } from './jobs/worker.js';
 import { startTelegramPoller } from './jobs/telegram-poller.js';
+import { startShortlistReminderWorker } from './jobs/shortlist-reminders.js';
 
 const app = createApp();
 const env = getEnv();
@@ -19,6 +20,7 @@ app.listen(env.API_PORT, () => {
 
   // Arranca el poller de Telegram (si hay token configurado).
   startTelegramPoller();
+  startShortlistReminderWorker();
 
   console.log('');
 });

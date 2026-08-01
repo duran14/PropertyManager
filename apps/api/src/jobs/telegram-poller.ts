@@ -68,6 +68,10 @@ async function pollLoop(adapter: TelegramRealAdapter): Promise<void> {
 
         console.log(`[Telegram] Message from ${msg.from}: "${msg.body.slice(0, 50)}"`);
 
+        // Muestra "escribiendo…" desde el instante 0 mientras el service procesa.
+        // El service refresca el typing antes de cada chunk, así no se cae.
+        await adapter.sendTyping(msg.from).catch(() => undefined);
+
         await handleInboundMessage(
           {
             tenantId: tenant.id,

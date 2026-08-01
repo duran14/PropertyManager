@@ -47,6 +47,7 @@ model Tenant {
   knowledgeDocuments    KnowledgeDocument[]
   knowledgeChunks       KnowledgeChunk[]
   webhookReceipts       WebhookReceipt[]
+  shortlists            PropertyShortlist[]
 
   @@map("tenants")
 }
@@ -555,6 +556,7 @@ model ChatConversation {
   // Mensajes intercambiados
   messages   ChatMessage[]
   events     ConversationEvent[]
+  shortlists PropertyShortlist[]
   // Lead asociado (nullable hasta que se crea el lead)
   leadId     String?
   lead       Lead?               @relation(fields: [leadId], references: [id])
@@ -567,6 +569,32 @@ model ChatConversation {
   @@unique([tenantId, externalId])
   @@index([tenantId])
   @@map("chat_conversations")
+}
+
+model PropertyShortlist {
+  id               String   @id @default(cuid())
+  tokenHash        String   @unique
+  tenantId         String
+  conversationId   String
+  unitIds          String[]
+  selectedUnitId   String?
+  status           String   @default("awaiting_preference")
+  expiresAt        DateTime
+  viewedAt         DateTime?
+  scheduledAt      DateTime?
+  reminderCount    Int      @default(0)
+  nextReminderAt   DateTime?
+  lastReminderAt   DateTime?
+  remindersStopped Boolean  @default(false)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  tenant       Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  conversation ChatConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, conversationId])
+  @@index([status, nextReminderAt])
+  @@map("property_shortlists")
 }
 
 enum ChatChannel {

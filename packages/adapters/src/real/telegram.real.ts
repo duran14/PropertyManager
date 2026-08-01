@@ -40,6 +40,40 @@ export class TelegramRealAdapter implements MessagingAdapter {
   }
 
   /**
+   * Muestra el indicador "escribiendo…" en el chat. Telegram lo expira a los ~5s,
+   * así que el caller debe refrescarlo si el delay es largo. Falla silenciosamente:
+   * un typing que no se envía nunca debe romper el flujo del bot.
+   */
+  async sendTyping(chatId: string): Promise<void> {
+    try {
+      await fetch(`${this.baseUrl}/sendChatAction`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: chatId, action: 'typing' }),
+      });
+    } catch {
+      // No-op: el typing es cosmético; si falla, el mensaje se envía igual.
+    }
+  }
+
+  async sendPhoto(chatId: string, photoUrl: string, caption?: string): Promise<void> {
+    const res = await fetch(`${this.baseUrl}/sendPhoto`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        photo: photoUrl,
+        caption,
+        parse_mode: 'Markdown',
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Telegram sendPhoto failed: ${err}`);
+    }
+  }
+
+  /**
    * Long polling: pregunta a Telegram por updates nuevos.
    * Bloquea hasta 30s esperando mensajes (long polling nativo de Telegram).
    * Devuelve un array de mensajes entrantes.

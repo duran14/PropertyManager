@@ -23,24 +23,127 @@ import {
   listLeads,
   updateLeadStatus,
 } from '../services/leads.service.js';
-import { handleInboundMessage } from '../services/chatbot.service.js';
+import { getReplyAddressFromConversation, handleInboundMessage } from '../services/chatbot.service.js';
 import { createConversationEvent } from '../services/conversation-events.service.js';
+import { buildShortlistPrefillContact, getPublicShortlist, hashShortlistToken } from '../services/shortlist.service.js';
+import { getAvailableSlots, scheduleTour } from '../services/scheduling.service.js';
+import { parseShortlistBooking } from '../services/shortlist-booking.service.js';
 
 export const publicRouter = Router();
 export const leadsRouter = Router();
+
+publicRouter.get('/shortlists/:token', async (req, res, next) => {
+  try {
+    const result = await getPublicShortlist(req.params.token);
+    if (!result) return void res.status(404).json({ error: 'Shortlist not found or expired' });
+    const slotMap = Object.fromEntries(result.shortlist.conversation.slots.map((slot) => [slot.key, slot.value]));
+    res.json({
+      selectedUnitId: result.shortlist.selectedUnitId,
+      contact: buildShortlistPrefillContact(slotMap, result.shortlist.conversation.lead),
+      units: result.units.map((unit) => ({
+        id: unit!.id, name: unit!.name, rentCents: unit!.rentCents, bedrooms: unit!.bedrooms,
+        bathrooms: unit!.bathrooms, squareFeet: unit!.squareFeet, amenities: unit!.amenities,
+        petPolicy: unit!.petPolicy, availableFrom: unit!.availableFrom, isActive: unit!.isActive,
+        property: { name: unit!.property.name, address: unit!.property.address, city: unit!.property.city, province: unit!.property.province },
+        photos: unit!.listingPhotos.map((photo) => ({ url: photo.enhancedUrl ?? photo.originalUrl })),
+      })),
+    });
+  } catch (error) { next(error); }
+});
+
+publicRouter.post('/shortlists/:token/select', async (req, res, next) => {
+  try {
+    const shortlist = await prisma.propertyShortlist.findFirst({ where: { tokenHash: hashShortlistToken(req.params.token), expiresAt: { gt: new Date() } } });
+    const unitId = String(req.body?.unitId ?? '');
+    if (!shortlist || !shortlist.unitIds.includes(unitId)) return void res.status(400).json({ error: 'Invalid shortlist selection' });
+    await prisma.propertyShortlist.update({ where: { id: shortlist.id }, data: { selectedUnitId: unitId, status: 'selected' } });
+    await prisma.chatConversation.update({ where: { id: shortlist.conversationId }, data: { unitId } });
+    res.json({ ok: true });
+  } catch (error) { next(error); }
+});
+
+publicRouter.get('/shortlists/:token/slots', async (req, res, next) => {
+  try {
+    const shortlist = await prisma.propertyShortlist.findFirst({ where: { tokenHash: hashShortlistToken(req.params.token), expiresAt: { gt: new Date() } } });
+    if (!shortlist?.selectedUnitId) return void res.status(400).json({ error: 'Select a property first' });
+    res.json(await getAvailableSlots(shortlist.tenantId, shortlist.selectedUnitId, getAdapters().showmojo));
+  } catch (error) { next(error); }
+});
+
+publicRouter.post('/shortlists/:token/schedule', async (req, res, next) => {
+  try {
+    const shortlist = await prisma.propertyShortlist.findFirst({ where: { tokenHash: hashShortlistToken(req.params.token), expiresAt: { gt: new Date() } }, include: { conversation: { include: { lead: true } } } });
+    if (!shortlist?.selectedUnitId || !shortlist.conversation.lead) return void res.status(400).json({ error: 'Select a property first' });
+    const lead = shortlist.conversation.lead;
+    let booking;
+    try {
+      booking = parseShortlistBooking(req.body);
+    } catch {
+      return void res.status(400).json({ error: 'Name, phone, a valid email, and a tour time are required' });
+    }
+    const unit = await prisma.unit.findFirst({
+      where: { id: shortlist.selectedUnitId, tenantId: shortlist.tenantId },
+      include: { property: { select: { name: true, address: true, city: true, province: true } } },
+    });
+    if (!unit) return void res.status(404).json({ error: 'Selected property not found' });
+    await prisma.lead.update({
+      where: { id: lead.id },
+      data: {
+        name: booking.name,
+        phone: booking.phone,
+        email: booking.email,
+        ...(booking.notes ? { message: booking.notes } : {}),
+      },
+    });
+    const result = await scheduleTour({ tenantId: shortlist.tenantId, unitId: shortlist.selectedUnitId, leadId: lead.id, slotIndex: booking.slotIndex, prospectName: booking.name, prospectPhone: booking.phone, prospectEmail: booking.email, conversationId: shortlist.conversationId, adapter: getAdapters().showmojo });
+    await prisma.propertyShortlist.update({ where: { id: shortlist.id }, data: { status: 'scheduled', scheduledAt: new Date(), remindersStopped: true, nextReminderAt: null } });
+    const unitLabel = `${unit.property.name} — ${unit.name}`;
+    const unitAddress = `${unit.property.address}, ${unit.property.city}, ${unit.property.province}`;
+    await prisma.$transaction([
+      prisma.chatConversation.update({
+        where: { id: shortlist.conversationId },
+        data: { state: 'handoff', unitId: unit.id },
+      }),
+      prisma.conversationSlot.upsert({
+        where: { conversationId_key: { conversationId: shortlist.conversationId, key: 'tour_scheduled_at' } },
+        update: { value: result.scheduledAt },
+        create: { conversationId: shortlist.conversationId, key: 'tour_scheduled_at', value: result.scheduledAt },
+      }),
+      prisma.conversationSlot.upsert({
+        where: { conversationId_key: { conversationId: shortlist.conversationId, key: 'scheduled_unit_address' } },
+        update: { value: unitAddress },
+        create: { conversationId: shortlist.conversationId, key: 'scheduled_unit_address', value: unitAddress },
+      }),
+      prisma.conversationSlot.upsert({
+        where: { conversationId_key: { conversationId: shortlist.conversationId, key: 'scheduled_unit_label' } },
+        update: { value: unitLabel },
+        create: { conversationId: shortlist.conversationId, key: 'scheduled_unit_label', value: unitLabel },
+      }),
+    ]);
+    await getAdapters().messaging[shortlist.conversation.channel].send({
+      to: getReplyAddressFromConversation(shortlist.conversation.externalId),
+      channel: shortlist.conversation.channel,
+      body: `Your tour for ${unitLabel} at ${unitAddress} is scheduled for ${new Date(result.scheduledAt).toLocaleString('en-CA')}. I'll keep the confirmation here for you.`,
+    });
+    res.json({ ...result, unitLabel, unitAddress });
+  } catch (error) { next(error); }
+});
 
 // =============== RUTAS PÚBLICAS ===============
 
 publicRouter.get('/units/:slug', async (req, res, next) => {
   try {
-    const tenantId = req.headers['x-tenant-id'];
+    const tenantId = req.headers['x-tenant-id'] ?? req.query.tenant;
     if (typeof tenantId !== 'string') {
       res.status(400).json({ error: 'x-tenant-id header is required' });
       return;
     }
     const unit = await prisma.unit.findFirst({
       where: { tenantId, slug: req.params.slug, isActive: true },
-      include: { property: true },
+      include: {
+        property: true,
+        listingPhotos: { orderBy: [{ isPrimary: 'desc' }, { createdAt: 'asc' }] },
+      },
     });
     if (!unit) {
       res.status(404).json({ error: 'Unit not found' });
@@ -51,6 +154,18 @@ publicRouter.get('/units/:slug', async (req, res, next) => {
         name: unit.name,
         slug: unit.slug,
         rentCents: unit.rentCents,
+        bedrooms: unit.bedrooms,
+        bathrooms: unit.bathrooms,
+        squareFeet: unit.squareFeet,
+        amenities: unit.amenities,
+        petPolicy: unit.petPolicy,
+        parking: unit.parking,
+        utilities: unit.utilities,
+        availableFrom: unit.availableFrom,
+        photos: unit.listingPhotos.map((photo) => ({
+          url: photo.enhancedUrl ?? photo.originalUrl,
+          isPrimary: photo.isPrimary,
+        })),
         property: {
           name: unit.property.name,
           address: unit.property.address,
@@ -73,7 +188,7 @@ const contactSchema = z.object({
 
 publicRouter.post('/units/:slug/contact', async (req, res, next) => {
   try {
-    const tenantId = req.headers['x-tenant-id'];
+    const tenantId = req.headers['x-tenant-id'] ?? req.query.tenant;
     if (typeof tenantId !== 'string') {
       res.status(400).json({ error: 'x-tenant-id header is required' });
       return;

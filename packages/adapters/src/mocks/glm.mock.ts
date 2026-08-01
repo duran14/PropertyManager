@@ -24,8 +24,26 @@ export class GlmMockAdapter implements GlmAdapter {
     if (request.responseSchema) {
       const props = request.responseSchema.properties as Record<string, unknown> | undefined;
       if (props && 'next_state' in props) {
+        const generated = this.generateChatbotResponse(request.userPrompt);
+        const currentMessage = this.extractCurrentMessage(request.userPrompt);
+        const selectsAll = /\b(?:both|all(?:\s+of\s+them)?)\b/i.test(currentMessage);
+        const selectedOptions = [...currentMessage.matchAll(/\b(?:option\s*)?([123])\b/gi)]
+          .map((match) => Number(match[1]));
         return {
-          content: JSON.stringify(this.generateChatbotResponse(request.userPrompt)),
+          content: JSON.stringify({
+            intent: selectsAll || selectedOptions.length > 0
+              ? 'select_options'
+              : /what else|anything else|other options/i.test(currentMessage)
+                ? 'request_more_options'
+                : generated.next_state === 'proposing_tour'
+                  ? 'request_matches'
+                  : generated.next_state === 'scheduling'
+                    ? 'schedule_tour'
+                    : 'provide_information',
+            ...(selectsAll ? { selection_scope: 'all' } : {}),
+            ...(selectedOptions.length > 0 ? { selected_options: selectedOptions } : {}),
+            ...generated,
+          }),
           selfReportedConfidence: 0.85,
         };
       }
@@ -54,6 +72,8 @@ export class GlmMockAdapter implements GlmAdapter {
     next_state: string;
   } {
     const currentMessage = this.extractCurrentMessage(userPrompt);
+    const currentState = this.extractCurrentState(userPrompt);
+    const agencyName = this.extractAgencyName(userPrompt) ?? 'our property management company';
     const existingBudget = this.extractFromContext(userPrompt, 'budget');
     const existingMoveIn = this.extractFromContext(userPrompt, 'move_in_date');
     const existingArea = this.extractFromContext(userPrompt, 'preferred_area');
@@ -65,9 +85,13 @@ export class GlmMockAdapter implements GlmAdapter {
     const preferredArea = this.extractPreferredArea(currentMessage) ?? existingArea;
     const occupants = this.extractOccupants(currentMessage) ?? existingOccupants;
     const pets = this.extractPets(currentMessage) ?? existingPets;
-    const wantsTour = /showing|tour|view|visit|appointment|schedule|book|yes|sounds good|that works|available time/i.test(currentMessage);
-    const needsHuman = /human|person|agent|broker|manager|legal|law|contract|lease terms|complaint|emergency/i.test(currentMessage);
-    const isGreeting = /hi|hello|good morning|good afternoon|hey/i.test(currentMessage) && currentMessage.length < 40;
+    const bedrooms = this.extractBedrooms(currentMessage) ?? this.extractFromContext(userPrompt, 'bedrooms');
+    const wantsTour = /showing|tour|view|visit|appointment|schedule|book|yes|sounds good|that works|available time|sure|okay/i.test(currentMessage);
+    const needsHuman = /human|person|agent|broker|manager|legal|law|contract|lease terms|complaint|emergency|speak to|talk to/i.test(currentMessage);
+    const isCasualGreeting = /^(hi|hello|hey|good morning|good afternoon|good evening|hola|howdy)\b/i.test(currentMessage.trim());
+    // Comandos de inicio de plataforma (Telegram /start, /help) significan
+    // "empezar de cero": forzan el saludo con presentación sin importar el estado.
+    const isStartCommand = /^\/(start|begin|hola|hello|hi|help)(\b|$)/i.test(currentMessage.trim());
 
     const slots: Record<string, string> = {};
     if (budget) slots.budget = budget;
@@ -75,64 +99,128 @@ export class GlmMockAdapter implements GlmAdapter {
     if (preferredArea) slots.preferred_area = preferredArea;
     if (occupants) slots.occupants = occupants;
     if (pets) slots.pets = pets;
+    if (bedrooms) slots.bedrooms = bedrooms;
 
+    // Handoff tiene prioridad absoluta.
     if (needsHuman) {
       return {
         reply: this.pick([
-          'I can connect you with a human leasing specialist for that. I will flag this conversation for follow-up so the right person reaches out.',
-          'That is a great question for our team. I am an assistant, so I will hand this off to a human leasing specialist who can help with the details.',
-          'Happy to get a person involved here. I will mark this conversation for follow-up and a leasing specialist will take it from here.',
+          `Of course. I'm the Virtual Agent for ${agencyName}, but for that I'd like to connect you with a member of our team. Let me flag this so the right person reaches out.`,
+          `Absolutely — that's best handled by a person. I'll hand this over to our leasing team at ${agencyName} so they can help you properly.`,
+          `Happy to get someone involved. I'll pass this to our team at ${agencyName} and they'll take it from here.`,
         ]),
         slots,
         next_state: 'handoff',
       };
     }
 
-    if (isGreeting) {
+    // SALUDO: siempre presentarse cordialmente al iniciar, sin pedir budget de golpe.
+    // Se dispara en estado greeting, con un saludo casual, o con un comando de
+    // inicio (/start) que significa "empezar de cero" sin importar el estado actual.
+    if (currentState === 'greeting' || isStartCommand || (isCasualGreeting && !budget && !moveInDate)) {
       return {
         reply: this.pick([
-          'Hi there! I am the virtual leasing assistant for our British Columbia rentals. What kind of home are you looking for, and what monthly budget should I keep in mind?',
-          'Hello! I am an AI leasing assistant here to help you find a place in BC. To get started, what monthly rent budget works for you?',
-          'Hey! I am the virtual leasing assistant. Tell me a bit about what you are looking for — which area, and what monthly budget do you have in mind?',
+          `Hi there! I'm the Virtual Agent for ${agencyName}. Are you looking to rent, buy, or sell a property?`,
+          `Hello! Welcome to ${agencyName}. I'm the Virtual Agent here — are you interested in renting, buying, or selling?`,
+          `Hey, thanks for reaching out to ${agencyName}! I'm the Virtual Agent. Are you looking to rent, buy, or sell?`,
+          `Good to hear from you! I'm the Virtual Agent at ${agencyName}. Would you like help renting, buying, or selling a property?`,
+        ]),
+        slots,
+        next_state: 'greeting',
+      };
+    }
+
+    // ===== Calificación progresiva =====
+    // El bot va preguntando lo que falte, en orden natural, antes de proponer.
+    // Si el prospecto lo da todo de golpe en un mensaje, se captura y se salta.
+
+    // 1. Budget (si no lo tenemos)
+    if (!budget) {
+      return {
+        reply: this.pick([
+          `That helps, thanks! So I can point you to the right homes, what monthly rent works for your budget?`,
+          `Got it. To narrow things down, what monthly rent range are you comfortable with?`,
+          `Thanks for sharing that. What monthly budget should I keep in mind while I look?`,
         ]),
         slots,
         next_state: 'collecting_budget',
       };
     }
 
+    // 2. Move-in (si tenemos budget pero no fecha)
     if (budget && !moveInDate) {
       const budgetText = this.formatBudget(budget);
       return {
         reply: this.pick([
-          `Great, I will keep it around $${budgetText}/month. When are you hoping to move in?`,
-          `Got it, around $${budgetText} a month. What move-in date works for you?`,
-          `Thanks! I will search around $${budgetText}/month. When would you ideally like to move in?`,
+          `Great, around $${budgetText}/month works. When are you hoping to move in?`,
+          `Perfect — $${budgetText} a month gives us good options. What move-in date are you thinking?`,
+          `Got it, $${budgetText}/month. And when would you ideally like to move in?`,
         ]),
         slots,
         next_state: 'collecting_movein',
       };
     }
 
+    // 3. Área/ubicación (si tenemos budget + move-in pero no ubicación)
+    if (budget && moveInDate && !preferredArea) {
+      return {
+        reply: this.pick([
+          `Got it, ${moveInDate}. And which area or neighborhood are you hoping to live in? Vancouver, Burnaby, Surrey, Richmond, Kelowna?`,
+          `Great, ${moveInDate} works. Where would you ideally like to live? Any specific city or area in mind?`,
+          `Thanks! Any particular area you're drawn to? We have homes across Greater Vancouver, the Valley, and the Okanagan.`,
+        ]),
+        slots,
+        next_state: 'collecting_movein',
+      };
+    }
+
+    // 4. Tamaño / habitaciones (si tenemos ubicación pero no bedrooms)
+    if (budget && moveInDate && preferredArea && !bedrooms) {
+      return {
+        reply: this.pick([
+          `Nice, ${preferredArea} is a great area. How many bedrooms are you looking for — a studio, 1, 2, or 3 beds?`,
+          `Great choice with ${preferredArea}. What size works for you? Just yourself, or how many people/bedrooms do you need?`,
+          `${preferredArea} has some lovely options. How big a place do you need — how many bedrooms?`,
+        ]),
+        slots,
+        next_state: 'collecting_movein',
+      };
+    }
+
+    // 5. Mascotas (si tenemos bedrooms pero no info de mascotas)
+    if (budget && moveInDate && preferredArea && bedrooms && !pets) {
+      return {
+        reply: this.pick([
+          `Got it, ${bedrooms} bedroom(s). Do you have any pets I should know about? Some of our buildings are pet-friendly.`,
+          `Perfect. And pets — do you have any? A cat, dog, or none? Some units allow them.`,
+          `Thanks! One more thing — do you have any pets? It helps me pick buildings with the right policy.`,
+        ]),
+        slots,
+        next_state: 'collecting_movein',
+      };
+    }
+
+    // 6. Si el prospecto pide tour explícitamente, ir a scheduling.
     if (wantsTour && budget && moveInDate) {
       return {
         reply: this.pick([
-          'Great. I will look for available tour times and send you the best options here.',
-          'Sounds good! Let me pull together the available tour slots for you.',
-          'Perfect. I will gather the open tour times and share the best options right here.',
+          `Love it. Let me pull up the available tour times for you.`,
+          `Great! I'll find some open slots so you can come see the place.`,
+          `Perfect — let me grab the available tour times and I'll share them here.`,
         ]),
         slots,
         next_state: 'scheduling',
       };
     }
 
-    if (budget && moveInDate) {
-      const areaText = preferredArea ? ` near ${preferredArea}` : '';
-      const petsText = pets && pets !== 'none' ? ` I will also keep your ${pets} in mind.` : '';
+    // 7. Ya tenemos todo lo esencial: proponer unidades.
+    if (budget && moveInDate && preferredArea && bedrooms) {
+      const petsText = pets && pets !== 'none' ? ` I'll also keep your ${pets} in mind.` : '';
       return {
         reply: this.pick([
-          `Thanks. Based on your budget and move-in timing, I found a few available homes${areaText} that may fit.${petsText} Would you like to schedule a tour?`,
-          `Perfect. With that budget and timing, there are some available homes${areaText} worth a look.${petsText} Shall I set up a tour?`,
-          `Good news — your budget and move-in window line up with a few available homes${areaText}.${petsText} Want me to arrange a tour?`,
+          `Based on what you've told me, I've got a few available homes near ${preferredArea} that could be a great fit.${petsText} Would you like to come see one?`,
+          `Good news — there are some available homes near ${preferredArea} that match what you're after.${petsText} Want me to set up a tour?`,
+          `With that budget and what you're looking for, a few homes near ${preferredArea} stand out.${petsText} Shall I arrange a viewing?`,
         ]),
         slots,
         next_state: 'proposing_tour',
@@ -142,24 +230,35 @@ export class GlmMockAdapter implements GlmAdapter {
     if (wantsTour) {
       return {
         reply: this.pick([
-          'Great. I will look for available tour times and send you the best options here.',
-          'Sounds good! Let me find the open tour slots for you.',
-          'Happy to help with that. I will gather the available tour times and share them here.',
+          `Sure thing! Let me find some open tour times for you.`,
+          `Happy to set that up. I'll pull the available slots.`,
+          `Of course — let me grab the open tour times and share them here.`,
         ]),
         slots,
         next_state: 'scheduling',
       };
     }
 
+    // Recolectar presupuesto de forma natural cuando el prospecto ya describió qué busca.
     return {
       reply: this.pick([
-        'Thanks for your message. To help narrow this down, what monthly rent budget should I use?',
-        'Thanks for reaching out! I am the virtual leasing assistant. What monthly budget do you have in mind?',
-        'Glad to help. So I can suggest the right homes, what monthly rent budget works for you?',
+        `That helps, thanks! So I can point you to the right homes, what monthly rent works for your budget?`,
+        `Got it. To narrow things down, what monthly rent range are you comfortable with?`,
+        `Thanks for sharing that. What monthly budget should I keep in mind while I look?`,
       ]),
       slots,
       next_state: 'collecting_budget',
     };
+  }
+
+  private extractCurrentState(prompt: string): string | undefined {
+    const match = prompt.match(/Current conversation state:\s*(\w+)/i);
+    return match?.[1];
+  }
+
+  private extractAgencyName(prompt: string): string | undefined {
+    const match = prompt.match(/^Agency:\s*(.+)$/m);
+    return match?.[1]?.trim();
   }
 
   private pick(options: string[]): string {
@@ -206,6 +305,13 @@ export class GlmMockAdapter implements GlmAdapter {
 
   private extractOccupants(message: string): string | undefined {
     const match = message.match(/\b(\d+)\s+(?:occupants?|people|adults?|tenants?)\b/i);
+    return match?.[1];
+  }
+
+  private extractBedrooms(message: string): string | undefined {
+    // "2 bedrooms", "2-bed", "1 bed", "3 bedroom", "studio"
+    if (/\bstudio\b/i.test(message)) return '0';
+    const match = message.match(/\b(\d)\s*(?:beds?|bedrooms?|br)\b/i);
     return match?.[1];
   }
 
