@@ -45,6 +45,8 @@ import {
   resolveSingleOptionAffirmation,
   sendWithRetry,
   shouldPrioritizeSearchCriteria,
+  locationScopeSlotsToClearForBroadBedroomRequest,
+  applyBroadBedroomRequestScope,
 } from './chatbot.service.js';
 
 describe('chatbot conversation identity', () => {
@@ -107,6 +109,54 @@ describe('chatbot conversation identity', () => {
       { bedrooms: '2', shortlist_scope: 'all' },
       extractContextualConversationSlots('show me all your 2 bedroom options', { bedrooms: '2' }),
     )).toBe(true);
+  });
+
+  it('removes a carried-over city when a broad bedroom search names no city', () => {
+    expect(locationScopeSlotsToClearForBroadBedroomRequest('show me all your 2 bedroom options')).toEqual([
+      'preferred_area',
+      'preferred_province',
+      'pending_area',
+      'pending_province',
+      'location_confirmation',
+      'location_confirmed',
+    ]);
+    expect(locationScopeSlotsToClearForBroadBedroomRequest('show me all your 2 bedroom options in Burnaby')).toEqual([]);
+  });
+
+  it('discards a model-suggested city for a broad bedroom search', () => {
+    expect(applyBroadBedroomRequestScope({
+      reply: 'Just to confirm, do you mean North Vancouver?',
+      slots: {
+        bedrooms: '2',
+        preferred_area: 'North Vancouver',
+        preferred_province: 'British Columbia',
+        pending_area: 'North Vancouver',
+        pending_province: 'British Columbia',
+      },
+    }, 'show me all your 2 bedroom option')).toMatchObject({
+      slots: { bedrooms: '2' },
+      clearSlots: expect.arrayContaining([
+        'preferred_area', 'preferred_province', 'pending_area', 'pending_province',
+      ]),
+    });
+  });
+
+  it('treats a broad bedroom search as a qualified location-agnostic search', () => {
+    const slots = {
+      transaction_intent: 'rent',
+      prospect_name: 'Carlos',
+      bedrooms: '2',
+      pets: 'dog',
+      budget: '3500',
+      move_in_date: 'September 2026',
+      inventory_scope: 'all',
+    };
+    expect(buildQualificationGuardReply(slots)).toBeUndefined();
+    expect(shouldTransitionToMatches('collecting_budget', slots)).toBe(true);
+    expect(filterQualifiedUnits([
+      { id: 'burnaby', name: 'Loft 410', propertyName: 'Burnaby Heights', city: 'Burnaby', rentCents: 275000, bedrooms: 2, bathrooms: 2, availableFrom: null, petPolicy: 'Pet friendly' },
+      { id: 'north-van', name: 'Estates 101', propertyName: 'North Van Bluffs', city: 'North Vancouver', rentCents: 310000, bedrooms: 2, bathrooms: 2, availableFrom: null, petPolicy: 'Pet friendly' },
+    ], { ...slots, preferred_area: 'Burnaby' }).map((unit) => unit.id)).toEqual(['burnaby', 'north-van']);
   });
 
   it('retries transient outbound delivery failures', async () => {

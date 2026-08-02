@@ -56,6 +56,15 @@ const SEARCH_CRITERIA_SLOT_KEYS = [
   'pets', 'budget', 'move_in_date',
 ] as const;
 
+const BROAD_BEDROOM_LOCATION_SCOPE_SLOT_KEYS = [
+  'preferred_area',
+  'preferred_province',
+  'pending_area',
+  'pending_province',
+  'location_confirmation',
+  'location_confirmed',
+] as const;
+
 export function recommendationStateSlotsToClear(
   existingSlots: Record<string, string>,
   incomingSlots: Record<string, string>,
@@ -73,6 +82,35 @@ export function shouldPrioritizeSearchCriteria(
   incomingSlots: Record<string, string>,
 ): boolean {
   return SEARCH_CRITERIA_SLOT_KEYS.some((key) => Boolean(incomingSlots[key]));
+}
+
+export function locationScopeSlotsToClearForBroadBedroomRequest(message: string): string[] {
+  const requestedSlots = extractContextualConversationSlots(message, {});
+  const asksForAllOptions = /\ball\b/i.test(message)
+    && /\b(?:options?|homes?|listings?|properties|units?)\b/i.test(message);
+  const requestsBedrooms = Boolean(
+    requestedSlots.bedrooms || requestedSlots.bedrooms_min || requestedSlots.bedrooms_max,
+  );
+  const namesACity = Object.keys(CANADIAN_CITY_ALIASES).some((alias) =>
+    new RegExp(`\\b${alias.replace(/\s+/g, '\\s+')}\\b`, 'i').test(message),
+  );
+  if (!asksForAllOptions || !requestsBedrooms || namesACity) return [];
+  return [...BROAD_BEDROOM_LOCATION_SCOPE_SLOT_KEYS];
+}
+
+export function applyBroadBedroomRequestScope(
+  turn: InterpretedTurn,
+  message: string,
+): InterpretedTurn {
+  const locationSlotsToClear = locationScopeSlotsToClearForBroadBedroomRequest(message);
+  if (locationSlotsToClear.length === 0) return turn;
+  const slots = { ...(turn.slots ?? {}) };
+  for (const key of locationSlotsToClear) delete slots[key];
+  return {
+    ...turn,
+    slots: { ...slots, inventory_scope: 'all' },
+    clearSlots: [...new Set([...(turn.clearSlots ?? []), ...locationSlotsToClear])],
+  };
 }
 
 export function canResolveActiveShortlist(state: ConversationState): boolean {
@@ -784,7 +822,7 @@ async function handleInboundMessageUnlocked(
   if (glmResult.intent === 'rent' || glmResult.intent === 'buy' || glmResult.intent === 'sell') {
     glmResult.slots = { ...(glmResult.slots ?? {}), transaction_intent: glmResult.intent };
   }
-  glmResult = sanitizeInterpretedTurn(glmResult);
+  glmResult = applyBroadBedroomRequestScope(sanitizeInterpretedTurn(glmResult), input.body);
   if (glmResult.clearSlots?.length) {
     await prisma.conversationSlot.deleteMany({
       where: { conversationId: conversation.id, key: { in: glmResult.clearSlots } },
@@ -1311,7 +1349,7 @@ export function buildQualificationGuardReply(
     return buildRentalNamePrompt();
   }
   if (slots.location_confirmation === 'pending') return undefined;
-  if (!slots.preferred_area) {
+  if (!slots.preferred_area && slots.inventory_scope !== 'all') {
     if (recentSlots.prospect_name) {
       return buildRentalWelcomeByName(slots.prospect_name);
     }
@@ -1346,7 +1384,7 @@ export function shouldTransitionToMatches(
   if (!isQualifyingState || slots.transaction_intent !== 'rent') return false;
   if (slots.pending_search_adjustment && slots.pending_search_adjustment !== 'resolved') return false;
   return buildQualificationGuardReply(slots) === undefined
-    && slots.location_confirmation === 'confirmed';
+    && (slots.location_confirmation === 'confirmed' || slots.inventory_scope === 'all');
 }
 
 export function shouldPersistPresentedUnit(state: ConversationState, presentedUnitCount: number): boolean {
@@ -2537,7 +2575,9 @@ export function excludePreviouslyShownUnits(units: AvailableUnit[], shownUnitIds
 }
 
 export function filterQualifiedUnits(units: AvailableUnit[], slots: Record<string, string>): AvailableUnit[] {
-  const area = slots.preferred_area?.trim().toLowerCase();
+  const area = slots.inventory_scope === 'all'
+    ? undefined
+    : slots.preferred_area?.trim().toLowerCase();
   const province = normalizeProvince(slots.preferred_province);
   const bedroomsIsMinimum = slots.bedrooms?.trim().endsWith('+') ?? false;
   const bedrooms = bedroomsIsMinimum ? Number.NaN : Number.parseInt(slots.bedrooms ?? '', 10);
