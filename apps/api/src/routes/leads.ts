@@ -37,15 +37,25 @@ publicRouter.get('/shortlists/:token', async (req, res, next) => {
     const result = await getPublicShortlist(req.params.token);
     if (!result) return void res.status(404).json({ error: 'Shortlist not found or expired' });
     const slotMap = Object.fromEntries(result.shortlist.conversation.slots.map((slot) => [slot.key, slot.value]));
+    const mapUnit = (unit: typeof result.units[number]) => ({
+      id: unit!.id, name: unit!.name, rentCents: unit!.rentCents, bedrooms: unit!.bedrooms,
+      bathrooms: unit!.bathrooms, squareFeet: unit!.squareFeet, amenities: unit!.amenities,
+      petPolicy: unit!.petPolicy, availableFrom: unit!.availableFrom, isActive: unit!.isActive,
+      property: { name: unit!.property.name, address: unit!.property.address, city: unit!.property.city, province: unit!.property.province },
+      photos: unit!.listingPhotos.map((photo) => ({ url: photo.enhancedUrl ?? photo.originalUrl })),
+    });
     res.json({
       selectedUnitId: result.shortlist.selectedUnitId,
       contact: buildShortlistPrefillContact(slotMap, result.shortlist.conversation.lead),
-      units: result.units.map((unit) => ({
-        id: unit!.id, name: unit!.name, rentCents: unit!.rentCents, bedrooms: unit!.bedrooms,
-        bathrooms: unit!.bathrooms, squareFeet: unit!.squareFeet, amenities: unit!.amenities,
-        petPolicy: unit!.petPolicy, availableFrom: unit!.availableFrom, isActive: unit!.isActive,
-        property: { name: unit!.property.name, address: unit!.property.address, city: unit!.property.city, province: unit!.property.province },
-        photos: unit!.listingPhotos.map((photo) => ({ url: photo.enhancedUrl ?? photo.originalUrl })),
+      tenantName: result.tenantName,
+      units: result.units.map(mapUnit),
+      catalog: result.catalog.map((unit) => ({
+        id: unit.id, name: unit.name, slug: unit.slug, rentCents: unit.rentCents,
+        bedrooms: unit.bedrooms, bathrooms: unit.bathrooms, squareFeet: unit.squareFeet,
+        amenities: unit.amenities, petPolicy: unit.petPolicy, parking: unit.parking,
+        utilities: unit.utilities, availableFrom: unit.availableFrom,
+        property: { name: unit.property.name, address: unit.property.address, city: unit.property.city, province: unit.property.province },
+        photos: unit.listingPhotos.map((photo) => ({ url: photo.enhancedUrl ?? photo.originalUrl, isPrimary: photo.isPrimary })),
       })),
     });
   } catch (error) { next(error); }
