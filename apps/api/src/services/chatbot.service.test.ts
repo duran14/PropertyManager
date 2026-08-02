@@ -697,6 +697,42 @@ describe('chatbot conversation identity', () => {
     });
   });
 
+  it.each([
+    ['sorry Carlos'],
+    ['no, my name is Carlos'],
+  ])('corrects an already collected prospect name from natural language: %s', (message) => {
+    const turn = buildFastQualificationTurn(message, {
+      transaction_intent: 'rent',
+      prospect_name: 'Carlops',
+    });
+
+    expect(turn).toMatchObject({
+      slots: { prospect_name: 'Carlos' },
+      next_state: 'collecting_budget',
+    });
+    expect(turn?.slots).not.toHaveProperty('pending_area');
+    expect(turn?.reply).toMatch(/Carlos.*city|city.*Carlos/i);
+  });
+
+  it('recovers a name correction after it was misclassified as a pending location', () => {
+    const turn = buildFastQualificationTurn('no, my name is Carlos', {
+      transaction_intent: 'rent',
+      prospect_name: 'Carlops',
+      pending_area: 'Sorry Carlos',
+      pending_province: 'British Columbia',
+      location_confirmation: 'pending',
+    });
+
+    expect(turn).toMatchObject({
+      slots: {
+        prospect_name: 'Carlos',
+        location_confirmation: 'retry',
+      },
+      next_state: 'collecting_budget',
+    });
+    expect(turn?.reply).toMatch(/Carlos.*city|city.*Carlos/i);
+  });
+
   it('does not loop on the same budget after the prospect already confirmed the area priority', () => {
     const turn = buildNoMatchAdjustmentTurn('2600', {
       transaction_intent: 'rent',

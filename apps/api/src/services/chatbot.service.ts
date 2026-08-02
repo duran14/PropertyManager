@@ -1549,6 +1549,22 @@ function parseCanadianLocation(message: string): { area: string; province: strin
   return { area: normalizeCanadianCity(cleaned), province: 'British Columbia' };
 }
 
+function parseExplicitNameCorrection(message: string): string | undefined {
+  const trimmed = message.trim().replace(/[.!?]+$/, '').trim();
+  const match = trimmed.match(
+    /^(?:sorry[,\s]+)?(?:no[,\s]+)?(?:my name is|call me|i(?:'m| am)|it(?:'s| is))\s+(.+)$/i,
+  ) ?? trimmed.match(/^sorry[,\s]+([\p{L}][\p{L}' -]{1,49})$/u);
+  const candidate = match?.[1]?.trim();
+  if (!candidate || !/^[\p{L}][\p{L}' -]{1,49}$/u.test(candidate)) return undefined;
+  const words = candidate.toLowerCase().split(/\s+/);
+  const conversationalWords = new Set([
+    'i', "i'm", 'you', 'that', 'this', 'what', 'why', 'how', 'please', 'thanks',
+    'okay', 'ok', 'yes', 'no', 'maybe', 'understand', 'get', 'confused', 'help', 'sorry',
+  ]);
+  if (words.length > 3 || words.some((word) => conversationalWords.has(word))) return undefined;
+  return toHumanTitleCase(candidate);
+}
+
 function normalizeProvince(value: string | undefined): string | undefined {
   if (!value) return undefined;
   const normalized = value.trim().toLowerCase().replace(/\.$/, '');
@@ -1656,6 +1672,17 @@ export function buildFastQualificationTurn(
     return {
       reply: buildRentalWelcomeByName(name),
       slots: { prospect_name: name },
+      next_state: 'collecting_budget',
+    };
+  }
+
+  const correctedName = !existingSlots.preferred_area && existingSlots.prospect_name
+    ? parseExplicitNameCorrection(message)
+    : undefined;
+  if (correctedName) {
+    return {
+      reply: `Thanks for correcting me, ${correctedName}. Which city or area would work best for you?`,
+      slots: { prospect_name: correctedName, location_confirmation: 'retry' },
       next_state: 'collecting_budget',
     };
   }
