@@ -12,9 +12,6 @@ import { getAvailableSlots, scheduleTour } from './scheduling.service.js';
 import { createShortlist, rotateShortlistToken } from './shortlist.service.js';
 import { nextDeliveryRetryAt } from './message-delivery-retry.service.js';
 import { buildOwnershipConversationTurn } from './ownership-conversation.service.js';
-import { applyRentalProfilePatch } from './rental-conversation.context.js';
-import { interpretRentalTurn } from './rental-conversation.interpreter.js';
-import type { ConversationTurn, RentalProfile, RentalProfileField } from './rental-conversation.types.js';
 import {
   buildRentalAreaAccepted,
   buildRentalAreaConfirmation,
@@ -189,15 +186,6 @@ export interface InterpretedTurn {
   selection_scope?: 'single' | 'multiple' | 'all';
   next_state?: ConversationState;
   clearSlots?: string[];
-}
-
-const rentalProfileFields = new Set<RentalProfileField>([
-  'prospect_name', 'transaction_intent', 'preferred_area', 'preferred_province',
-  'bedrooms', 'bedrooms_min', 'bedrooms_max', 'pets', 'budget', 'occupants', 'move_in_date',
-]);
-
-function isRentalProfileField(key: string): key is RentalProfileField {
-  return rentalProfileFields.has(key as RentalProfileField);
 }
 
 export function shouldUseDeterministicFastPath(message: string): boolean {
@@ -835,18 +823,10 @@ async function handleInboundMessageUnlocked(
     glmResult.slots = { ...(glmResult.slots ?? {}), transaction_intent: glmResult.intent };
   }
   glmResult = applyBroadBedroomRequestScope(sanitizeInterpretedTurn(glmResult), input.body);
-  const rentalProfileClear = new Set(
-    (glmResult.clearSlots ?? []).filter(isRentalProfileField),
-  );
-  const operationalSlotsToClear = (glmResult.clearSlots ?? []).filter(
-    (key) => !isRentalProfileField(key),
-  );
-  if (operationalSlotsToClear.length > 0) {
-    await prisma.conversationSlot.deleteMany({
-      where: { conversationId: conversation.id, key: { in: operationalSlotsToClear } },
-    });
-  }
   if (glmResult.clearSlots?.length) {
+    await prisma.conversationSlot.deleteMany({
+      where: { conversationId: conversation.id, key: { in: glmResult.clearSlots } },
+    });
     for (const key of glmResult.clearSlots) delete existingSlots[key];
   }
   if (
@@ -856,12 +836,10 @@ async function handleInboundMessageUnlocked(
   ) {
     const correctedArea = contextualSlots.preferred_area;
     const correctedProvince = contextualSlots.preferred_province ?? 'British Columbia';
-    rentalProfileClear.add('preferred_area');
-    rentalProfileClear.add('preferred_province');
     await prisma.conversationSlot.deleteMany({
       where: {
         conversationId: conversation.id,
-        key: 'location_confirmed',
+        key: { in: ['preferred_area', 'preferred_province', 'location_confirmed'] },
       },
     });
     delete existingSlots.preferred_area;
@@ -892,44 +870,19 @@ async function handleInboundMessageUnlocked(
     for (const key of staleRecommendationSlots) delete existingSlots[key];
   }
 
-  const rentalProfileSet: RentalProfile = {};
-  const operationalSlots: Record<string, string> = {};
-  for (const [key, value] of Object.entries(glmResult.slots ?? {})) {
-    if (!value) continue;
-    if (isRentalProfileField(key)) rentalProfileSet[key] = value;
-    else operationalSlots[key] = value;
-  }
-
-  let finalRentalProfile: RentalProfile | undefined;
-  if (rentalProfileClear.size > 0 || Object.keys(rentalProfileSet).length > 0) {
-    finalRentalProfile = await prisma.$transaction((tx) => applyRentalProfilePatch({
-      tx,
-      tenantId: input.tenantId,
-      conversationId: conversation.id,
-      leadId: conversation.leadId,
-      patch: { clear: [...rentalProfileClear], set: rentalProfileSet },
-    }));
-  }
-
-  for (const [key, value] of Object.entries(operationalSlots)) {
-    await prisma.conversationSlot.upsert({
-      where: { conversationId_key: { conversationId: conversation.id, key } },
-      update: { value },
-      create: { conversationId: conversation.id, key, value },
-    });
-  }
-
-  if (finalRentalProfile) {
-    for (const key of rentalProfileFields) {
-      if (finalRentalProfile[key] === undefined) delete existingSlots[key];
+  if (glmResult.slots) {
+    for (const [key, value] of Object.entries(glmResult.slots)) {
+      if (value) {
+        await prisma.conversationSlot.upsert({
+          where: { conversationId_key: { conversationId: conversation.id, key } },
+          update: { value },
+          create: { conversationId: conversation.id, key, value },
+        });
+      }
     }
   }
 
-  const effectiveSlots: Record<string, string> = {
-    ...existingSlots,
-    ...finalRentalProfile,
-    ...(glmResult.slots ?? {}),
-  };
+  const effectiveSlots = { ...existingSlots, ...(glmResult.slots ?? {}) };
   const candidateInventory = glmResult.intent === 'request_more_options' && latestShortlist
     ? excludePreviouslyShownUnits(availableUnits, latestShortlist.unitIds)
     : availableUnits;
@@ -1288,120 +1241,80 @@ async function callGlm(
 ): Promise<InterpretedTurn> {
   const knowledgeContext = await getTenantKnowledgeContext(ctx.tenantId, ctx.userMessage);
   const tenantName = await getTenantName(ctx.tenantId);
-  const profile: RentalProfile = {};
-  for (const field of rentalProfileFields) {
-    if (ctx.existingSlots[field] !== undefined) profile[field] = ctx.existingSlots[field];
-  }
-  const history = ctx.history
+  const systemPrompt = buildSystemPrompt(
+    ctx.currentState,
+    ctx.availableUnits,
+    ctx.existingSlots,
+    knowledgeContext,
+    tenantName,
+  );
+  const historyText = ctx.history
     .slice(-10)
-    .filter((message): message is { role: 'user' | 'assistant'; content: string } =>
-      message.role === 'user' || message.role === 'assistant');
-  let pendingSlotCount = 0;
+    .map((message) => `${message.role}: ${message.content}`)
+    .join('\n');
+
+  const slotsText = Object.keys(ctx.existingSlots).length > 0
+    ? '\nKnown user information:\n' + Object.entries(ctx.existingSlots).map(([key, value]) => `  ${key}: ${value}`).join('\n')
+    : '';
+
   try {
-    const pendingSlots = JSON.parse(ctx.existingSlots.pending_slots ?? '[]') as unknown;
-    if (Array.isArray(pendingSlots)) pendingSlotCount = pendingSlots.length;
-  } catch {
-    pendingSlotCount = 0;
-  }
+    const res = await glm.reason({
+      systemPrompt,
+      userPrompt: `Agency: ${tenantName}\nHistory:\n${historyText}${slotsText}\n\nCurrent user message: ${ctx.userMessage}`,
+      responseSchema: {
+        type: 'object',
+        properties: {
+          reply: { type: 'string', description: 'Bot reply to the user (max 2-3 sentences)' },
+          intent: {
+            type: 'string',
+            enum: ['start', 'rent', 'buy', 'sell', 'provide_information', 'confirm', 'correct_information', 'ask_clarification', 'request_matches', 'request_more_options', 'select_options', 'schedule_tour', 'handoff', 'other'],
+          },
+          selected_options: {
+            type: 'array',
+            items: { type: 'integer' },
+            description: 'One-based option numbers referenced by the user. Empty unless selecting displayed options.',
+          },
+          selection_scope: {
+            type: 'string',
+            enum: ['single', 'multiple', 'all'],
+          },
+          slots: {
+            type: 'object',
+            description: 'Information extracted from the message (budget, move_in_date, occupants, pets, etc.)',
+            properties: {
+              prospect_name: { type: 'string' },
+              transaction_intent: { type: 'string', enum: ['rent', 'buy', 'sell'] },
+              budget: { type: 'string' },
+              move_in_date: { type: 'string' },
+              occupants: { type: 'string' },
+              pets: { type: 'string' },
+              preferred_area: { type: 'string' },
+              preferred_province: { type: 'string' },
+              bedrooms: { type: 'string', description: 'Number of bedrooms (0 for studio)' },
+            },
+          },
+          next_state: {
+            type: 'string',
+            enum: ['greeting', 'collecting_budget', 'collecting_movein', 'proposing_units', 'proposing_tour', 'scheduling', 'handoff'],
+          },
+        },
+        required: ['reply', 'intent', 'next_state'],
+      },
+      temperature: 0.7,
+    });
 
-  const { turn, providerFailed } = await interpretRentalTurn({
-    glm,
-    context: {
-      tenantName,
-      history,
-      profile,
-      selectedUnitId: ctx.existingSlots.selected_unit_id ?? ctx.existingSlots.scheduling_unit_id,
-      pendingSlotCount,
-      visibleUnits: ctx.availableUnits,
-      knowledgeContext,
-    },
-    message: ctx.userMessage,
-  });
-
-  const deterministicFallback = providerFailed
-    ? buildDeterministicQualificationTurn(ctx.userMessage, ctx.existingSlots, tenantName)
-    : undefined;
-  return resolveRentalTurnToInterpreted({
-    turn,
-    providerFailed,
-    currentState: ctx.currentState,
-    availableUnits: ctx.availableUnits,
-    deterministicFallback,
-  });
-}
-
-/**
- * Convierte el `ConversationTurn` semántico (resultado del intérprete) al
- * `InterpretedTurn` legado que el handler ya sabe procesar. Es una función
- * pura para poder probar el mapeo sin tocar Prisma ni al proveedor GLM.
- *
- * Cuando `providerFailed` es true y existe un `deterministicFallback`, se
- * devuelve ese turno determinista (caída por outage real del proveedor);
- * solo se recurre a la clarificación segura si tampoco hay fallback. En el
- * camino feliz se mapea el turno semántico con `legacyIntentForRentalTurn`
- * y `nextStateForRentalTurn`, conservando slots, selecciones y clarificaciones.
- */
-export function resolveRentalTurnToInterpreted(input: {
-  turn: ConversationTurn;
-  providerFailed: boolean;
-  currentState: ConversationState;
-  availableUnits: AvailableUnit[];
-  deterministicFallback?: InterpretedTurn;
-}): InterpretedTurn {
-  const { turn, providerFailed, currentState, availableUnits, deterministicFallback } = input;
-
-  if (providerFailed) {
-    if (deterministicFallback) return deterministicFallback;
+    const parsed = parseGlmJsonResponse(res.content);
     return {
-      reply: turn.reply,
-      intent: 'ask_clarification',
-      next_state: currentState,
+      reply: parsed.reply ?? 'What else can I help with?',
+      intent: parsed.intent,
+      slots: parsed.slots,
+      selected_options: parsed.selected_options,
+      selection_scope: parsed.selection_scope,
+      next_state: parsed.next_state,
     };
+  } catch {
+    return buildGlmFallback(ctx.currentState, tenantName, ctx.userMessage, ctx.existingSlots);
   }
-
-  const lowConfidence = turn.confidence === 'low';
-  const intent = lowConfidence ? 'ask_clarification' : legacyIntentForRentalTurn(turn.intent);
-  const selectedOptions = turn.selection?.unitIds
-    ?.map((unitId) => availableUnits.findIndex((unit) => unit.id === unitId) + 1)
-    .filter((option) => option > 0);
-  return {
-    reply: turn.reply,
-    intent,
-    slots: turn.profile.set,
-    clearSlots: turn.profile.clear,
-    selected_options: selectedOptions?.length ? selectedOptions : undefined,
-    selection_scope: selectedOptions?.length
-      ? selectedOptions.length > 1 ? 'multiple' : 'single'
-      : undefined,
-    next_state: lowConfidence ? currentState : nextStateForRentalTurn(turn.intent, currentState),
-  };
-}
-
-function legacyIntentForRentalTurn(intent: ConversationTurn['intent']): ConversationIntent {
-  const intents: Record<ConversationTurn['intent'], ConversationIntent> = {
-    discover: 'provide_information',
-    compare: 'request_matches',
-    select_unit: 'select_options',
-    request_tour: 'schedule_tour',
-    choose_slot: 'confirm',
-    handoff: 'handoff',
-    other: 'other',
-  };
-  return intents[intent];
-}
-
-function nextStateForRentalTurn(
-  intent: ConversationTurn['intent'],
-  currentState: ConversationState,
-): ConversationState {
-  const states: Partial<Record<ConversationTurn['intent'], ConversationState>> = {
-    compare: 'proposing_tour',
-    select_unit: 'proposing_units',
-    request_tour: 'scheduling',
-    choose_slot: 'scheduling',
-    handoff: 'handoff',
-  };
-  return states[intent] ?? currentState;
 }
 
 export function parseGlmJsonResponse(content: string): {
@@ -2409,7 +2322,7 @@ export function buildNoMatchAdjustmentTurn(
   return undefined;
 }
 
-export function buildSystemPrompt(
+function buildSystemPrompt(
   state: ConversationState,
   availableUnits: Array<AvailableUnit>,
   slots: Record<string, string>,
