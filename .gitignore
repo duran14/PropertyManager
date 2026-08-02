@@ -48,6 +48,7 @@ playwright-report/
 
 # Local planning artifacts
 .zcode/
+.worktrees/
 
 # Local QA screenshots
 shortlist_*.png
