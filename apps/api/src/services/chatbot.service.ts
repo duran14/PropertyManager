@@ -949,13 +949,13 @@ async function handleInboundMessageUnlocked(
   }
 
   if (shouldGenerateRecommendations && presentedUnits.length > 0) {
-    await createShortlist({
+    const { token: shortlistToken } = await createShortlist({
       tenantId: input.tenantId,
       conversationId: conversation.id,
       unitIds: presentedUnits.slice(0, 3).map((unit) => unit.id),
     });
     if (matchingUnits.length > 0) {
-      finalReply = buildUnitRecommendationReply(presentedUnits, effectiveSlots);
+      finalReply = `${buildUnitRecommendationReply(presentedUnits, effectiveSlots)}\n\nYou can see photos, compare details, and pick a tour time here:\n${buildShortlistMarkdownLink(shortlistToken)}`;
       effectiveSlots.recommendation_kind = 'exact';
       await prisma.conversationSlot.upsert({
         where: { conversationId_key: { conversationId: conversation.id, key: 'recommendation_kind' } },
