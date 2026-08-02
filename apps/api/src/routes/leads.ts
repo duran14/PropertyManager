@@ -48,6 +48,7 @@ publicRouter.get('/shortlists/:token', async (req, res, next) => {
       selectedUnitId: result.shortlist.selectedUnitId,
       contact: buildShortlistPrefillContact(slotMap, result.shortlist.conversation.lead),
       tenantName: result.tenantName,
+      tenantId: result.shortlist.tenantId,
       units: result.units.map(mapUnit),
       catalog: result.catalog.map((unit) => ({
         id: unit.id, name: unit.name, slug: unit.slug, rentCents: unit.rentCents,
@@ -321,6 +322,66 @@ publicRouter.post('/units/:slug/contact', async (req, res, next) => {
   } catch (err) {
     next(err);
   }
+});
+
+publicRouter.get('/units/:slug/slots', async (req, res, next) => {
+  try {
+    const tenantId = req.headers['x-tenant-id'] ?? req.query.tenant;
+    if (typeof tenantId !== 'string') return void res.status(400).json({ error: 'x-tenant-id header is required' });
+    const unit = await prisma.unit.findFirst({ where: { tenantId, slug: req.params.slug, isActive: true }, select: { id: true } });
+    if (!unit) return void res.status(404).json({ error: 'Unit not found' });
+    res.json(await getAvailableSlots(tenantId, unit.id, getAdapters().showmojo));
+  } catch (err) { next(err); }
+});
+
+const publicScheduleSchema = z.object({
+  slotIndex: z.number().int().min(0),
+  name: z.string().min(1),
+  phone: z.string().min(1),
+  email: z.string().email(),
+});
+
+publicRouter.post('/units/:slug/schedule', async (req, res, next) => {
+  try {
+    const tenantId = req.headers['x-tenant-id'] ?? req.query.tenant;
+    if (typeof tenantId !== 'string') return void res.status(400).json({ error: 'x-tenant-id header is required' });
+    const unit = await prisma.unit.findFirst({
+      where: { tenantId, slug: req.params.slug, isActive: true },
+      include: { property: { select: { name: true, address: true, city: true, province: true } } },
+    });
+    if (!unit) return void res.status(404).json({ error: 'Unit not found' });
+    const parsed = publicScheduleSchema.safeParse(req.body);
+    if (!parsed.success) return void res.status(400).json({ error: 'Invalid data', details: parsed.error.flatten() });
+
+    let lead = await prisma.lead.findFirst({ where: { tenantId, email: parsed.data.email }, orderBy: { updatedAt: 'desc' } });
+    if (!lead) {
+      lead = await prisma.lead.create({
+        data: {
+          tenantId,
+          name: parsed.data.name,
+          phone: parsed.data.phone,
+          email: parsed.data.email,
+          status: 'new_',
+          source: 'unit_url',
+        },
+      });
+    }
+
+    const result = await scheduleTour({
+      tenantId,
+      unitId: unit.id,
+      leadId: lead.id,
+      slotIndex: parsed.data.slotIndex,
+      prospectName: parsed.data.name,
+      prospectPhone: parsed.data.phone,
+      prospectEmail: parsed.data.email,
+      adapter: getAdapters().showmojo,
+    });
+
+    const unitLabel = `${unit.property.name} — ${unit.name}`;
+    const unitAddress = `${unit.property.address}, ${unit.property.city}, ${unit.property.province}`;
+    res.json({ scheduledAt: result.scheduledAt, unitLabel, unitAddress });
+  } catch (err) { next(err); }
 });
 
 // =============== RUTAS PRIVADAS ===============
