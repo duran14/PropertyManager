@@ -102,6 +102,10 @@ const envSchema = z.object({
       z.string().min(1).default('tenant_demo_pm'),
     ),
 
+  // --- Resend (correo transaccional) ---
+  RESEND_API_KEY: z.string().optional().default(''),
+  RESEND_FROM_EMAIL: z.string().optional().default(''),
+
   // --- Umbral HITL por defecto ---
   DEFAULT_CONFIDENCE_THRESHOLD: z.coerce.number().min(0).max(1).default(0.85),
 });
@@ -118,7 +122,8 @@ export type IntegrationKey =
   | 'photo_enhancement'
   | 'showmojo'
   | 'docusign'
-  | 'telegram';
+  | 'telegram'
+  | 'email';
 
 /**
  * Carga y valida process.env contra el schema. Lanza (fail-fast) si algo
@@ -161,5 +166,7 @@ export function isIntegrationConfigured(env: Env, key: IntegrationKey): boolean 
       return Boolean(env.DOCUSIGN_INTEGRATION_KEY && env.DOCUSIGN_USER_ID);
     case 'telegram':
       return Boolean(env.TELEGRAM_BOT_TOKEN);
+    case 'email':
+      return Boolean(env.RESEND_API_KEY && env.RESEND_FROM_EMAIL);
   }
 }

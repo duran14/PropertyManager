@@ -34,9 +34,11 @@ import { StripeMockAdapter } from './mocks/stripe.mock.js';
 import { TwilioMockAdapter } from './mocks/twilio.mock.js';
 import { TelegramMockAdapter } from './mocks/telegram.mock.js';
 import { WebChatMockAdapter } from './mocks/webchat.mock.js';
+import { EmailMockAdapter } from './mocks/email.mock.js';
 import { GlmRealAdapter } from './real/glm.real.js';
 import { TelegramRealAdapter } from './real/telegram.real.js';
 import { TwilioRealAdapter } from './real/twilio.real.js';
+import { ResendEmailAdapter } from './real/resend-email.real.js';
 
 export interface Adapters {
   buildium: BuildiumAdapter;
@@ -78,6 +80,7 @@ export function createAdapters(env: Env): Adapters {
     showmojo: !isIntegrationConfigured(env, 'showmojo'),
     docusign: !isIntegrationConfigured(env, 'docusign'),
     telegram: !isIntegrationConfigured(env, 'telegram'),
+    email: !isIntegrationConfigured(env, 'email'),
   };
 
   return {
@@ -113,7 +116,9 @@ export function createAdapters(env: Env): Adapters {
         ? new TelegramRealAdapter(env.TELEGRAM_BOT_TOKEN)
         : new TelegramMockAdapter(),
       web: new WebChatMockAdapter(),
-      email: new WebChatMockAdapter(),
+      email: isIntegrationConfigured(env, 'email')
+        ? new ResendEmailAdapter({ apiKey: env.RESEND_API_KEY, from: env.RESEND_FROM_EMAIL })
+        : new EmailMockAdapter(),
     },
     mockModes,
   };

@@ -9,6 +9,7 @@ import { getEnv } from '../config/env.js';
 import { requireAuth, requireUser } from './context.js';
 import { authMiddleware } from './middleware.js';
 import { signAccessToken, signRefreshToken, verifyRefreshToken } from './jwt.js';
+import { refreshCookieOptions } from './cookies.js';
 
 export const authRouter = Router();
 
@@ -52,13 +53,7 @@ authRouter.post('/login', async (req, res) => {
   });
 
   const env = getEnv();
-  res.cookie('refreshToken', refreshToken, {
-    httpOnly: true,
-    secure: env.NODE_ENV === 'production',
-    sameSite: 'strict',
-    path: '/auth',
-    maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
-  });
+  res.cookie('refreshToken', refreshToken, refreshCookieOptions(env.NODE_ENV));
 
   res.json({
     accessToken,
@@ -105,7 +100,7 @@ authRouter.post('/refresh', async (req, res) => {
 });
 
 authRouter.post('/logout', (_req, res) => {
-  res.clearCookie('refreshToken', { path: '/auth' });
+  res.clearCookie('refreshToken', { path: '/' });
   res.status(204).end();
 });
 

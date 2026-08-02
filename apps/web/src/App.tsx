@@ -50,7 +50,8 @@ function PhotosRoute() {
 }
 
 function ProtectedRoutes() {
-  const { user } = useAuth();
+  const { user, isRestoring } = useAuth();
+  if (isRestoring) return null;
   if (!user) return <Navigate to="/login" replace />;
   return (
     <Layout>
