@@ -12,6 +12,7 @@ import { getAvailableSlots, scheduleTour } from './scheduling.service.js';
 import { createShortlist, rotateShortlistToken } from './shortlist.service.js';
 import { nextDeliveryRetryAt } from './message-delivery-retry.service.js';
 import { buildOwnershipConversationTurn } from './ownership-conversation.service.js';
+import { applyRentalProfilePatch } from './rental-conversation.context.js';
 import { interpretRentalTurn } from './rental-conversation.interpreter.js';
 import type { ConversationTurn, RentalProfile, RentalProfileField } from './rental-conversation.types.js';
 import {
@@ -188,6 +189,15 @@ export interface InterpretedTurn {
   selection_scope?: 'single' | 'multiple' | 'all';
   next_state?: ConversationState;
   clearSlots?: string[];
+}
+
+const rentalProfileFields = new Set<RentalProfileField>([
+  'prospect_name', 'transaction_intent', 'preferred_area', 'preferred_province',
+  'bedrooms', 'bedrooms_min', 'bedrooms_max', 'pets', 'budget', 'occupants', 'move_in_date',
+]);
+
+function isRentalProfileField(key: string): key is RentalProfileField {
+  return rentalProfileFields.has(key as RentalProfileField);
 }
 
 export function shouldUseDeterministicFastPath(message: string): boolean {
@@ -825,10 +835,18 @@ async function handleInboundMessageUnlocked(
     glmResult.slots = { ...(glmResult.slots ?? {}), transaction_intent: glmResult.intent };
   }
   glmResult = applyBroadBedroomRequestScope(sanitizeInterpretedTurn(glmResult), input.body);
-  if (glmResult.clearSlots?.length) {
+  const rentalProfileClear = new Set(
+    (glmResult.clearSlots ?? []).filter(isRentalProfileField),
+  );
+  const operationalSlotsToClear = (glmResult.clearSlots ?? []).filter(
+    (key) => !isRentalProfileField(key),
+  );
+  if (operationalSlotsToClear.length > 0) {
     await prisma.conversationSlot.deleteMany({
-      where: { conversationId: conversation.id, key: { in: glmResult.clearSlots } },
+      where: { conversationId: conversation.id, key: { in: operationalSlotsToClear } },
     });
+  }
+  if (glmResult.clearSlots?.length) {
     for (const key of glmResult.clearSlots) delete existingSlots[key];
   }
   if (
@@ -838,10 +856,12 @@ async function handleInboundMessageUnlocked(
   ) {
     const correctedArea = contextualSlots.preferred_area;
     const correctedProvince = contextualSlots.preferred_province ?? 'British Columbia';
+    rentalProfileClear.add('preferred_area');
+    rentalProfileClear.add('preferred_province');
     await prisma.conversationSlot.deleteMany({
       where: {
         conversationId: conversation.id,
-        key: { in: ['preferred_area', 'preferred_province', 'location_confirmed'] },
+        key: 'location_confirmed',
       },
     });
     delete existingSlots.preferred_area;
@@ -872,19 +892,44 @@ async function handleInboundMessageUnlocked(
     for (const key of staleRecommendationSlots) delete existingSlots[key];
   }
 
-  if (glmResult.slots) {
-    for (const [key, value] of Object.entries(glmResult.slots)) {
-      if (value) {
-        await prisma.conversationSlot.upsert({
-          where: { conversationId_key: { conversationId: conversation.id, key } },
-          update: { value },
-          create: { conversationId: conversation.id, key, value },
-        });
-      }
+  const rentalProfileSet: RentalProfile = {};
+  const operationalSlots: Record<string, string> = {};
+  for (const [key, value] of Object.entries(glmResult.slots ?? {})) {
+    if (!value) continue;
+    if (isRentalProfileField(key)) rentalProfileSet[key] = value;
+    else operationalSlots[key] = value;
+  }
+
+  let finalRentalProfile: RentalProfile | undefined;
+  if (rentalProfileClear.size > 0 || Object.keys(rentalProfileSet).length > 0) {
+    finalRentalProfile = await prisma.$transaction((tx) => applyRentalProfilePatch({
+      tx,
+      tenantId: input.tenantId,
+      conversationId: conversation.id,
+      leadId: conversation.leadId,
+      patch: { clear: [...rentalProfileClear], set: rentalProfileSet },
+    }));
+  }
+
+  for (const [key, value] of Object.entries(operationalSlots)) {
+    await prisma.conversationSlot.upsert({
+      where: { conversationId_key: { conversationId: conversation.id, key } },
+      update: { value },
+      create: { conversationId: conversation.id, key, value },
+    });
+  }
+
+  if (finalRentalProfile) {
+    for (const key of rentalProfileFields) {
+      if (finalRentalProfile[key] === undefined) delete existingSlots[key];
     }
   }
 
-  const effectiveSlots = { ...existingSlots, ...(glmResult.slots ?? {}) };
+  const effectiveSlots: Record<string, string> = {
+    ...existingSlots,
+    ...finalRentalProfile,
+    ...(glmResult.slots ?? {}),
+  };
   const candidateInventory = glmResult.intent === 'request_more_options' && latestShortlist
     ? excludePreviouslyShownUnits(availableUnits, latestShortlist.unitIds)
     : availableUnits;
@@ -1243,12 +1288,8 @@ async function callGlm(
 ): Promise<InterpretedTurn> {
   const knowledgeContext = await getTenantKnowledgeContext(ctx.tenantId, ctx.userMessage);
   const tenantName = await getTenantName(ctx.tenantId);
-  const profileFields: RentalProfileField[] = [
-    'prospect_name', 'transaction_intent', 'preferred_area', 'preferred_province',
-    'bedrooms', 'bedrooms_min', 'bedrooms_max', 'pets', 'budget', 'occupants', 'move_in_date',
-  ];
   const profile: RentalProfile = {};
-  for (const field of profileFields) {
+  for (const field of rentalProfileFields) {
     if (ctx.existingSlots[field] !== undefined) profile[field] = ctx.existingSlots[field];
   }
   const history = ctx.history
