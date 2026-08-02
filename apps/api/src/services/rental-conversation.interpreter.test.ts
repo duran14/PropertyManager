@@ -77,10 +77,13 @@ describe('rental conversation interpreter', () => {
     });
 
     expect(result).toEqual({
-      reply: 'Thanks Carlos. I kept your two-bedroom preference.',
-      intent: 'discover',
-      confidence: 'high',
-      profile: { set: { prospect_name: 'Carlos' }, clear: [] },
+      turn: {
+        reply: 'Thanks Carlos. I kept your two-bedroom preference.',
+        intent: 'discover',
+        confidence: 'high',
+        profile: { set: { prospect_name: 'Carlos' }, clear: [] },
+      },
+      providerFailed: false,
     });
     const request = reason.mock.calls[0]?.[0];
     expect(request?.userPrompt).toBe('Sorry, Carlos.');
@@ -98,14 +101,14 @@ describe('rental conversation interpreter', () => {
     });
   });
 
-  it('returns a low-confidence clarification without a profile patch for malformed JSON', async () => {
+  it('flags malformed JSON as a provider failure while returning the safe clarification', async () => {
     const { glm } = glmReturning('{not-json');
 
     await expect(interpretRentalTurn({
       glm,
       context: conversationContext(),
       message: 'Something else',
-    })).resolves.toEqual(safeClarification);
+    })).resolves.toEqual({ turn: safeClarification, providerFailed: true });
   });
 
   it('removes profile and selection mutations from a low-confidence clarification', async () => {
@@ -126,11 +129,14 @@ describe('rental conversation interpreter', () => {
       context: conversationContext(),
       message: 'That one, I think.',
     })).resolves.toEqual({
-      reply: 'Which option did you mean?',
-      intent: 'select_unit',
-      confidence: 'low',
-      clarification: { question: 'Which option did you mean?' },
-      profile: { set: {}, clear: [] },
+      turn: {
+        reply: 'Which option did you mean?',
+        intent: 'select_unit',
+        confidence: 'low',
+        clarification: { question: 'Which option did you mean?' },
+        profile: { set: {}, clear: [] },
+      },
+      providerFailed: false,
     });
   });
 
@@ -147,7 +153,7 @@ describe('rental conversation interpreter', () => {
       glm,
       context: conversationContext(),
       message: 'The other unit.',
-    })).resolves.toEqual(safeClarification);
+    })).resolves.toEqual({ turn: safeClarification, providerFailed: false });
   });
 
   it('rejects a model-selected slot index outside the pending slot range', async () => {
@@ -163,10 +169,10 @@ describe('rental conversation interpreter', () => {
       glm,
       context: conversationContext(),
       message: 'The fourth time.',
-    })).resolves.toEqual(safeClarification);
+    })).resolves.toEqual({ turn: safeClarification, providerFailed: false });
   });
 
-  it('returns the same safe clarification for schema failures and provider failures', async () => {
+  it('returns the same safe clarification turn for schema failures and provider failures, flagged as provider failures', async () => {
     const invalid = glmReturning(JSON.stringify({ reply: 'Incomplete' })).glm;
     const failing = {
       name: 'glm',
@@ -177,11 +183,11 @@ describe('rental conversation interpreter', () => {
       glm: invalid,
       context: conversationContext(),
       message: 'Incomplete response',
-    })).resolves.toEqual(safeClarification);
+    })).resolves.toEqual({ turn: safeClarification, providerFailed: true });
     await expect(interpretRentalTurn({
       glm: failing,
       context: conversationContext(),
       message: 'Provider failure',
-    })).resolves.toEqual(safeClarification);
+    })).resolves.toEqual({ turn: safeClarification, providerFailed: true });
   });
 });
