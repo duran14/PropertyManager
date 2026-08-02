@@ -120,9 +120,9 @@ export function canResolveActiveShortlist(state: ConversationState): boolean {
 export function resolveSingleOptionAffirmation(message: string, unitIds: string[]): string | undefined {
   if (unitIds.length !== 1) return undefined;
   const normalized = message.trim().toLowerCase().replace(/[.!?]+$/g, '');
-  return /^(?:yes|y|yeah|yep|sure|ok|okay|that one|the one|option 1|first one)$/.test(normalized)
-    ? unitIds[0]
-    : undefined;
+  const isAffirmation = /^(?:yes|y|yeah|yep|sure|ok|okay|that one|the one|option 1|first one)$/.test(normalized);
+  const expressesTourInterest = /\b(?:tour|visit|view|see|see it|see one|explore|look|check|interested|love to|like to|would like|sounds good|let'?s do it)\b/.test(normalized);
+  return (isAffirmation || expressesTourInterest) ? unitIds[0] : undefined;
 }
 
 export interface InboundChatMessage {
@@ -1625,7 +1625,20 @@ export function buildFastQualificationTurn(
           : /^(c|3|sell|selling)$/.test(normalized) ? 'sell'
             : undefined;
 
-    if (!intent) return { reply: openingReply, slots: {}, next_state: 'greeting' };
+    if (!intent) {
+      // Los mensajes conversacionales ricos (varias palabras con señales de
+      // renta como bedrooms, área, presupuesto, mascotas) deben pasar al
+      // modelo en vez de recibir el saludo genérico, para que el bot pueda
+      // capturar todo de golpe y conversar naturalmente. Los saludos cortos
+      // y respuestas de una palabra siguen recibiendo el saludo.
+      const wordCount = normalized.split(/\s+/).filter(Boolean).length;
+      const hasRentalSignal = /\b(?:bedroom|bed|bath|pet|cat|dog|budget|rent|lease|month|move|area|city|burnaby|vancouver|richmond|surrey|kelowna|victoria|north vancouver)\b/i.test(message);
+      const isShortGreeting = /^(hi|hello|hey|hola|howdy|good (?:morning|afternoon|evening)|sup|yo)\b/i.test(normalized);
+      if (wordCount > 2 && hasRentalSignal && !isShortGreeting) {
+        return undefined;
+      }
+      return { reply: openingReply, slots: {}, next_state: 'greeting' };
+    }
     if (intent === 'buy' || intent === 'sell') {
       return buildOwnershipConversationTurn(message, existingSlots);
     }
