@@ -40,6 +40,32 @@ Use `Password123!` for every account.
    - Generate an RTA draft and sign it as Broker.
    - Open Audit Trail and verify the hash chain.
 
+## Rental model-first scenario
+
+The leasing assistant interprets each rental turn through the model and keeps
+the deterministic fast path only as a fallback when the model provider is
+unreachable. Run this against the Telegram bot
+(`@PropertyManagerCanada_bot`) with the local API and Vite running.
+
+1. Send: `I'm Carlos, 2 bedrooms in Burnaby, dog, $3500, September`
+   - The bot captures name, area, bedrooms, pets, budget, and move-in date in
+     one turn and proposes matching inventory.
+2. Correct the name: `sorry Carlos` (or `actually Carlos`)
+   - The profile updates in place to `Carlos` without losing the area, budget,
+     or any other captured field.
+3. Select one of the proposed properties (reply with its option number).
+4. Request a tour and pick a slot number from the offered times.
+5. Verify the broker confirmation appears in the broker app and that the
+   showing is tied to the same unit selected in step 3.
+   - Confirm `Lead.name` is `Carlos`, and `ChatConversation.unitId` matches
+     `Showing.unitId`.
+6. (Optional) Intentionally send an out-of-range slot number (e.g. `99`) to
+   confirm the bot asks again instead of booking a phantom tour.
+
+> Outage check: if you point the API at an unreachable GLM endpoint, the bot
+> should keep qualifying via the deterministic fallback instead of repeating
+> "Could you clarify that?".
+
 ## Omnichannel Prospecting Walkthrough (~5-7 min)
 
 This is the buyer-journey demo: a prospect messages the leasing assistant, the
