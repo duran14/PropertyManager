@@ -165,8 +165,17 @@ export async function interpretRentalTurn(input: {
       .replace(/\s*```$/, '')
       .trim();
     const turn = parseConversationTurn(JSON.parse(normalized));
-    if (!hasValidSelection(turn, input.context)) return safeClarification;
     if (turn.confidence === 'low' && !turn.clarification) return safeClarification;
+    if (turn.confidence === 'low') {
+      return {
+        reply: turn.reply,
+        intent: turn.intent,
+        confidence: 'low',
+        clarification: turn.clarification,
+        profile: { set: {}, clear: [] },
+      };
+    }
+    if (!hasValidSelection(turn, input.context)) return safeClarification;
     return turn;
   } catch {
     return safeClarification;

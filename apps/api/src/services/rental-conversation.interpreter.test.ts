@@ -108,6 +108,64 @@ describe('rental conversation interpreter', () => {
     })).resolves.toEqual(safeClarification);
   });
 
+  it('removes profile and selection mutations from a low-confidence clarification', async () => {
+    const { glm } = glmReturning(JSON.stringify({
+      reply: 'Which option did you mean?',
+      intent: 'select_unit',
+      confidence: 'low',
+      clarification: { question: 'Which option did you mean?' },
+      profile: {
+        set: { prospect_name: 'Carlos' },
+        clear: ['budget'],
+      },
+      selection: { unitIds: ['unit-410'], slotIndex: 1 },
+    }));
+
+    await expect(interpretRentalTurn({
+      glm,
+      context: conversationContext(),
+      message: 'That one, I think.',
+    })).resolves.toEqual({
+      reply: 'Which option did you mean?',
+      intent: 'select_unit',
+      confidence: 'low',
+      clarification: { question: 'Which option did you mean?' },
+      profile: { set: {}, clear: [] },
+    });
+  });
+
+  it('rejects a model-selected unit ID that is absent from the factual context', async () => {
+    const { glm } = glmReturning(JSON.stringify({
+      reply: 'I selected it.',
+      intent: 'select_unit',
+      confidence: 'high',
+      profile: { set: {}, clear: [] },
+      selection: { unitIds: ['invented-unit'] },
+    }));
+
+    await expect(interpretRentalTurn({
+      glm,
+      context: conversationContext(),
+      message: 'The other unit.',
+    })).resolves.toEqual(safeClarification);
+  });
+
+  it('rejects a model-selected slot index outside the pending slot range', async () => {
+    const { glm } = glmReturning(JSON.stringify({
+      reply: 'I selected that time.',
+      intent: 'choose_slot',
+      confidence: 'high',
+      profile: { set: {}, clear: [] },
+      selection: { slotIndex: 3 },
+    }));
+
+    await expect(interpretRentalTurn({
+      glm,
+      context: conversationContext(),
+      message: 'The fourth time.',
+    })).resolves.toEqual(safeClarification);
+  });
+
   it('returns the same safe clarification for schema failures and provider failures', async () => {
     const invalid = glmReturning(JSON.stringify({ reply: 'Incomplete' })).glm;
     const failing = {
