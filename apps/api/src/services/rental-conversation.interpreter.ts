@@ -113,6 +113,18 @@ const safeClarification: ConversationTurn = {
   profile: { set: {}, clear: [] },
 };
 
+/**
+ * Resultado de interpretar un turno de renta. El flag `providerFailed`
+ * distingue un fallo del proveedor del modelo (red, JSON malformado,
+ * excepción) de una interpretación legítima con baja confianza. Permite
+ * que el llamador caiga al fast-path determinista solo ante un outage
+ * real, no cuando el modelo pidió una aclaración válida.
+ */
+export type InterpretRentalResult = {
+  turn: ConversationTurn;
+  providerFailed: boolean;
+};
+
 export function buildRentalConversationPrompt(context: ConversationContext): string {
   return [
     'Interpret the current rental conversation message and return only one JSON object matching the response schema.',
@@ -151,7 +163,7 @@ export async function interpretRentalTurn(input: {
   glm: GlmAdapter;
   context: ConversationContext;
   message: string;
-}): Promise<ConversationTurn> {
+}): Promise<InterpretRentalResult> {
   try {
     const response = await input.glm.reason({
       systemPrompt: buildRentalConversationPrompt(input.context),
@@ -165,19 +177,26 @@ export async function interpretRentalTurn(input: {
       .replace(/\s*```$/, '')
       .trim();
     const turn = parseConversationTurn(JSON.parse(normalized));
-    if (turn.confidence === 'low' && !turn.clarification) return safeClarification;
+    if (turn.confidence === 'low' && !turn.clarification) {
+      return { turn: safeClarification, providerFailed: false };
+    }
     if (turn.confidence === 'low') {
       return {
-        reply: turn.reply,
-        intent: turn.intent,
-        confidence: 'low',
-        clarification: turn.clarification,
-        profile: { set: {}, clear: [] },
+        turn: {
+          reply: turn.reply,
+          intent: turn.intent,
+          confidence: 'low',
+          clarification: turn.clarification,
+          profile: { set: {}, clear: [] },
+        },
+        providerFailed: false,
       };
     }
-    if (!hasValidSelection(turn, input.context)) return safeClarification;
-    return turn;
+    if (!hasValidSelection(turn, input.context)) {
+      return { turn: safeClarification, providerFailed: false };
+    }
+    return { turn, providerFailed: false };
   } catch {
-    return safeClarification;
+    return { turn: safeClarification, providerFailed: true };
   }
 }

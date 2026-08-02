@@ -1304,7 +1304,7 @@ async function callGlm(
     pendingSlotCount = 0;
   }
 
-  const turn = await interpretRentalTurn({
+  const { turn, providerFailed } = await interpretRentalTurn({
     glm,
     context: {
       tenantName,
@@ -1317,10 +1317,52 @@ async function callGlm(
     },
     message: ctx.userMessage,
   });
+
+  const deterministicFallback = providerFailed
+    ? buildDeterministicQualificationTurn(ctx.userMessage, ctx.existingSlots, tenantName)
+    : undefined;
+  return resolveRentalTurnToInterpreted({
+    turn,
+    providerFailed,
+    currentState: ctx.currentState,
+    availableUnits: ctx.availableUnits,
+    deterministicFallback,
+  });
+}
+
+/**
+ * Convierte el `ConversationTurn` semántico (resultado del intérprete) al
+ * `InterpretedTurn` legado que el handler ya sabe procesar. Es una función
+ * pura para poder probar el mapeo sin tocar Prisma ni al proveedor GLM.
+ *
+ * Cuando `providerFailed` es true y existe un `deterministicFallback`, se
+ * devuelve ese turno determinista (caída por outage real del proveedor);
+ * solo se recurre a la clarificación segura si tampoco hay fallback. En el
+ * camino feliz se mapea el turno semántico con `legacyIntentForRentalTurn`
+ * y `nextStateForRentalTurn`, conservando slots, selecciones y clarificaciones.
+ */
+export function resolveRentalTurnToInterpreted(input: {
+  turn: ConversationTurn;
+  providerFailed: boolean;
+  currentState: ConversationState;
+  availableUnits: AvailableUnit[];
+  deterministicFallback?: InterpretedTurn;
+}): InterpretedTurn {
+  const { turn, providerFailed, currentState, availableUnits, deterministicFallback } = input;
+
+  if (providerFailed) {
+    if (deterministicFallback) return deterministicFallback;
+    return {
+      reply: turn.reply,
+      intent: 'ask_clarification',
+      next_state: currentState,
+    };
+  }
+
   const lowConfidence = turn.confidence === 'low';
   const intent = lowConfidence ? 'ask_clarification' : legacyIntentForRentalTurn(turn.intent);
   const selectedOptions = turn.selection?.unitIds
-    ?.map((unitId) => ctx.availableUnits.findIndex((unit) => unit.id === unitId) + 1)
+    ?.map((unitId) => availableUnits.findIndex((unit) => unit.id === unitId) + 1)
     .filter((option) => option > 0);
   return {
     reply: turn.reply,
@@ -1331,7 +1373,7 @@ async function callGlm(
     selection_scope: selectedOptions?.length
       ? selectedOptions.length > 1 ? 'multiple' : 'single'
       : undefined,
-    next_state: lowConfidence ? ctx.currentState : nextStateForRentalTurn(turn.intent, ctx.currentState),
+    next_state: lowConfidence ? currentState : nextStateForRentalTurn(turn.intent, currentState),
   };
 }
 
