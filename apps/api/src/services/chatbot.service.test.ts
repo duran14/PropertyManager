@@ -49,6 +49,7 @@ import {
   applyBroadBedroomRequestScope,
   resolveRentalTurnToInterpreted,
   resolveOwnershipTurnToInterpreted,
+  classifyProfileSlotKey,
 } from './chatbot.service.js';
 import type { AvailableUnit } from './chatbot.service.js';
 import type { ConversationTurn } from './rental-conversation.types.js';
@@ -2065,5 +2066,40 @@ describe('resolveOwnershipTurnToInterpreted (semantic adapter mapping)', () => {
       reply: 'Could you clarify that in one sentence?',
       next_state: 'collecting_budget',
     });
+  });
+});
+
+describe('classifyProfileSlotKey (shared rental/ownership field routing)', () => {
+  it('routes a field shared by both profiles to ownership when the conversation is in the ownership domain', () => {
+    expect(classifyProfileSlotKey('preferred_area', true)).toBe('ownership');
+    expect(classifyProfileSlotKey('prospect_name', true)).toBe('ownership');
+    expect(classifyProfileSlotKey('transaction_intent', true)).toBe('ownership');
+    expect(classifyProfileSlotKey('preferred_province', true)).toBe('ownership');
+    expect(classifyProfileSlotKey('bedrooms', true)).toBe('ownership');
+  });
+
+  it('routes the same shared fields to rental when the conversation is not (yet) in the ownership domain', () => {
+    expect(classifyProfileSlotKey('preferred_area', false)).toBe('rental');
+    expect(classifyProfileSlotKey('prospect_name', false)).toBe('rental');
+    expect(classifyProfileSlotKey('transaction_intent', false)).toBe('rental');
+    expect(classifyProfileSlotKey('preferred_province', false)).toBe('rental');
+    expect(classifyProfileSlotKey('bedrooms', false)).toBe('rental');
+  });
+
+  it('keeps rental-exclusive fields routed to rental regardless of domain', () => {
+    expect(classifyProfileSlotKey('bedrooms_min', true)).toBe('rental');
+    expect(classifyProfileSlotKey('pets', true)).toBe('rental');
+    expect(classifyProfileSlotKey('move_in_date', false)).toBe('rental');
+  });
+
+  it('keeps ownership-exclusive fields routed to ownership regardless of domain', () => {
+    expect(classifyProfileSlotKey('buyer_property_type', false)).toBe('ownership');
+    expect(classifyProfileSlotKey('purchase_budget', false)).toBe('ownership');
+    expect(classifyProfileSlotKey('seller_goal', true)).toBe('ownership');
+  });
+
+  it('routes unrecognized keys to operational in either domain', () => {
+    expect(classifyProfileSlotKey('shortlist_scope', true)).toBe('operational');
+    expect(classifyProfileSlotKey('tour_scheduled_at', false)).toBe('operational');
   });
 });

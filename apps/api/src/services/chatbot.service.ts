@@ -203,6 +203,24 @@ function isRentalProfileField(key: string): key is RentalProfileField {
   return rentalProfileFields.has(key as RentalProfileField);
 }
 
+/**
+ * `rentalProfileFields` and `ownershipProfileFields` share several field names
+ * (prospect_name, transaction_intent, preferred_area, preferred_province, bedrooms).
+ * Those ambiguous keys must route to exactly one bucket, decided by the
+ * conversation's actual domain (`isOwnershipDomain`) rather than by field-name
+ * membership priority. Fields that are exclusive to one domain always route by
+ * their own predicate regardless of the conversation domain.
+ */
+export type ProfileSlotBucket = 'rental' | 'ownership' | 'operational';
+export function classifyProfileSlotKey(key: string, isOwnershipDomain: boolean): ProfileSlotBucket {
+  const isRental = isRentalProfileField(key);
+  const isOwnership = isOwnershipProfileField(key);
+  if (isRental && isOwnership) return isOwnershipDomain ? 'ownership' : 'rental';
+  if (isOwnership) return 'ownership';
+  if (isRental) return 'rental';
+  return 'operational';
+}
+
 export function shouldUseDeterministicFastPath(message: string): boolean {
   return /^\/(start|begin|reset)(\b|$)/i.test(message.trim());
 }
@@ -855,15 +873,15 @@ async function handleInboundMessageUnlocked(
     glmResult.slots = { ...(glmResult.slots ?? {}), transaction_intent: glmResult.intent };
   }
   glmResult = applyBroadBedroomRequestScope(sanitizeInterpretedTurn(glmResult), input.body);
-  const rentalProfileClear = new Set(
-    (glmResult.clearSlots ?? []).filter(isRentalProfileField),
-  );
-  const ownershipProfileClear = new Set(
-    (glmResult.clearSlots ?? []).filter(isOwnershipProfileField),
-  );
-  const operationalSlotsToClear = (glmResult.clearSlots ?? []).filter(
-    (key) => !isRentalProfileField(key) && !isOwnershipProfileField(key),
-  );
+  const rentalProfileClear = new Set<RentalProfileField>();
+  const ownershipProfileClear = new Set<OwnershipProfileField>();
+  const operationalSlotsToClear: string[] = [];
+  for (const key of glmResult.clearSlots ?? []) {
+    const bucket = classifyProfileSlotKey(key, ownershipIntentAlreadySet);
+    if (bucket === 'rental') rentalProfileClear.add(key as RentalProfileField);
+    else if (bucket === 'ownership') ownershipProfileClear.add(key as OwnershipProfileField);
+    else operationalSlotsToClear.push(key);
+  }
   if (operationalSlotsToClear.length > 0) {
     await prisma.conversationSlot.deleteMany({
       where: { conversationId: conversation.id, key: { in: operationalSlotsToClear } },
@@ -920,8 +938,9 @@ async function handleInboundMessageUnlocked(
   const operationalSlots: Record<string, string> = {};
   for (const [key, value] of Object.entries(glmResult.slots ?? {})) {
     if (!value) continue;
-    if (isRentalProfileField(key)) rentalProfileSet[key] = value;
-    else if (isOwnershipProfileField(key)) ownershipProfileSet[key] = value;
+    const bucket = classifyProfileSlotKey(key, ownershipIntentAlreadySet);
+    if (bucket === 'rental') rentalProfileSet[key as RentalProfileField] = value;
+    else if (bucket === 'ownership') ownershipProfileSet[key as OwnershipProfileField] = value;
     else operationalSlots[key] = value;
   }
 
