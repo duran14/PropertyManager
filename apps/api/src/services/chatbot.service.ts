@@ -35,6 +35,9 @@ import {
 import { applyRentalProfilePatch } from './rental-conversation.context.js';
 import { interpretRentalTurn } from './rental-conversation.interpreter.js';
 import type { ConversationTurn, RentalProfile, RentalProfileField } from './rental-conversation.types.js';
+import { applyOwnershipProfilePatch } from './ownership-conversation.context.js';
+import { interpretOwnershipTurn } from './ownership-conversation.interpreter.js';
+import type { OwnershipConversationSemanticTurn, OwnershipProfile, OwnershipProfileField } from './ownership-conversation.types.js';
 
 export type ConversationState =
   | 'greeting'
@@ -722,7 +725,10 @@ async function handleInboundMessageUnlocked(
       }
     : undefined;
   const repairTurn = buildConversationRepairTurn(input.body, existingSlots);
-  const qualificationTurn = buildDeterministicQualificationTurn(input.body, existingSlots, tenantName);
+  const ownershipIntentAlreadySet = existingSlots.transaction_intent === 'buy' || existingSlots.transaction_intent === 'sell';
+  const qualificationTurn = ownershipIntentAlreadySet
+    ? undefined
+    : buildDeterministicQualificationTurn(input.body, existingSlots, tenantName);
   const deterministicResult = existingSlots.tour_scheduled_at
     ? buildPostTourContextTurn(input.body, existingSlots)
     : qualificationTurn
@@ -730,14 +736,28 @@ async function handleInboundMessageUnlocked(
       ?? optionDecline
       ?? repairTurn
       ?? undefined;
-  let glmResult: InterpretedTurn = deterministicResult ?? await callGlm(deps.glm, {
-    currentState,
-    tenantId: input.tenantId,
-    userMessage: input.body,
-    history: prepareConversationHistory(conversation.messages, isStartCommand),
-    existingSlots,
-    availableUnits,
-  });
+
+  let glmResult: InterpretedTurn;
+  if (deterministicResult) {
+    glmResult = deterministicResult;
+  } else if (ownershipIntentAlreadySet) {
+    glmResult = await callOwnershipGlm(deps.glm, {
+      currentState,
+      tenantId: input.tenantId,
+      userMessage: input.body,
+      history: prepareConversationHistory(conversation.messages, isStartCommand),
+      existingSlots,
+    });
+  } else {
+    glmResult = await callGlm(deps.glm, {
+      currentState,
+      tenantId: input.tenantId,
+      userMessage: input.body,
+      history: prepareConversationHistory(conversation.messages, isStartCommand),
+      existingSlots,
+      availableUnits,
+    });
+  }
 
   if (searchCriteriaOverride && glmResult.intent === 'select_options') {
     glmResult = {
@@ -838,8 +858,11 @@ async function handleInboundMessageUnlocked(
   const rentalProfileClear = new Set(
     (glmResult.clearSlots ?? []).filter(isRentalProfileField),
   );
+  const ownershipProfileClear = new Set(
+    (glmResult.clearSlots ?? []).filter(isOwnershipProfileField),
+  );
   const operationalSlotsToClear = (glmResult.clearSlots ?? []).filter(
-    (key) => !isRentalProfileField(key),
+    (key) => !isRentalProfileField(key) && !isOwnershipProfileField(key),
   );
   if (operationalSlotsToClear.length > 0) {
     await prisma.conversationSlot.deleteMany({
@@ -893,10 +916,12 @@ async function handleInboundMessageUnlocked(
   }
 
   const rentalProfileSet: RentalProfile = {};
+  const ownershipProfileSet: OwnershipProfile = {};
   const operationalSlots: Record<string, string> = {};
   for (const [key, value] of Object.entries(glmResult.slots ?? {})) {
     if (!value) continue;
     if (isRentalProfileField(key)) rentalProfileSet[key] = value;
+    else if (isOwnershipProfileField(key)) ownershipProfileSet[key] = value;
     else operationalSlots[key] = value;
   }
 
@@ -908,6 +933,17 @@ async function handleInboundMessageUnlocked(
       conversationId: conversation.id,
       leadId: conversation.leadId,
       patch: { clear: [...rentalProfileClear], set: rentalProfileSet },
+    }));
+  }
+
+  let finalOwnershipProfile: OwnershipProfile | undefined;
+  if (ownershipProfileClear.size > 0 || Object.keys(ownershipProfileSet).length > 0) {
+    finalOwnershipProfile = await prisma.$transaction((tx) => applyOwnershipProfilePatch({
+      tx,
+      tenantId: input.tenantId,
+      conversationId: conversation.id,
+      leadId: conversation.leadId,
+      patch: { clear: [...ownershipProfileClear], set: ownershipProfileSet },
     }));
   }
 
@@ -924,10 +960,16 @@ async function handleInboundMessageUnlocked(
       if (finalRentalProfile[key] === undefined) delete existingSlots[key];
     }
   }
+  if (finalOwnershipProfile) {
+    for (const key of ownershipProfileFields) {
+      if (finalOwnershipProfile[key] === undefined) delete existingSlots[key];
+    }
+  }
 
   const effectiveSlots: Record<string, string> = {
     ...existingSlots,
     ...finalRentalProfile,
+    ...finalOwnershipProfile,
     ...(glmResult.slots ?? {}),
   };
   const candidateInventory = glmResult.intent === 'request_more_options' && latestShortlist
@@ -1406,6 +1448,93 @@ function nextStateForRentalTurn(
     handoff: 'handoff',
   };
   return states[intent] ?? currentState;
+}
+
+const ownershipProfileFields = new Set<OwnershipProfileField>([
+  'prospect_name', 'transaction_intent', 'preferred_area', 'preferred_province',
+  'buyer_property_type', 'bedrooms', 'purchase_budget', 'financing_status',
+  'purchase_timeline', 'buyer_urgency', 'buyer_household', 'buyer_pets',
+  'buyer_priorities', 'contact_email', 'contact_phone', 'seller_property_address',
+  'seller_property_type', 'seller_bedrooms', 'occupancy_status', 'selling_timeline',
+  'seller_goal',
+]);
+
+function isOwnershipProfileField(key: string): key is OwnershipProfileField {
+  return ownershipProfileFields.has(key as OwnershipProfileField);
+}
+
+async function callOwnershipGlm(
+  glm: GlmAdapter,
+  ctx: {
+    currentState: ConversationState;
+    tenantId: string;
+    userMessage: string;
+    history: Array<{ role: string; content: string }>;
+    existingSlots: Record<string, string>;
+  },
+): Promise<InterpretedTurn> {
+  const knowledgeContext = await getTenantKnowledgeContext(ctx.tenantId, ctx.userMessage);
+  const tenantName = await getTenantName(ctx.tenantId);
+  const profile: OwnershipProfile = {};
+  for (const field of ownershipProfileFields) {
+    if (ctx.existingSlots[field] !== undefined) profile[field] = ctx.existingSlots[field];
+  }
+  const history = ctx.history
+    .slice(-10)
+    .filter((message): message is { role: 'user' | 'assistant'; content: string } =>
+      message.role === 'user' || message.role === 'assistant');
+
+  const { turn, providerFailed } = await interpretOwnershipTurn({
+    glm,
+    context: { tenantName, history, profile, knowledgeContext },
+    message: ctx.userMessage,
+  });
+
+  const deterministicFallback = providerFailed
+    ? buildOwnershipConversationTurn(ctx.userMessage, ctx.existingSlots)
+    : undefined;
+  return resolveOwnershipTurnToInterpreted({
+    turn,
+    providerFailed,
+    currentState: ctx.currentState,
+    deterministicFallback,
+  });
+}
+
+export function resolveOwnershipTurnToInterpreted(input: {
+  turn: OwnershipConversationSemanticTurn;
+  providerFailed: boolean;
+  currentState: ConversationState;
+  deterministicFallback?: InterpretedTurn;
+}): InterpretedTurn {
+  const { turn, providerFailed, currentState, deterministicFallback } = input;
+
+  if (providerFailed) {
+    if (deterministicFallback) return deterministicFallback;
+    return {
+      reply: turn.reply,
+      intent: 'ask_clarification',
+      next_state: currentState,
+    };
+  }
+
+  const lowConfidence = turn.confidence === 'low';
+  return {
+    reply: turn.reply,
+    intent: lowConfidence ? 'ask_clarification' : legacyIntentForOwnershipTurn(turn.intent),
+    slots: turn.profile.set,
+    clearSlots: turn.profile.clear,
+    next_state: lowConfidence ? currentState : (turn.intent === 'handoff' ? 'handoff' : 'collecting_budget'),
+  };
+}
+
+function legacyIntentForOwnershipTurn(intent: OwnershipConversationSemanticTurn['intent']): ConversationIntent {
+  const intents: Record<OwnershipConversationSemanticTurn['intent'], ConversationIntent> = {
+    discover: 'provide_information',
+    handoff: 'handoff',
+    other: 'other',
+  };
+  return intents[intent];
 }
 
 export function parseGlmJsonResponse(content: string): {

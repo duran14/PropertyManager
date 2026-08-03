@@ -48,9 +48,12 @@ import {
   locationScopeSlotsToClearForBroadBedroomRequest,
   applyBroadBedroomRequestScope,
   resolveRentalTurnToInterpreted,
+  resolveOwnershipTurnToInterpreted,
 } from './chatbot.service.js';
 import type { AvailableUnit } from './chatbot.service.js';
 import type { ConversationTurn } from './rental-conversation.types.js';
+import { buildOwnershipConversationTurn } from './ownership-conversation.service.js';
+import type { OwnershipConversationSemanticTurn } from './ownership-conversation.types.js';
 
 describe('chatbot conversation identity', () => {
   it('invalidates stale selection and scheduling when search criteria change', () => {
@@ -1984,6 +1987,82 @@ describe('resolveRentalTurnToInterpreted (semantic adapter mapping)', () => {
     expect(result).toMatchObject({
       intent: 'ask_clarification',
       reply: 'Which city did you mean?',
+      next_state: 'collecting_budget',
+    });
+  });
+});
+
+describe('resolveOwnershipTurnToInterpreted (semantic adapter mapping)', () => {
+  function ownershipTurn(overrides: Partial<OwnershipConversationSemanticTurn> = {}): OwnershipConversationSemanticTurn {
+    return {
+      reply: 'Got it.',
+      intent: 'discover',
+      confidence: 'high',
+      profile: { set: {}, clear: [] },
+      ...overrides,
+    };
+  }
+
+  it('maps a discover turn to provide_information and keeps collecting_budget as the state', () => {
+    const result = resolveOwnershipTurnToInterpreted({
+      turn: ownershipTurn({
+        reply: 'Got it, a $850k budget.',
+        profile: { set: { purchase_budget: '850000' }, clear: [] },
+      }),
+      providerFailed: false,
+      currentState: 'collecting_budget',
+    });
+
+    expect(result).toMatchObject({
+      intent: 'provide_information',
+      slots: { purchase_budget: '850000' },
+      next_state: 'collecting_budget',
+    });
+  });
+
+  it('maps a handoff turn to the handoff state', () => {
+    const result = resolveOwnershipTurnToInterpreted({
+      turn: ownershipTurn({ reply: 'Connecting you now.', intent: 'handoff' }),
+      providerFailed: false,
+      currentState: 'collecting_budget',
+    });
+
+    expect(result).toMatchObject({ intent: 'handoff', next_state: 'handoff' });
+  });
+
+  it('preserves a low-confidence clarification as ask_clarification', () => {
+    const result = resolveOwnershipTurnToInterpreted({
+      turn: ownershipTurn({ reply: 'Which city did you mean?', confidence: 'low' }),
+      providerFailed: false,
+      currentState: 'collecting_budget',
+    });
+
+    expect(result).toMatchObject({ intent: 'ask_clarification', reply: 'Which city did you mean?' });
+  });
+
+  it('returns the deterministic fallback turn when the provider failed', () => {
+    const deterministicFallback = buildOwnershipConversationTurn('I want to buy', {});
+
+    const result = resolveOwnershipTurnToInterpreted({
+      turn: ownershipTurn({ confidence: 'low' }),
+      providerFailed: true,
+      currentState: 'greeting',
+      deterministicFallback,
+    });
+
+    expect(result).toBe(deterministicFallback);
+  });
+
+  it('falls back to a safe clarification on outage when no deterministic turn applies', () => {
+    const result = resolveOwnershipTurnToInterpreted({
+      turn: ownershipTurn({ reply: 'Could you clarify that in one sentence?', confidence: 'low' }),
+      providerFailed: true,
+      currentState: 'collecting_budget',
+    });
+
+    expect(result).toMatchObject({
+      intent: 'ask_clarification',
+      reply: 'Could you clarify that in one sentence?',
       next_state: 'collecting_budget',
     });
   });
