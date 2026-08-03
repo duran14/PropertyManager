@@ -26,23 +26,32 @@ export class GlmMockAdapter implements GlmAdapter {
       if (props && 'next_state' in props) {
         const generated = this.generateChatbotResponse(request.userPrompt);
         const currentMessage = this.extractCurrentMessage(request.userPrompt);
+        const hasExistingIntent = /transaction_intent:\s*\w+/i.test(request.userPrompt) && !/transaction_intent:\s*(?:undefined|null|\s)/i.test(request.userPrompt);
+        const hasRentalSignal = /\b(?:bedroom|bed|rent|lease|apartment|condo|burnaby|vancouver|richmond|surrey)\b/i.test(currentMessage);
         const selectsAll = /\b(?:both|all(?:\s+of\s+them)?)\b/i.test(currentMessage);
         const selectedOptions = [...currentMessage.matchAll(/\b(?:option\s*)?([123])\b/gi)]
           .map((match) => Number(match[1]));
+        let intent: string;
+        if (!hasExistingIntent && hasRentalSignal) {
+          intent = 'rent';
+        } else if (selectsAll || selectedOptions.length > 0) {
+          intent = 'select_options';
+        } else if (/what else|anything else|other options/i.test(currentMessage)) {
+          intent = 'request_more_options';
+        } else if (generated.next_state === 'proposing_tour') {
+          intent = 'request_matches';
+        } else if (generated.next_state === 'scheduling') {
+          intent = 'schedule_tour';
+        } else {
+          intent = 'provide_information';
+        }
         return {
           content: JSON.stringify({
-            intent: selectsAll || selectedOptions.length > 0
-              ? 'select_options'
-              : /what else|anything else|other options/i.test(currentMessage)
-                ? 'request_more_options'
-                : generated.next_state === 'proposing_tour'
-                  ? 'request_matches'
-                  : generated.next_state === 'scheduling'
-                    ? 'schedule_tour'
-                    : 'provide_information',
+            intent,
             ...(selectsAll ? { selection_scope: 'all' } : {}),
             ...(selectedOptions.length > 0 ? { selected_options: selectedOptions } : {}),
             ...generated,
+            slots: { transaction_intent: 'rent', ...(generated.slots ?? {}) },
           }),
           selfReportedConfidence: 0.85,
         };

@@ -50,13 +50,34 @@ export async function getPublicShortlist(token: string) {
     include: { conversation: { include: { lead: true, slots: true } } },
   });
   if (!shortlist) return null;
-  const units = await prisma.unit.findMany({
-    where: { id: { in: shortlist.unitIds }, tenantId: shortlist.tenantId },
-    include: { property: true, listingPhotos: { orderBy: [{ isPrimary: 'desc' }, { createdAt: 'asc' }] } },
-  });
+
+  const [units, catalogUnits, tenant] = await Promise.all([
+    prisma.unit.findMany({
+      where: { id: { in: shortlist.unitIds }, tenantId: shortlist.tenantId },
+      include: { property: true, listingPhotos: { orderBy: [{ isPrimary: 'desc' }, { createdAt: 'asc' }] } },
+    }),
+    prisma.unit.findMany({
+      where: { tenantId: shortlist.tenantId, isActive: true },
+      include: {
+        property: { select: { name: true, address: true, city: true, province: true } },
+        listingPhotos: { orderBy: [{ isPrimary: 'desc' }, { createdAt: 'asc' }], take: 6 },
+      },
+      orderBy: { rentCents: 'asc' },
+    }),
+    prisma.tenant.findUnique({
+      where: { id: shortlist.tenantId },
+      select: { name: true },
+    }),
+  ]);
+
   const byId = new Map(units.map((unit) => [unit.id, unit]));
   await prisma.propertyShortlist.update({ where: { id: shortlist.id }, data: { viewedAt: new Date() } });
-  return { shortlist, units: shortlist.unitIds.map((id) => byId.get(id)).filter(Boolean) };
+  return {
+    shortlist,
+    units: shortlist.unitIds.map((id) => byId.get(id)).filter(Boolean),
+    catalog: catalogUnits,
+    tenantName: tenant?.name ?? 'Property Management',
+  };
 }
 
 export async function rotateShortlistToken(shortlistId: string): Promise<string> {

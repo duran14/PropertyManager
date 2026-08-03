@@ -1,17 +1,31 @@
-import { createContext, useContext, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import { apiFetch, setAccessToken } from '../lib/apiClient';
 import type { AuthUser, LoginResponse } from '../lib/types';
+import { restoreSession } from './session';
 
 interface AuthContextValue {
   user: AuthUser | null;
   login: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
+  isRestoring: boolean;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
+  const [isRestoring, setIsRestoring] = useState(true);
+
+  useEffect(() => {
+    void restoreSession({
+      refresh: () => apiFetch<{ accessToken: string }>('/auth/refresh', { method: 'POST' }),
+      getCurrentUser: () => apiFetch<AuthUser>('/auth/me'),
+      setAccessToken,
+    }).then((restoredUser) => {
+      setUser(restoredUser);
+      setIsRestoring(false);
+    });
+  }, []);
 
   async function login(email: string, password: string): Promise<void> {
     const res = await apiFetch<LoginResponse>('/auth/login', {
@@ -28,7 +42,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
   }
 
-  return <AuthContext.Provider value={{ user, login, logout }}>{children}</AuthContext.Provider>;
+  return <AuthContext.Provider value={{ user, login, logout, isRestoring }}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth(): AuthContextValue {

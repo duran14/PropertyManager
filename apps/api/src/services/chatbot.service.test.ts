@@ -40,9 +40,135 @@ import {
   buildNoInventoryRecoveryTurn,
   buildNoMatchAdjustmentTurn,
   splitIntoChunks,
+  recommendationStateSlotsToClear,
+  canResolveActiveShortlist,
+  resolveSingleOptionAffirmation,
+  sendWithRetry,
+  shouldPrioritizeSearchCriteria,
+  locationScopeSlotsToClearForBroadBedroomRequest,
+  applyBroadBedroomRequestScope,
 } from './chatbot.service.js';
 
 describe('chatbot conversation identity', () => {
+  it('invalidates stale selection and scheduling when search criteria change', () => {
+    expect(recommendationStateSlotsToClear(
+      { bedrooms: '3', selected_unit_id: 'old', scheduling_unit_id: 'old', pending_slots: '[]' },
+      { bedrooms: '2' },
+    )).toEqual(expect.arrayContaining([
+      'selected_unit_id', 'recommended_unit_id', 'scheduling_unit_id', 'pending_slots', 'match_reason',
+    ]));
+  });
+
+  it('keeps an awaiting shortlist active after sending its comparison link', () => {
+    expect(canResolveActiveShortlist('proposing_tour')).toBe(true);
+    expect(canResolveActiveShortlist('proposing_units')).toBe(true);
+    expect(canResolveActiveShortlist('scheduling')).toBe(false);
+  });
+
+  it('selects the only presented property from an affirmative reply', () => {
+    expect(resolveSingleOptionAffirmation('yes', ['unit-1'])).toBe('unit-1');
+    expect(resolveSingleOptionAffirmation('that one', ['unit-1'])).toBe('unit-1');
+    expect(resolveSingleOptionAffirmation('show me more', ['unit-1'])).toBeUndefined();
+  });
+
+  it('understands separate acceptance of timing and rejection of the suggested city', () => {
+    const turn = buildNoMatchAdjustmentTurn('timing yes, city no', {
+      preferred_area: 'Burnaby',
+      move_in_date: 'As soon as possible',
+      pending_search_adjustment: 'offer_move_in_date',
+      suggested_move_in_date: '2026-09-01',
+      suggested_area: 'North Vancouver',
+      suggested_province: 'British Columbia',
+    });
+    expect(turn).toMatchObject({
+      intent: 'request_matches',
+      slots: { move_in_date: 'September 2026', pending_search_adjustment: 'resolved' },
+    });
+  });
+
+  it('marks show-me-more as an immediate inventory request', () => {
+    expect(buildFastQualificationTurn('show me more', {
+      transaction_intent: 'rent', prospect_name: 'Miguel', preferred_area: 'North Vancouver',
+      bedrooms: '3', pets: 'dog', budget: '3500', move_in_date: 'September 2026',
+    })).toMatchObject({ intent: 'request_more_options', next_state: 'proposing_tour' });
+  });
+
+  it('prioritizes an explicit bedroom change over an active shortlist selection', () => {
+    expect(shouldPrioritizeSearchCriteria(
+      { bedrooms: '3', selected_unit_id: 'richmond-3' },
+      extractContextualConversationSlots('show me all your 2 bedroom options', { bedrooms: '3' }),
+    )).toBe(true);
+    expect(shouldPrioritizeSearchCriteria(
+      { bedrooms: '3' },
+      extractContextualConversationSlots('I want to see all of them', { bedrooms: '3' }),
+    )).toBe(false);
+  });
+
+  it('prioritizes an explicitly repeated bedroom request over an active shortlist selection', () => {
+    expect(shouldPrioritizeSearchCriteria(
+      { bedrooms: '2', shortlist_scope: 'all' },
+      extractContextualConversationSlots('show me all your 2 bedroom options', { bedrooms: '2' }),
+    )).toBe(true);
+  });
+
+  it('removes a carried-over city when a broad bedroom search names no city', () => {
+    expect(locationScopeSlotsToClearForBroadBedroomRequest('show me all your 2 bedroom options')).toEqual([
+      'preferred_area',
+      'preferred_province',
+      'pending_area',
+      'pending_province',
+      'location_confirmation',
+      'location_confirmed',
+    ]);
+    expect(locationScopeSlotsToClearForBroadBedroomRequest('show me all your 2 bedroom options in Burnaby')).toEqual([]);
+  });
+
+  it('discards a model-suggested city for a broad bedroom search', () => {
+    expect(applyBroadBedroomRequestScope({
+      reply: 'Just to confirm, do you mean North Vancouver?',
+      slots: {
+        bedrooms: '2',
+        preferred_area: 'North Vancouver',
+        preferred_province: 'British Columbia',
+        pending_area: 'North Vancouver',
+        pending_province: 'British Columbia',
+      },
+    }, 'show me all your 2 bedroom option')).toMatchObject({
+      slots: { bedrooms: '2' },
+      clearSlots: expect.arrayContaining([
+        'preferred_area', 'preferred_province', 'pending_area', 'pending_province',
+      ]),
+    });
+  });
+
+  it('treats a broad bedroom search as a qualified location-agnostic search', () => {
+    const slots = {
+      transaction_intent: 'rent',
+      prospect_name: 'Carlos',
+      bedrooms: '2',
+      pets: 'dog',
+      budget: '3500',
+      move_in_date: 'September 2026',
+      inventory_scope: 'all',
+    };
+    expect(buildQualificationGuardReply(slots)).toBeUndefined();
+    expect(shouldTransitionToMatches('collecting_budget', slots)).toBe(true);
+    expect(filterQualifiedUnits([
+      { id: 'burnaby', name: 'Loft 410', propertyName: 'Burnaby Heights', city: 'Burnaby', rentCents: 275000, bedrooms: 2, bathrooms: 2, availableFrom: null, petPolicy: 'Pet friendly' },
+      { id: 'north-van', name: 'Estates 101', propertyName: 'North Van Bluffs', city: 'North Vancouver', rentCents: 310000, bedrooms: 2, bathrooms: 2, availableFrom: null, petPolicy: 'Pet friendly' },
+    ], { ...slots, preferred_area: 'Burnaby' }).map((unit) => unit.id)).toEqual(['burnaby', 'north-van']);
+  });
+
+  it('retries transient outbound delivery failures', async () => {
+    let attempts = 0;
+    const result = await sendWithRetry(async () => {
+      attempts += 1;
+      if (attempts < 3) throw new Error('temporary Telegram failure');
+      return { messageId: 'tg_42' };
+    }, 3);
+    expect(result.messageId).toBe('tg_42');
+    expect(attempts).toBe(3);
+  });
   it('goes from confirmed location directly to bedroom count without asking household composition', () => {
     const turn = buildFastQualificationTurn('yes', {
       transaction_intent: 'rent', prospect_name: 'Joe',
@@ -571,6 +697,42 @@ describe('chatbot conversation identity', () => {
     });
   });
 
+  it.each([
+    ['sorry Carlos'],
+    ['no, my name is Carlos'],
+  ])('corrects an already collected prospect name from natural language: %s', (message) => {
+    const turn = buildFastQualificationTurn(message, {
+      transaction_intent: 'rent',
+      prospect_name: 'Carlops',
+    });
+
+    expect(turn).toMatchObject({
+      slots: { prospect_name: 'Carlos' },
+      next_state: 'collecting_budget',
+    });
+    expect(turn?.slots).not.toHaveProperty('pending_area');
+    expect(turn?.reply).toMatch(/Carlos.*city|city.*Carlos/i);
+  });
+
+  it('recovers a name correction after it was misclassified as a pending location', () => {
+    const turn = buildFastQualificationTurn('no, my name is Carlos', {
+      transaction_intent: 'rent',
+      prospect_name: 'Carlops',
+      pending_area: 'Sorry Carlos',
+      pending_province: 'British Columbia',
+      location_confirmation: 'pending',
+    });
+
+    expect(turn).toMatchObject({
+      slots: {
+        prospect_name: 'Carlos',
+        location_confirmation: 'retry',
+      },
+      next_state: 'collecting_budget',
+    });
+    expect(turn?.reply).toMatch(/Carlos.*city|city.*Carlos/i);
+  });
+
   it('does not loop on the same budget after the prospect already confirmed the area priority', () => {
     const turn = buildNoMatchAdjustmentTurn('2600', {
       transaction_intent: 'rent',
@@ -1089,6 +1251,7 @@ describe('chatbot conversation identity', () => {
     )).toEqual({
       reply: "I have your preferences. I'll show you the best available matches.",
       slots: {},
+      intent: 'request_matches',
       next_state: 'proposing_tour',
     });
   });
@@ -1160,7 +1323,9 @@ describe('chatbot conversation identity', () => {
     expect(reply).not.toContain('http://localhost');
     expect(reply).toContain('• *Address:*');
     expect(reply).toContain('10253 King George Blvd\nSurrey, BC');
-    expect(reply).toContain('Which would you like to explore: Option 1?');
+    expect(reply).not.toContain('My top pick');
+    expect(reply).toContain('This home is a strong match because it');
+    expect(reply).toContain('Would you like to explore it?');
   });
 
   it('builds recommendation delivery blocks so each option can be sent before its photo', () => {
@@ -1207,6 +1372,25 @@ describe('chatbot conversation identity', () => {
     expect(plan.options[0].text).toContain('6500 No 3 Rd\nRichmond, BC');
     expect(plan.options[1].text).toContain('North Van Bluffs Estates');
     expect(plan.outro).toContain('Which would you like to keep: Option 1 or Option 2, or all of them?');
+  });
+
+  it('preserves the seeded local photo path in the Burnaby Loft 410 delivery plan', () => {
+    const photoUrl = '/demo-listings/burnaby-heights-loft-410-exterior.png';
+    const plan = buildRecommendationDeliveryPlan([{
+      id: 'unit_burnaby_410',
+      name: 'Loft 410',
+      propertyName: 'Burnaby Heights Lofts',
+      city: 'Burnaby',
+      province: 'BC',
+      rentCents: 275000,
+      bedrooms: 2,
+      bathrooms: 2,
+      availableFrom: new Date('2026-08-15T00:00:00.000Z'),
+      petPolicy: 'Pet friendly',
+      photoUrl,
+    }], { preferred_area: 'Burnaby', bedrooms: '2', budget: '3500' });
+
+    expect(plan.options[0].photoUrl).toBe(photoUrl);
   });
 
   it('closes warmly after a scheduled tour instead of reopening recommendations', () => {

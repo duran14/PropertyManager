@@ -52,4 +52,29 @@ describe('demo seed', () => {
       expect(photoIds).toHaveLength(4);
     }
   });
+
+  it('adds a local three-photo gallery for Burnaby Heights Loft 410', () => {
+    const photoIds = seedSource.match(/id: 'photo_burnaby_410_[^']+'/g) ?? [];
+    expect(photoIds).toHaveLength(3);
+    expect(seedSource).toContain('/demo-listings/burnaby-heights-loft-410-exterior.png');
+    expect(seedSource).toContain('/demo-listings/burnaby-heights-loft-410-living-kitchen.png');
+    expect(seedSource).toContain('/demo-listings/burnaby-heights-loft-410-bedroom.png');
+  });
+
+  it('completes each previously empty active listing with a three-photo local gallery', () => {
+    const galleries = [
+      ['kelowna_303', 'kelowna-lakeside-303'],
+      ['kits_203', 'kits-point-203'],
+      ['northvan_101', 'northvan-bluffs-101'],
+      ['richmond_502', 'richmond-gardens-502'],
+    ];
+
+    for (const [unitKey, assetSlug] of galleries) {
+      const photoIds = seedSource.match(new RegExp(`id: 'photo_${unitKey}_[^']+'`, 'g')) ?? [];
+      expect(photoIds).toHaveLength(3);
+      expect(seedSource).toContain(`/demo-listings/${assetSlug}-exterior.png`);
+      expect(seedSource).toContain(`/demo-listings/${assetSlug}-living-kitchen.png`);
+      expect(seedSource).toContain(`/demo-listings/${assetSlug}-bedroom.png`);
+    }
+  });
 });

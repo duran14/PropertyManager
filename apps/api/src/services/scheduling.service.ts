@@ -32,6 +32,62 @@ export function canCancelShowingStatus(status: string): boolean {
   return status === 'scheduled' || status === 'confirmed';
 }
 
+export function resolveShowingBooking(
+  existing: { unitId: string | null } | null,
+  unitId: string,
+): { kind: 'new' | 'existing' | 'conflict' } {
+  if (!existing) return { kind: 'new' };
+  return existing.unitId === unitId ? { kind: 'existing' } : { kind: 'conflict' };
+}
+
+export function buildShowingConfirmationEmail(input: {
+  prospectName: string;
+  propertyLabel: string;
+  address: string;
+  scheduledAt: Date;
+}): string {
+  const scheduledDate = input.scheduledAt.toLocaleString('en-CA', {
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  });
+  return `Hello ${input.prospectName},\n\nYour property tour is confirmed.\n\n${input.propertyLabel}\n${input.address}\n${scheduledDate}\n\nWe look forward to seeing you.`;
+}
+
+export async function sendShowingConfirmationEmail(input: {
+  recipient: string;
+  body: string;
+  send: (message: { to: string; body: string; channel: 'email'; subject: string }) => Promise<{ messageId: string }>;
+}): Promise<{ messageId: string }> {
+  return input.send({
+    to: input.recipient,
+    body: input.body,
+    channel: 'email',
+    subject: 'Your property tour is confirmed',
+  });
+}
+
+function showingSlotKey(leadId: string, scheduledAt: Date | string): string {
+  return `${leadId}:${new Date(scheduledAt).toISOString()}`;
+}
+
+export function buildProspectSlotKey(
+  input: { leadId: string; email?: string | null; phone?: string | null },
+  scheduledAt: Date | string,
+): string {
+  const email = input.email?.trim().toLowerCase();
+  const phone = input.phone?.replace(/\D/g, '');
+  const prospectIdentity = email
+    ? `email:${email}`
+    : phone
+      ? `phone:${phone}`
+      : `lead:${input.leadId}`;
+  return `${prospectIdentity}:${new Date(scheduledAt).toISOString()}`;
+}
+
 export async function getAvailableSlots(
   tenantId: string,
   unitId: string,
@@ -76,7 +132,10 @@ export async function createManualShowingFromConversation(input: {
   if (!conversation.leadId || !conversation.lead)
     throw new Error('Conversation has no linked lead');
 
-  const unitId = conversation.unitId ?? conversation.lead.unitId;
+  const leadId = conversation.leadId;
+  const lead = conversation.lead;
+
+  const unitId = conversation.unitId ?? lead.unitId;
   if (!unitId) throw new Error('Conversation has no recommended unit');
 
   const durationMinutes = normalizeShowingDuration(input.durationMinutes);
@@ -84,11 +143,17 @@ export async function createManualShowingFromConversation(input: {
     const dbShowing = await tx.showing.create({
       data: {
         tenantId: input.tenantId,
-        leadId: conversation.leadId!,
+        leadId,
         unitId,
         scheduledAt: input.scheduledAt,
         durationMinutes,
         status: 'scheduled',
+        activeSlotKey: showingSlotKey(leadId, input.scheduledAt),
+        activeProspectSlotKey: buildProspectSlotKey({
+          leadId,
+          email: lead.email,
+          phone: lead.phone,
+        }, input.scheduledAt),
       },
       include: {
         lead: { select: { name: true, phone: true, email: true } },
@@ -99,7 +164,7 @@ export async function createManualShowingFromConversation(input: {
     });
 
     await tx.lead.update({
-      where: { id: conversation.leadId! },
+      where: { id: leadId },
       data: { status: 'tour_scheduled' },
     });
 
@@ -175,6 +240,29 @@ export async function scheduleTour(input: {
   const slot = slots[slotIndex];
   if (!slot) throw new Error(`Slot ${slotIndex} is not available`);
 
+  const scheduledAt = new Date(slot.startAt);
+  const prospectSlotKey = buildProspectSlotKey({
+    leadId,
+    email: input.prospectEmail,
+    phone: input.prospectPhone,
+  }, scheduledAt);
+  const existingShowing = await prisma.showing.findFirst({
+    where: { tenantId, activeProspectSlotKey: prospectSlotKey },
+    select: { id: true, unitId: true, showmojoUrl: true, scheduledAt: true },
+  });
+  const bookingResolution = resolveShowingBooking(existingShowing, unitId);
+  if (bookingResolution.kind === 'existing' && existingShowing) {
+    return {
+      showingId: existingShowing.id,
+      showmojoUrl: existingShowing.showmojoUrl ?? '',
+      confirmUrl: '',
+      scheduledAt: existingShowing.scheduledAt.toISOString(),
+    };
+  }
+  if (bookingResolution.kind === 'conflict') {
+    throw new Error('This prospect already has a showing scheduled at that time');
+  }
+
   const { showing } = await adapter.createShowing({
     listingCode,
     slot,
@@ -189,20 +277,30 @@ export async function scheduleTour(input: {
       leadId,
       unitId,
       showmojoId: showing.id,
-      scheduledAt: new Date(slot.startAt),
+      scheduledAt,
       status: 'scheduled',
       showmojoUrl: showing.showmojoUrl,
+      activeSlotKey: showingSlotKey(leadId, scheduledAt),
+      activeProspectSlotKey: prospectSlotKey,
     },
   });
 
   await prisma.lead.update({
     where: { id: leadId },
     data: {
+      unitId,
       status: 'tour_scheduled',
       showmojoShowingId: showing.id,
       tourUrl: showing.showmojoUrl,
     },
   });
+
+  if (input.conversationId) {
+    await prisma.chatConversation.updateMany({
+      where: { id: input.conversationId, tenantId },
+      data: { unitId },
+    });
+  }
 
   await writeAudit({
     tenantId,
@@ -264,6 +362,10 @@ export async function confirmShowing(
   const adapters = getAdapters();
   const showing = await prisma.showing.findFirst({
     where: { id: showingId, tenantId },
+    include: {
+      lead: { select: { name: true, email: true } },
+      unit: { select: { name: true, property: { select: { name: true, address: true, city: true, province: true } } } },
+    },
   });
   if (!showing) throw new Error('Showing not found');
   if (!canConfirmShowingStatus(showing.status))
@@ -296,6 +398,46 @@ export async function confirmShowing(
     type: 'showing.confirmed',
     scheduledAt: showing.scheduledAt,
   });
+
+  if (showing.lead.email) {
+    const propertyLabel = showing.unit
+      ? `${showing.unit.property.name} — ${showing.unit.name}`
+      : 'Your selected property';
+    const address = showing.unit
+      ? `${showing.unit.property.address}, ${showing.unit.property.city}, ${showing.unit.property.province}`
+      : 'Address details are available from your property manager.';
+    try {
+      const delivery = await sendShowingConfirmationEmail({
+        recipient: showing.lead.email,
+        body: buildShowingConfirmationEmail({
+          prospectName: showing.lead.name ?? 'there',
+          propertyLabel,
+          address,
+          scheduledAt: showing.scheduledAt,
+        }),
+        send: (message) => adapters.messaging.email.send(message),
+      });
+      await writeAudit({
+        tenantId,
+        actorId: 'scheduling_service',
+        actorType: 'system',
+        action: 'showing.prospect_notified',
+        entityType: 'showing',
+        entityId: showingId,
+        payload: { channel: 'email', providerMessageId: delivery.messageId },
+      });
+    } catch (error) {
+      await writeAudit({
+        tenantId,
+        actorId: 'scheduling_service',
+        actorType: 'system',
+        action: 'showing.prospect_notification_failed',
+        entityType: 'showing',
+        entityId: showingId,
+        payload: { channel: 'email', error: error instanceof Error ? error.message : 'Unknown error' },
+      });
+    }
+  }
 }
 
 export async function cancelShowing(
@@ -319,7 +461,7 @@ export async function cancelShowing(
 
   await prisma.showing.update({
     where: { id: showingId },
-    data: { status: 'cancelled' },
+    data: { status: 'cancelled', activeSlotKey: null, activeProspectSlotKey: null },
   });
 
   await writeAudit({

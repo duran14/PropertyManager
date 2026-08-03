@@ -47,6 +47,8 @@ const baseEnv: Env = {
   DOCUSIGN_BASE_PATH: 'https://demo.docusign.net/restapi',
   TELEGRAM_BOT_TOKEN: '',
   TELEGRAM_DEFAULT_TENANT_ID: 'tenant_demo_pm',
+  RESEND_API_KEY: '',
+  RESEND_FROM_EMAIL: '',
   DEFAULT_CONFIDENCE_THRESHOLD: 0.85,
 };
 

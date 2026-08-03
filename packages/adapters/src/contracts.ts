@@ -156,6 +156,7 @@ export interface OutboundMessage {
   to: string; // identificador del destinatario (teléfono, chat id, session id)
   body: string;
   channel: ChatChannel;
+  subject?: string;
 }
 
 /** Mensaje entrante del usuario hacia el bot, normalizado desde cualquier canal. */

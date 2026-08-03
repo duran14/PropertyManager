@@ -37,15 +37,26 @@ publicRouter.get('/shortlists/:token', async (req, res, next) => {
     const result = await getPublicShortlist(req.params.token);
     if (!result) return void res.status(404).json({ error: 'Shortlist not found or expired' });
     const slotMap = Object.fromEntries(result.shortlist.conversation.slots.map((slot) => [slot.key, slot.value]));
+    const mapUnit = (unit: typeof result.units[number]) => ({
+      id: unit!.id, name: unit!.name, rentCents: unit!.rentCents, bedrooms: unit!.bedrooms,
+      bathrooms: unit!.bathrooms, squareFeet: unit!.squareFeet, amenities: unit!.amenities,
+      petPolicy: unit!.petPolicy, availableFrom: unit!.availableFrom, isActive: unit!.isActive,
+      property: { name: unit!.property.name, address: unit!.property.address, city: unit!.property.city, province: unit!.property.province },
+      photos: unit!.listingPhotos.map((photo) => ({ url: photo.enhancedUrl ?? photo.originalUrl })),
+    });
     res.json({
       selectedUnitId: result.shortlist.selectedUnitId,
       contact: buildShortlistPrefillContact(slotMap, result.shortlist.conversation.lead),
-      units: result.units.map((unit) => ({
-        id: unit!.id, name: unit!.name, rentCents: unit!.rentCents, bedrooms: unit!.bedrooms,
-        bathrooms: unit!.bathrooms, squareFeet: unit!.squareFeet, amenities: unit!.amenities,
-        petPolicy: unit!.petPolicy, availableFrom: unit!.availableFrom, isActive: unit!.isActive,
-        property: { name: unit!.property.name, address: unit!.property.address, city: unit!.property.city, province: unit!.property.province },
-        photos: unit!.listingPhotos.map((photo) => ({ url: photo.enhancedUrl ?? photo.originalUrl })),
+      tenantName: result.tenantName,
+      tenantId: result.shortlist.tenantId,
+      units: result.units.map(mapUnit),
+      catalog: result.catalog.map((unit) => ({
+        id: unit.id, name: unit.name, slug: unit.slug, rentCents: unit.rentCents,
+        bedrooms: unit.bedrooms, bathrooms: unit.bathrooms, squareFeet: unit.squareFeet,
+        amenities: unit.amenities, petPolicy: unit.petPolicy, parking: unit.parking,
+        utilities: unit.utilities, availableFrom: unit.availableFrom,
+        property: { name: unit.property.name, address: unit.property.address, city: unit.property.city, province: unit.property.province },
+        photos: unit.listingPhotos.map((photo) => ({ url: photo.enhancedUrl ?? photo.originalUrl, isPrimary: photo.isPrimary })),
       })),
     });
   } catch (error) { next(error); }
@@ -131,6 +142,102 @@ publicRouter.post('/shortlists/:token/schedule', async (req, res, next) => {
 
 // =============== RUTAS PÚBLICAS ===============
 
+publicRouter.get('/units', async (req, res, next) => {
+  try {
+    const tenantId = req.headers['x-tenant-id'] ?? req.query.tenant;
+    if (typeof tenantId !== 'string') {
+      res.status(400).json({ error: 'x-tenant-id header is required' });
+      return;
+    }
+
+    const city = typeof req.query.city === 'string' ? req.query.city : undefined;
+    const bedroomsParam = typeof req.query.bedrooms === 'string' ? req.query.bedrooms : undefined;
+    const bedroomsMinParam = typeof req.query.bedroomsMin === 'string' ? req.query.bedroomsMin : undefined;
+    const bedroomsMaxParam = typeof req.query.bedroomsMax === 'string' ? req.query.bedroomsMax : undefined;
+    const budgetParam = typeof req.query.budget === 'string' ? req.query.budget : undefined;
+    const petsParam = typeof req.query.pets === 'string' ? req.query.pets : undefined;
+
+    const units = await prisma.unit.findMany({
+      where: { tenantId, isActive: true },
+      include: {
+        property: { select: { name: true, address: true, city: true, province: true } },
+        listingPhotos: {
+          orderBy: [{ isPrimary: 'desc' }, { createdAt: 'asc' }],
+          take: 6,
+        },
+      },
+      orderBy: { rentCents: 'asc' },
+    });
+
+    const filtered = units.filter((unit) => {
+      if (city) {
+        const unitCity = unit.property.city.toLowerCase();
+        const queryCity = city.toLowerCase();
+        const cityMatches = unitCity.includes(queryCity) || queryCity.includes(unitCity);
+        if (!cityMatches) return false;
+      }
+      if (bedroomsParam) {
+        const isMinimum = bedroomsParam.endsWith('+');
+        const requested = Number.parseInt(bedroomsParam.replace('+', ''), 10);
+        if (!Number.isNaN(requested)) {
+          if (isMinimum) {
+            if (unit.bedrooms === null || unit.bedrooms < requested) return false;
+          } else if (unit.bedrooms !== requested) {
+            return false;
+          }
+        }
+      }
+      if (bedroomsMinParam) {
+        const min = Number.parseInt(bedroomsMinParam, 10);
+        if (!Number.isNaN(min) && (unit.bedrooms === null || unit.bedrooms < min)) return false;
+      }
+      if (bedroomsMaxParam) {
+        const max = Number.parseInt(bedroomsMaxParam, 10);
+        if (!Number.isNaN(max) && (unit.bedrooms === null || unit.bedrooms > max)) return false;
+      }
+      if (budgetParam) {
+        const budgetCents = Number.parseFloat(budgetParam) * 100;
+        if (!Number.isNaN(budgetCents) && unit.rentCents > budgetCents) return false;
+      }
+      if (petsParam && petsParam !== 'none') {
+        const policy = unit.petPolicy?.toLowerCase() ?? '';
+        if (petsParam.includes('cat') && !/cat|pet friendly/.test(policy)) return false;
+        if (petsParam.includes('dog') && !/dog|pet friendly/.test(policy)) return false;
+      }
+      return true;
+    });
+
+    res.json({
+      units: filtered.map((unit) => ({
+        id: unit.id,
+        name: unit.name,
+        slug: unit.slug,
+        rentCents: unit.rentCents,
+        bedrooms: unit.bedrooms,
+        bathrooms: unit.bathrooms,
+        squareFeet: unit.squareFeet,
+        amenities: unit.amenities,
+        petPolicy: unit.petPolicy,
+        parking: unit.parking,
+        utilities: unit.utilities,
+        availableFrom: unit.availableFrom,
+        property: {
+          name: unit.property.name,
+          address: unit.property.address,
+          city: unit.property.city,
+          province: unit.property.province,
+        },
+        photos: unit.listingPhotos.map((photo) => ({
+          url: photo.enhancedUrl ?? photo.originalUrl,
+          isPrimary: photo.isPrimary,
+        })),
+      })),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 publicRouter.get('/units/:slug', async (req, res, next) => {
   try {
     const tenantId = req.headers['x-tenant-id'] ?? req.query.tenant;
@@ -215,6 +322,66 @@ publicRouter.post('/units/:slug/contact', async (req, res, next) => {
   } catch (err) {
     next(err);
   }
+});
+
+publicRouter.get('/units/:slug/slots', async (req, res, next) => {
+  try {
+    const tenantId = req.headers['x-tenant-id'] ?? req.query.tenant;
+    if (typeof tenantId !== 'string') return void res.status(400).json({ error: 'x-tenant-id header is required' });
+    const unit = await prisma.unit.findFirst({ where: { tenantId, slug: req.params.slug, isActive: true }, select: { id: true } });
+    if (!unit) return void res.status(404).json({ error: 'Unit not found' });
+    res.json(await getAvailableSlots(tenantId, unit.id, getAdapters().showmojo));
+  } catch (err) { next(err); }
+});
+
+const publicScheduleSchema = z.object({
+  slotIndex: z.number().int().min(0),
+  name: z.string().min(1),
+  phone: z.string().min(1),
+  email: z.string().email(),
+});
+
+publicRouter.post('/units/:slug/schedule', async (req, res, next) => {
+  try {
+    const tenantId = req.headers['x-tenant-id'] ?? req.query.tenant;
+    if (typeof tenantId !== 'string') return void res.status(400).json({ error: 'x-tenant-id header is required' });
+    const unit = await prisma.unit.findFirst({
+      where: { tenantId, slug: req.params.slug, isActive: true },
+      include: { property: { select: { name: true, address: true, city: true, province: true } } },
+    });
+    if (!unit) return void res.status(404).json({ error: 'Unit not found' });
+    const parsed = publicScheduleSchema.safeParse(req.body);
+    if (!parsed.success) return void res.status(400).json({ error: 'Invalid data', details: parsed.error.flatten() });
+
+    let lead = await prisma.lead.findFirst({ where: { tenantId, email: parsed.data.email }, orderBy: { updatedAt: 'desc' } });
+    if (!lead) {
+      lead = await prisma.lead.create({
+        data: {
+          tenantId,
+          name: parsed.data.name,
+          phone: parsed.data.phone,
+          email: parsed.data.email,
+          status: 'new_',
+          source: 'unit_url',
+        },
+      });
+    }
+
+    const result = await scheduleTour({
+      tenantId,
+      unitId: unit.id,
+      leadId: lead.id,
+      slotIndex: parsed.data.slotIndex,
+      prospectName: parsed.data.name,
+      prospectPhone: parsed.data.phone,
+      prospectEmail: parsed.data.email,
+      adapter: getAdapters().showmojo,
+    });
+
+    const unitLabel = `${unit.property.name} — ${unit.name}`;
+    const unitAddress = `${unit.property.address}, ${unit.property.city}, ${unit.property.province}`;
+    res.json({ scheduledAt: result.scheduledAt, unitLabel, unitAddress });
+  } catch (err) { next(err); }
 });
 
 // =============== RUTAS PRIVADAS ===============
