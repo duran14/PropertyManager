@@ -140,6 +140,31 @@ describe('rental conversation interpreter', () => {
     });
   });
 
+  it('accepts a valid unit and slot selection with high confidence', async () => {
+    const { glm } = glmReturning(JSON.stringify({
+      reply: 'Great, I have Suite 410 available on one of the upcoming dates.',
+      intent: 'select_unit',
+      confidence: 'high',
+      profile: { set: {}, clear: [] },
+      selection: { unitIds: ['unit-410'], slotIndex: 1 },
+    }));
+
+    await expect(interpretRentalTurn({
+      glm,
+      context: conversationContext(),
+      message: 'Perfect, I want that unit on the second available date.',
+    })).resolves.toEqual({
+      turn: {
+        reply: 'Great, I have Suite 410 available on one of the upcoming dates.',
+        intent: 'select_unit',
+        confidence: 'high',
+        profile: { set: {}, clear: [] },
+        selection: { unitIds: ['unit-410'], slotIndex: 1 },
+      },
+      providerFailed: false,
+    });
+  });
+
   it('rejects a model-selected unit ID that is absent from the factual context', async () => {
     const { glm } = glmReturning(JSON.stringify({
       reply: 'I selected it.',
