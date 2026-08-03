@@ -1878,8 +1878,9 @@ export function buildFastQualificationTurn(
   }
 
   if (!existingSlots.budget) {
+    const wordCount = normalized.split(/\s+/).filter(Boolean).length;
     const amount = message.replace(/,/g, '').match(/\$?\s*(\d{3,5})/)?.[1];
-    if (!amount) return undefined;
+    if (!amount || wordCount > 4) return undefined;
     return {
       reply: buildRentalMoveInQuestion(amount),
       slots: { budget: amount },
@@ -1888,6 +1889,11 @@ export function buildFastQualificationTurn(
   }
 
   if (!existingSlots.move_in_date && message) {
+    const hasDateSignal = /\b(?:asap|as soon as possible|immediately|right away)\b/i.test(normalized)
+      || /\b(?:jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\b/i.test(normalized)
+      || /\b20\d{2}\b/.test(normalized);
+    const wordCount = normalized.split(/\s+/).filter(Boolean).length;
+    if (!hasDateSignal && wordCount > 3) return undefined;
     const moveInTiming = canonicalizeMoveInTiming(message);
     return {
       reply: buildRentalMoveInAcknowledgement(moveInTiming),

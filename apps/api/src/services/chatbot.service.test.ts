@@ -1799,6 +1799,53 @@ describe('chatbot conversation identity', () => {
   });
 });
 
+describe('buildFastQualificationTurn (model deferral on rich messages)', () => {
+  it('defers to the model for a rich message during the budget step', () => {
+    const result = buildFastQualificationTurn(
+      'my max is around 3200 but I could stretch to 3500 for the right place',
+      { transaction_intent: 'rent', prospect_name: 'Carlos', preferred_area: 'Burnaby', preferred_province: 'British Columbia', bedrooms: '2', pets: 'dog' },
+      'Pacific Ridge Property Management',
+    );
+    expect(result).toBeUndefined();
+  });
+
+  it('still answers a simple numeric budget directly', () => {
+    const result = buildFastQualificationTurn(
+      '2600',
+      { transaction_intent: 'rent', prospect_name: 'Carlos', preferred_area: 'Burnaby', preferred_province: 'British Columbia', bedrooms: '2', pets: 'dog' },
+      'Pacific Ridge Property Management',
+    );
+    expect(result).toMatchObject({ slots: { budget: '2600' } });
+  });
+
+  it('defers to the model for a rich message during the move-in step', () => {
+    const result = buildFastQualificationTurn(
+      'honestly not sure yet, depends on when my lease ends',
+      { transaction_intent: 'rent', prospect_name: 'Carlos', preferred_area: 'Burnaby', preferred_province: 'British Columbia', bedrooms: '2', pets: 'dog', budget: '2600' },
+      'Pacific Ridge Property Management',
+    );
+    expect(result).toBeUndefined();
+  });
+
+  it('still answers a simple move-in month directly', () => {
+    const result = buildFastQualificationTurn(
+      'September',
+      { transaction_intent: 'rent', prospect_name: 'Carlos', preferred_area: 'Burnaby', preferred_province: 'British Columbia', bedrooms: '2', pets: 'dog', budget: '2600' },
+      'Pacific Ridge Property Management',
+    );
+    expect(result).toMatchObject({ slots: { move_in_date: 'September' } });
+  });
+
+  it('still answers "as soon as possible" directly', () => {
+    const result = buildFastQualificationTurn(
+      'asap',
+      { transaction_intent: 'rent', prospect_name: 'Carlos', preferred_area: 'Burnaby', preferred_province: 'British Columbia', bedrooms: '2', pets: 'dog', budget: '2600' },
+      'Pacific Ridge Property Management',
+    );
+    expect(result).toMatchObject({ slots: { move_in_date: 'As soon as possible' } });
+  });
+});
+
 const adapterBurnabyUnit: AvailableUnit = {
   id: 'unit_burnaby_410',
   name: 'Suite 410',
