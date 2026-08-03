@@ -18,11 +18,13 @@ export class GlmRealAdapter implements GlmAdapter {
   ) {}
 
   async reason(request: GlmReasoningRequest): Promise<GlmReasoningResponse> {
-    // Acotado a 2 intentos de 6s (~12.25s peor caso, antes ~24.75s con 3x8s):
-    // en una demo en vivo, una respuesta rápida del fallback determinista es
-    // mejor experiencia que una espera larga e impredecible por el modelo.
+    // Turnos con más historial/contexto (conversación avanzada) tardan más de
+    // 6s en generar; 6s cortaba llamadas legítimas en curso, no solo colgadas
+    // (visto en prueba manual: "DOMException [TimeoutError]" consistente en
+    // conversaciones avanzadas). 15s x 2 intentos da margen real sin volver al
+    // peor caso original de ~25s.
     const maxAttempts = 2;
-    const timeoutMs = 6_000;
+    const timeoutMs = 15_000;
     let response: Response | undefined;
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       response = await fetch(`${this.config.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
