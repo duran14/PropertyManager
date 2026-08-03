@@ -1,4 +1,5 @@
-﻿import { describe, expect, it } from 'vitest';
+﻿import { describe, expect, it, vi } from 'vitest';
+import type { GlmAdapter } from '@property-manager/adapters';
 import {
   buildGlmFallback,
   buildFastQualificationTurn,
@@ -50,9 +51,11 @@ import {
   resolveRentalTurnToInterpreted,
   resolveOwnershipTurnToInterpreted,
   classifyProfileSlotKey,
+  shouldSkipContextualSlotHeuristics,
 } from './chatbot.service.js';
-import type { AvailableUnit } from './chatbot.service.js';
+import type { AvailableUnit, ConversationState, InterpretedTurn } from './chatbot.service.js';
 import type { ConversationTurn } from './rental-conversation.types.js';
+import { interpretRentalTurn } from './rental-conversation.interpreter.js';
 import { buildOwnershipConversationTurn } from './ownership-conversation.service.js';
 import type { OwnershipConversationSemanticTurn } from './ownership-conversation.types.js';
 
@@ -1993,6 +1996,82 @@ describe('resolveRentalTurnToInterpreted (semantic adapter mapping)', () => {
   });
 });
 
+describe('rental provider-outage fallback (Finding 1: the fallback must not be dead code)', () => {
+  it('never lets recomputing buildDeterministicQualificationTurn stand in as the outage fallback, because it reproduces undefined', () => {
+    // This is the exact bug: callGlm is only reached once buildDeterministicQualificationTurn
+    // (via `qualificationTurn`, upstream in handleInboundMessageUnlocked) already returned
+    // undefined for this very message and these very slots. Recomputing it inside callGlm
+    // with the same arguments can only return undefined again.
+    const existingSlots = {
+      transaction_intent: 'rent',
+      prospect_name: 'Priya',
+      preferred_area: 'Burnaby',
+      bedrooms: '2',
+      pets: 'dog',
+      budget: '2800',
+      move_in_date: 'September 2026',
+    };
+    const message = 'Thanks for chatting, this has been really pleasant so far!';
+    expect(buildDeterministicQualificationTurn(message, existingSlots, 'Pacific Ridge Property Management')).toBeUndefined();
+  });
+
+  it('gives a real, useful reply on a genuine provider outage past the fast-path guards, not the generic safe-clarification text', async () => {
+    const tenantName = 'Pacific Ridge Property Management';
+    const currentState: ConversationState = 'collecting_movein';
+    // Same rental state as above: nothing left for the fast path to ask
+    // deterministically (transaction_intent, prospect_name, preferred_area,
+    // bedrooms, pets, budget, move_in_date are all already set).
+    const existingSlots = {
+      transaction_intent: 'rent',
+      prospect_name: 'Priya',
+      preferred_area: 'Burnaby',
+      bedrooms: '2',
+      pets: 'dog',
+      budget: '2800',
+      move_in_date: 'September 2026',
+    };
+    const message = 'Thanks for chatting, this has been really pleasant so far!';
+
+    const failingGlm = {
+      name: 'glm',
+      reason: vi.fn(async () => { throw new Error('provider outage'); }),
+    } as unknown as GlmAdapter;
+
+    const { turn, providerFailed } = await interpretRentalTurn({
+      glm: failingGlm,
+      context: {
+        tenantName,
+        history: [],
+        profile: existingSlots,
+        pendingSlotCount: 0,
+        visibleUnits: [],
+        knowledgeContext: '',
+      },
+      message,
+    });
+    expect(providerFailed).toBe(true);
+
+    // This mirrors exactly what callGlm now does: precompute the fallback
+    // with buildGlmFallback (which always returns something) instead of
+    // recomputing buildDeterministicQualificationTurn.
+    const providerOutageFallback = buildGlmFallback(currentState, tenantName, message, existingSlots);
+
+    const result = resolveRentalTurnToInterpreted({
+      turn,
+      providerFailed,
+      currentState,
+      availableUnits: [],
+      deterministicFallback: providerOutageFallback,
+    });
+
+    expect(result.reply).not.toBe('Could you clarify that in one sentence?');
+    expect(result).toMatchObject({
+      reply: "I'm still with you. Let me continue from the information you've already shared.",
+      next_state: 'collecting_movein',
+    });
+  });
+});
+
 describe('resolveOwnershipTurnToInterpreted (semantic adapter mapping)', () => {
   function ownershipTurn(overrides: Partial<OwnershipConversationSemanticTurn> = {}): OwnershipConversationSemanticTurn {
     return {
@@ -2067,6 +2146,36 @@ describe('resolveOwnershipTurnToInterpreted (semantic adapter mapping)', () => {
       next_state: 'collecting_budget',
     });
   });
+
+  it('Finding 5: stays in handoff on the next message instead of regressing to collecting_budget', () => {
+    const result = resolveOwnershipTurnToInterpreted({
+      turn: ownershipTurn({ reply: 'Sure, one more thing...', intent: 'discover', confidence: 'high' }),
+      providerFailed: false,
+      currentState: 'handoff',
+    });
+
+    expect(result.next_state).toBe('handoff');
+  });
+
+  it('Finding 5: a low-confidence turn after handoff also stays in handoff, not collecting_budget', () => {
+    const result = resolveOwnershipTurnToInterpreted({
+      turn: ownershipTurn({ reply: 'Could you clarify that in one sentence?', confidence: 'low' }),
+      providerFailed: false,
+      currentState: 'handoff',
+    });
+
+    expect(result.next_state).toBe('handoff');
+  });
+
+  it('still transitions into handoff from a non-handoff state when the turn says so', () => {
+    const result = resolveOwnershipTurnToInterpreted({
+      turn: ownershipTurn({ reply: 'Connecting you now.', intent: 'handoff' }),
+      providerFailed: false,
+      currentState: 'collecting_budget',
+    });
+
+    expect(result.next_state).toBe('handoff');
+  });
 });
 
 describe('classifyProfileSlotKey (shared rental/ownership field routing)', () => {
@@ -2101,5 +2210,68 @@ describe('classifyProfileSlotKey (shared rental/ownership field routing)', () =>
   it('routes unrecognized keys to operational in either domain', () => {
     expect(classifyProfileSlotKey('shortlist_scope', true)).toBe('operational');
     expect(classifyProfileSlotKey('tour_scheduled_at', false)).toBe('operational');
+  });
+});
+
+describe('shouldSkipContextualSlotHeuristics (Finding 2: never mutate the profile on low confidence)', () => {
+  it('demonstrates the bug precondition: the bedroom-range regex fires regardless of the model confidence', () => {
+    // "two or three bedrooms, I honestly can't decide" is exactly the kind of
+    // ambiguous message the model should (and, per the scenario, does) mark
+    // confidence: 'low' for — but extractContextualConversationSlots has no
+    // notion of confidence at all, so its bedroom-range regex still matches.
+    const contextualSlots = extractContextualConversationSlots(
+      'two or three bedrooms, I honestly can\'t decide, what would you suggest?',
+      { transaction_intent: 'rent', prospect_name: 'Dana', preferred_area: 'Burnaby' },
+    );
+    expect(contextualSlots).toMatchObject({ bedrooms_min: '2', bedrooms_max: '3' });
+  });
+
+  it('flags a low-confidence turn from the model path for skipping', () => {
+    const modelLowConfidenceTurn: InterpretedTurn = {
+      reply: 'Could you clarify that in one sentence?',
+      intent: 'ask_clarification',
+      slots: {},
+    };
+    expect(shouldSkipContextualSlotHeuristics(modelLowConfidenceTurn, false)).toBe(true);
+  });
+
+  it('does not flag an ask_clarification turn that came from the deterministic path', () => {
+    // buildRentalNameClarification (via buildFastQualificationTurn) legitimately
+    // returns intent: 'ask_clarification' from the deterministic path on
+    // unambiguous input — that has none of the model's confidence ambiguity
+    // and must not be affected by this guard.
+    const deterministicClarificationTurn: InterpretedTurn = {
+      reply: "I'm only asking for your first name so I can make the conversation more personal.",
+      intent: 'ask_clarification',
+      slots: {},
+    };
+    expect(shouldSkipContextualSlotHeuristics(deterministicClarificationTurn, true)).toBe(false);
+  });
+
+  it('does not flag a high-confidence model turn', () => {
+    const highConfidenceTurn: InterpretedTurn = {
+      reply: 'Got it, two bedrooms.',
+      intent: 'provide_information',
+      slots: { bedrooms: '2' },
+    };
+    expect(shouldSkipContextualSlotHeuristics(highConfidenceTurn, false)).toBe(false);
+  });
+
+  it('proves the fix: contextualSlots are discarded from the merged slots when the model turn is low-confidence', () => {
+    const contextualSlots = extractContextualConversationSlots(
+      'two or three bedrooms, I honestly can\'t decide, what would you suggest?',
+      { transaction_intent: 'rent', prospect_name: 'Dana', preferred_area: 'Burnaby' },
+    );
+    const lowConfidenceModelTurn: InterpretedTurn = {
+      reply: 'Could you clarify that in one sentence?',
+      intent: 'ask_clarification',
+      slots: {},
+    };
+    const skip = shouldSkipContextualSlotHeuristics(lowConfidenceModelTurn, false);
+
+    const mergedSlots = { ...(skip ? {} : contextualSlots), ...(lowConfidenceModelTurn.slots ?? {}) };
+
+    expect(mergedSlots).not.toHaveProperty('bedrooms_min');
+    expect(mergedSlots).not.toHaveProperty('bedrooms_max');
   });
 });

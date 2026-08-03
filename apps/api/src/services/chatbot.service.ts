@@ -225,6 +225,22 @@ export function shouldUseDeterministicFastPath(message: string): boolean {
   return /^\/(start|begin|reset)(\b|$)/i.test(message.trim());
 }
 
+/**
+ * Ante confianza baja del *modelo* (intent 'ask_clarification' que no vino
+ * del camino determinista), las heurísticas de contextualSlots y
+ * alignInterpretedSlotsWithExpectedField no deben mutar el perfil: ambas
+ * asumen que el mensaje es inequívoco, y un turno de baja confianza por
+ * definición no lo es. El camino determinista queda excluido a propósito:
+ * ya solo dispara en input inequívoco (p. ej. buildRentalNameClarification),
+ * así que no comparte esta ambigüedad y sus slots deben conservarse.
+ */
+export function shouldSkipContextualSlotHeuristics(
+  turn: InterpretedTurn,
+  cameFromDeterministicPath: boolean,
+): boolean {
+  return !cameFromDeterministicPath && turn.intent === 'ask_clarification';
+}
+
 export function sanitizeInterpretedTurn(turn: InterpretedTurn): InterpretedTurn {
   const slots: Record<string, string> = {};
   for (const [key, value] of Object.entries(turn.slots ?? {}) as Array<[string, unknown]>) {
@@ -751,9 +767,11 @@ async function handleInboundMessageUnlocked(
         next_state: currentState,
       }
     : undefined;
-  const repairTurn = buildConversationRepairTurn(input.body, existingSlots);
-  const ownershipIntentAlreadySet = existingSlots.transaction_intent === 'buy' || existingSlots.transaction_intent === 'sell';
-  const qualificationTurn = ownershipIntentAlreadySet
+  // buildConversationRepairTurn también está afinada para renta (sus guiones
+  // hablan de bedrooms/mascotas/presupuesto), así que se omite en ownership
+  // para no pre-emptar al modelo de compra/venta con un guion equivocado.
+  const repairTurn = isOwnershipConversation ? undefined : buildConversationRepairTurn(input.body, existingSlots);
+  const qualificationTurn = isOwnershipConversation
     ? undefined
     : buildDeterministicQualificationTurn(input.body, existingSlots, tenantName);
   const deterministicResult = existingSlots.tour_scheduled_at
@@ -765,9 +783,15 @@ async function handleInboundMessageUnlocked(
       ?? undefined;
 
   let glmResult: InterpretedTurn;
+  // Se registra si este turno vino del camino determinista (fast-path) para
+  // poder distinguirlo del camino del modelo más abajo (Finding 2: ante
+  // confianza baja del *modelo* no se debe mutar el perfil con heurísticas;
+  // el camino determinista ya solo dispara en input inequívoco, así que no
+  // aplica la misma restricción).
+  const glmResultCameFromDeterministicPath = Boolean(deterministicResult);
   if (deterministicResult) {
     glmResult = deterministicResult;
-  } else if (ownershipIntentAlreadySet) {
+  } else if (isOwnershipConversation) {
     glmResult = await callOwnershipGlm(deps.glm, {
       currentState,
       tenantId: input.tenantId,
@@ -783,6 +807,13 @@ async function handleInboundMessageUnlocked(
       history: prepareConversationHistory(conversation.messages, isStartCommand),
       existingSlots,
       availableUnits,
+      // Fallback real para una interrupción del proveedor (Finding 1): no se
+      // puede recomputar buildDeterministicQualificationTurn dentro de
+      // callGlm con estos mismos argumentos porque, si llegamos aquí, ese
+      // cálculo (qualificationTurn, arriba) ya devolvió undefined — recalcularlo
+      // solo reproduciría el mismo undefined. buildGlmFallback sí está diseñado
+      // para devolver siempre algo útil, así que se precomputa aquí y se pasa.
+      providerOutageFallback: buildGlmFallback(currentState, tenantName, input.body, existingSlots),
     });
   }
 
@@ -886,7 +917,7 @@ async function handleInboundMessageUnlocked(
   const ownershipProfileClear = new Set<OwnershipProfileField>();
   const operationalSlotsToClear: string[] = [];
   for (const key of glmResult.clearSlots ?? []) {
-    const bucket = classifyProfileSlotKey(key, ownershipIntentAlreadySet);
+    const bucket = classifyProfileSlotKey(key, isOwnershipConversation);
     if (bucket === 'rental') rentalProfileClear.add(key as RentalProfileField);
     else if (bucket === 'ownership') ownershipProfileClear.add(key as OwnershipProfileField);
     else operationalSlotsToClear.push(key);
@@ -929,9 +960,17 @@ async function handleInboundMessageUnlocked(
     glmResult.reply = `Thanks for correcting that. Just to confirm, do you mean ${correctedArea}, ${correctedProvince}?`;
     glmResult.intent = 'correct_information';
   }
-  glmResult.slots = { ...contextualSlots, ...(glmResult.slots ?? {}) };
-  glmResult = alignInterpretedSlotsWithExpectedField(glmResult, input.body, existingSlots);
-  glmResult = validateInterpretedLocation(glmResult, existingSlots);
+  // Finding 2: ver shouldSkipContextualSlotHeuristics.
+  const isLowConfidenceModelTurn = shouldSkipContextualSlotHeuristics(glmResult, glmResultCameFromDeterministicPath);
+  glmResult.slots = { ...(isLowConfidenceModelTurn ? {} : contextualSlots), ...(glmResult.slots ?? {}) };
+  glmResult = isLowConfidenceModelTurn
+    ? glmResult
+    : alignInterpretedSlotsWithExpectedField(glmResult, input.body, existingSlots);
+  // Finding 3: validateInterpretedLocation también asume el guion de
+  // confirmación de área de renta; en ownership dejaría un
+  // location_confirmation: 'pending' que nunca se resuelve, porque
+  // legacyIntentForOwnershipTurn nunca produce intent 'confirm'.
+  glmResult = isOwnershipConversation ? glmResult : validateInterpretedLocation(glmResult, existingSlots);
 
   const staleRecommendationSlots = recommendationStateSlotsToClear(existingSlots, glmResult.slots ?? {});
   if (staleRecommendationSlots.length > 0) {
@@ -947,7 +986,7 @@ async function handleInboundMessageUnlocked(
   const operationalSlots: Record<string, string> = {};
   for (const [key, value] of Object.entries(glmResult.slots ?? {})) {
     if (!value) continue;
-    const bucket = classifyProfileSlotKey(key, ownershipIntentAlreadySet);
+    const bucket = classifyProfileSlotKey(key, isOwnershipConversation);
     if (bucket === 'rental') rentalProfileSet[key as RentalProfileField] = value;
     else if (bucket === 'ownership') ownershipProfileSet[key as OwnershipProfileField] = value;
     else operationalSlots[key] = value;
@@ -1364,6 +1403,11 @@ async function callGlm(
     history: Array<{ role: string; content: string }>;
     existingSlots: Record<string, string>;
     availableUnits: AvailableUnit[];
+    // Fallback a usar si el proveedor falla (ver Finding 1). Se precomputa en
+    // el caller con buildGlmFallback, que siempre devuelve algo, en vez de
+    // recalcular buildDeterministicQualificationTurn aquí con los mismos
+    // argumentos que ya, más arriba, dieron undefined para llegar a esta función.
+    providerOutageFallback: InterpretedTurn;
   },
 ): Promise<InterpretedTurn> {
   const knowledgeContext = await getTenantKnowledgeContext(ctx.tenantId, ctx.userMessage);
@@ -1398,9 +1442,7 @@ async function callGlm(
     message: ctx.userMessage,
   });
 
-  const deterministicFallback = providerFailed
-    ? buildDeterministicQualificationTurn(ctx.userMessage, ctx.existingSlots, tenantName)
-    : undefined;
+  const deterministicFallback = providerFailed ? ctx.providerOutageFallback : undefined;
   return resolveRentalTurnToInterpreted({
     turn,
     providerFailed,
@@ -1552,7 +1594,16 @@ export function resolveOwnershipTurnToInterpreted(input: {
     intent: lowConfidence ? 'ask_clarification' : legacyIntentForOwnershipTurn(turn.intent),
     slots: turn.profile.set,
     clearSlots: turn.profile.clear,
-    next_state: lowConfidence ? currentState : (turn.intent === 'handoff' ? 'handoff' : 'collecting_budget'),
+    // Finding 5: una vez en 'handoff', cualquier mensaje siguiente debe
+    // permanecer ahí — no hay una razón legítima para que un turno sin señal
+    // fuerte (p. ej. baja confianza, o un intent que no repite 'handoff')
+    // revierta la conversación a 'collecting_budget' y ponga BotReply.handoff
+    // de vuelta en false. Esto sigue el mismo principio que
+    // nextStateForRentalTurn (states[intent] ?? currentState: preservar el
+    // estado salvo que el intent mapee explícitamente a otro distinto).
+    next_state: lowConfidence || currentState === 'handoff'
+      ? currentState
+      : (turn.intent === 'handoff' ? 'handoff' : 'collecting_budget'),
   };
 }
 
