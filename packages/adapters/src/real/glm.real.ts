@@ -18,11 +18,16 @@ export class GlmRealAdapter implements GlmAdapter {
   ) {}
 
   async reason(request: GlmReasoningRequest): Promise<GlmReasoningResponse> {
+    // Acotado a 2 intentos de 6s (~12.25s peor caso, antes ~24.75s con 3x8s):
+    // en una demo en vivo, una respuesta rápida del fallback determinista es
+    // mejor experiencia que una espera larga e impredecible por el modelo.
+    const maxAttempts = 2;
+    const timeoutMs = 6_000;
     let response: Response | undefined;
-    for (let attempt = 0; attempt < 3; attempt += 1) {
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       response = await fetch(`${this.config.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
         method: 'POST',
-        signal: AbortSignal.timeout(8_000),
+        signal: AbortSignal.timeout(timeoutMs),
         headers: {
           Authorization: `Bearer ${this.config.apiKey}`,
           'Content-Type': 'application/json',
@@ -42,7 +47,7 @@ export class GlmRealAdapter implements GlmAdapter {
         }),
       });
 
-      if (response.ok || !isTransientStatus(response.status) || attempt === 2) break;
+      if (response.ok || !isTransientStatus(response.status) || attempt === maxAttempts - 1) break;
       await sleep(250 * (attempt + 1));
     }
 

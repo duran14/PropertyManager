@@ -1536,6 +1536,17 @@ function cityDistanceKm(from: string | undefined, to: string): number {
 function parseCanadianLocation(message: string): { area: string; province: string } | undefined {
   const cleaned = message.trim().replace(/[.!?]+$/, '').trim();
   if (!cleaned || /^\d+$/.test(cleaned)) return undefined;
+  // El caller a veces pasa un mensaje conversacional completo, no una
+  // respuesta de una sola ciudad (p. ej. "honestly not sure yet, what do
+  // you recommend for a young couple?"). Sin este guard, cualquier oración
+  // se aceptaba como nombre de lugar y terminaba en una confirmación de
+  // ciudad sin sentido.
+  if (
+    /[?!]/.test(message)
+    || cleaned.length > 40
+    || cleaned.split(/\s+/).length > 5
+    || /\b(?:not sure|don'?t know|do not know|what do you|why do you|recommend)\b/i.test(cleaned)
+  ) return undefined;
 
   const commaParts = cleaned.split(',').map((part) => part.trim()).filter(Boolean);
   if (commaParts.length >= 2) {

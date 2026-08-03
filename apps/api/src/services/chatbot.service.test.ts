@@ -1029,6 +1029,19 @@ describe('chatbot conversation identity', () => {
     });
   });
 
+  it('ignores an implausible location hallucinated from an ambiguous message', () => {
+    const turn = {
+      intent: 'provide_information' as const,
+      reply: 'Could you tell me more about what you need?',
+      slots: {
+        preferred_area: 'Honestly Not Sure Yet',
+        preferred_province: 'what do you recommend for a young couple',
+      },
+      next_state: 'collecting_budget' as const,
+    };
+    expect(validateInterpretedLocation(turn, {})).toEqual(turn);
+  });
+
   it('commits a pending location when the interpreted intent is confirmation', () => {
     expect(validateInterpretedLocation({
       intent: 'confirm',
