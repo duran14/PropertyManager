@@ -62,6 +62,21 @@ describe('rental conversation interpreter', () => {
     expect(prompt).toContain('"city":"Burnaby"');
   });
 
+  it('inlines the actual JSON Schema as text, since Z.ai only supports response_format: json_object (no json_schema mode) and documents the schema as belonging in the prompt text, not a separate request field', () => {
+    const prompt = buildRentalConversationPrompt(conversationContext());
+
+    expect(prompt).toContain('MUST validate against exactly this JSON Schema');
+    // El texto del schema debe listar los nombres reales de campo, no solo
+    // mencionarlos de pasada - si esto se desalinea del schema real que
+    // glm.reason() valida, el modelo nunca sabrá qué llaves usar.
+    expect(prompt).toContain('"reply"');
+    expect(prompt).toContain('"intent"');
+    expect(prompt).toContain('"confidence"');
+    expect(prompt).toContain('"profile"');
+    expect(prompt).toContain('"prospect_name"');
+    expect(prompt).toContain('"choose_slot"');
+  });
+
   it('requests a strict ConversationTurn schema and returns the validated model turn', async () => {
     const { glm, reason } = glmReturning(JSON.stringify({
       reply: 'Thanks Carlos. I kept your two-bedroom preference.',

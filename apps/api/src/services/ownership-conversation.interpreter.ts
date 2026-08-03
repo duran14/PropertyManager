@@ -110,6 +110,13 @@ export function buildOwnershipConversationPrompt(context: OwnershipConversationC
     'Corrections replace only the contradicted field. Preserve every uncontradicted fact already present in the profile and history.',
     "Ask one short clarification question when the user's meaning is uncertain. When uncertain, return confidence: 'low' and leave the profile patch empty unless the fact is explicit.",
     "Return intent: 'handoff' once enough of the relevant buyer or seller fields are known to hand off to a human broker (area, property type, budget/timeline for buyers; address, property type, timeline for sellers).",
+    'Keep "reply" to 2-3 sentences.',
+    // Z.ai no soporta response_format: json_schema, solo json_object — su
+    // documentación pide describir la estructura como texto en el system
+    // prompt. Se reutiliza el mismo objeto que se pasa a glm.reason() para
+    // que nunca se desalinee de lo que en verdad se valida del lado del cliente.
+    'The JSON object you return MUST validate against exactly this JSON Schema (no extra keys, respect every enum):',
+    JSON.stringify(ownershipConversationTurnJsonSchema),
     `Conversation context:\n${JSON.stringify({
       tenantName: context.tenantName,
       history: context.history,

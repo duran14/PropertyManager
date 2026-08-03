@@ -128,6 +128,14 @@ export function buildRentalConversationPrompt(context: ConversationContext): str
     "When uncertain, return confidence: 'low', include exactly one clarification question, and leave the profile patch empty unless the fact is explicit.",
     'Use a unit ID only when it appears in selectedUnitId or visibleUnits. Use a slotIndex only from the pending slot range.',
     'Never invent a unit ID or slot index.',
+    'Keep "reply" to 2-3 sentences.',
+    // La API de Z.ai no soporta response_format: json_schema (solo
+    // json_object) — su propia documentación indica que el esquema debe
+    // describirse como texto en el system prompt, no como parámetro aparte.
+    // Reutilizamos el mismo objeto que se pasa a glm.reason() para que
+    // nunca se desalinee de lo que en verdad se valida del lado del cliente.
+    'The JSON object you return MUST validate against exactly this JSON Schema (no extra keys, respect every enum):',
+    JSON.stringify(conversationTurnJsonSchema),
     `Conversation context:\n${JSON.stringify({
       tenantName: context.tenantName,
       history: context.history,

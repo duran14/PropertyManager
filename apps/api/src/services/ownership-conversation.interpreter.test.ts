@@ -41,6 +41,18 @@ describe('ownership conversation interpreter', () => {
     expect(prompt).toContain('"prospect_name":"Sara"');
   });
 
+  it('inlines the actual JSON Schema as text, since Z.ai only supports response_format: json_object (no json_schema mode) and documents the schema as belonging in the prompt text, not a separate request field', () => {
+    const prompt = buildOwnershipConversationPrompt(conversationContext());
+
+    expect(prompt).toContain('MUST validate against exactly this JSON Schema');
+    expect(prompt).toContain('"reply"');
+    expect(prompt).toContain('"intent"');
+    expect(prompt).toContain('"confidence"');
+    expect(prompt).toContain('"profile"');
+    expect(prompt).toContain('"purchase_budget"');
+    expect(prompt).toContain('"seller_goal"');
+  });
+
   it('returns the validated model turn for a rich qualifying message', async () => {
     const { glm } = glmReturning(JSON.stringify({
       reply: 'Got it — a $850k budget for a townhouse in Burnaby.',
