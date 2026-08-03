@@ -948,12 +948,14 @@ async function handleInboundMessageUnlocked(
     }
   }
 
+  let shortlistLinkToken: string | undefined;
   if (shouldGenerateRecommendations && presentedUnits.length > 0) {
     const { token: shortlistToken } = await createShortlist({
       tenantId: input.tenantId,
       conversationId: conversation.id,
       unitIds: presentedUnits.slice(0, 3).map((unit) => unit.id),
     });
+    shortlistLinkToken = shortlistToken;
     if (matchingUnits.length > 0) {
       finalReply = `${buildUnitRecommendationReply(presentedUnits, effectiveSlots)}\n\nYou can see photos, compare details, and pick a tour time here:\n${buildShortlistMarkdownLink(shortlistToken)}`;
       effectiveSlots.recommendation_kind = 'exact';
@@ -1150,6 +1152,14 @@ async function handleInboundMessageUnlocked(
       }
       if (recommendationPlan.outro) {
         deliveredMessageIds.push(...await sendHumanLike(input.from, recommendationPlan.outro, input.channel, deps.messaging));
+      }
+      if (shortlistLinkToken) {
+        deliveredMessageIds.push(...await sendHumanLike(
+          input.from,
+          `See photos and pick a tour time here:\n${buildShortlistMarkdownLink(shortlistLinkToken)}`,
+          input.channel,
+          deps.messaging,
+        ));
       }
     } else {
       deliveredMessageIds.push(...await sendHumanLike(input.from, finalReply, input.channel, deps.messaging));
