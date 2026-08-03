@@ -47,7 +47,10 @@ import {
   shouldPrioritizeSearchCriteria,
   locationScopeSlotsToClearForBroadBedroomRequest,
   applyBroadBedroomRequestScope,
+  resolveRentalTurnToInterpreted,
 } from './chatbot.service.js';
+import type { AvailableUnit } from './chatbot.service.js';
+import type { ConversationTurn } from './rental-conversation.types.js';
 
 describe('chatbot conversation identity', () => {
   it('invalidates stale selection and scheduling when search criteria change', () => {
@@ -1793,5 +1796,130 @@ describe('chatbot conversation identity', () => {
       { id:'four', name:'Four', propertyName:'B', city:'Burnaby', rentCents:280000, bedrooms:4, bathrooms:2, availableFrom:null, petPolicy:'No pets' },
     ];
     expect(filterQualifiedUnits(units, { bedrooms: '3+', pets: 'none' }).map((unit) => unit.id)).toEqual(['three', 'four']);
+  });
+});
+
+const adapterBurnabyUnit: AvailableUnit = {
+  id: 'unit_burnaby_410',
+  name: 'Suite 410',
+  rentCents: 275000,
+  city: 'Burnaby',
+  province: 'British Columbia',
+  propertyName: 'Cedar House',
+  address: '4100 Hastings Street',
+  bedrooms: 2,
+  bathrooms: 1,
+  availableFrom: new Date('2026-09-01T00:00:00.000Z'),
+  petPolicy: 'Pet friendly',
+};
+
+describe('resolveRentalTurnToInterpreted (semantic adapter mapping)', () => {
+  function rentalTurn(overrides: Partial<ConversationTurn> = {}): ConversationTurn {
+    return {
+      reply: 'Got it.',
+      intent: 'discover',
+      confidence: 'high',
+      profile: { set: {}, clear: [] },
+      ...overrides,
+    };
+  }
+
+  it('maps a name correction from the semantic turn into the legacy slots', () => {
+    const result = resolveRentalTurnToInterpreted({
+      turn: rentalTurn({
+        reply: 'Thanks for the correction, Carlos.',
+        intent: 'discover',
+        profile: { set: { prospect_name: 'Carlos' }, clear: [] },
+      }),
+      providerFailed: false,
+      currentState: 'collecting_budget',
+      availableUnits: [adapterBurnabyUnit],
+    });
+
+    expect(result).toMatchObject({
+      intent: 'provide_information',
+      slots: { prospect_name: 'Carlos' },
+    });
+    expect(result.reply).toBe('Thanks for the correction, Carlos.');
+  });
+
+  it('filters a model-selected invented unit ID into a safe clarification', () => {
+    const result = resolveRentalTurnToInterpreted({
+      turn: rentalTurn({
+        reply: 'Which option would you like?',
+        intent: 'select_unit',
+        selection: { unitIds: ['invented-unit'] },
+      }),
+      providerFailed: false,
+      currentState: 'proposing_units',
+      availableUnits: [adapterBurnabyUnit],
+    });
+
+    expect(result.selected_options).toBeUndefined();
+  });
+
+  it('maps a valid choose_slot turn to a confirm intent in the scheduling state', () => {
+    const result = resolveRentalTurnToInterpreted({
+      turn: rentalTurn({
+        reply: 'I selected that time.',
+        intent: 'choose_slot',
+        selection: { slotIndex: 1 },
+      }),
+      providerFailed: false,
+      currentState: 'scheduling',
+      availableUnits: [adapterBurnabyUnit],
+    });
+
+    expect(result.intent).toBe('confirm');
+    expect(result.next_state).toBe('scheduling');
+  });
+
+  it('returns the deterministic fallback turn when the provider failed', () => {
+    const deterministicFallback = buildDeterministicQualificationTurn('a', {}, 'Pacific Ridge Property Management');
+
+    const result = resolveRentalTurnToInterpreted({
+      turn: rentalTurn({ reply: 'Could you clarify that in one sentence?', confidence: 'low' }),
+      providerFailed: true,
+      currentState: 'greeting',
+      availableUnits: [adapterBurnabyUnit],
+      deterministicFallback,
+    });
+
+    expect(result).toBe(deterministicFallback);
+    expect(result.slots).toMatchObject({ transaction_intent: 'rent' });
+  });
+
+  it('falls back to a safe clarification on outage when no deterministic turn applies', () => {
+    const result = resolveRentalTurnToInterpreted({
+      turn: rentalTurn({ reply: 'Could you clarify that in one sentence?', confidence: 'low' }),
+      providerFailed: true,
+      currentState: 'proposing_tour',
+      availableUnits: [adapterBurnabyUnit],
+    });
+
+    expect(result).toMatchObject({
+      intent: 'ask_clarification',
+      reply: 'Could you clarify that in one sentence?',
+      next_state: 'proposing_tour',
+    });
+  });
+
+  it('preserves a low-confidence clarification from the model as ask_clarification', () => {
+    const result = resolveRentalTurnToInterpreted({
+      turn: rentalTurn({
+        reply: 'Which city did you mean?',
+        intent: 'discover',
+        confidence: 'low',
+      }),
+      providerFailed: false,
+      currentState: 'collecting_budget',
+      availableUnits: [adapterBurnabyUnit],
+    });
+
+    expect(result).toMatchObject({
+      intent: 'ask_clarification',
+      reply: 'Which city did you mean?',
+      next_state: 'collecting_budget',
+    });
   });
 });
