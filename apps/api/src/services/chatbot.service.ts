@@ -725,7 +725,16 @@ async function handleInboundMessageUnlocked(
   const availableUnits = await getAvailableUnits(input.tenantId, existingSlots);
   const currentState = conversationState;
   const focusedUnit = availableUnits.find((unit) => unit.id === conversation.unitId);
-  const contextualSlots = extractContextualConversationSlots(input.body, existingSlots);
+  // extractContextualConversationSlots está afinada para renta (p. ej. su
+  // regex de presupuesto asume 3-5 dígitos, un rango de renta mensual). Para
+  // compra/venta los montos son de 6-7 dígitos y ese mismo regex trunca el
+  // valor (visto en prueba manual: "850000" se guardó como "50000") bajo una
+  // llave ("budget") que ni siquiera es la que usa el esquema de ownership
+  // ("purchase_budget") — así que no aporta nada ahí, solo corrompe datos.
+  const isOwnershipConversation = existingSlots.transaction_intent === 'buy' || existingSlots.transaction_intent === 'sell';
+  const contextualSlots = isOwnershipConversation
+    ? {}
+    : extractContextualConversationSlots(input.body, existingSlots);
   const searchCriteriaOverride = shouldPrioritizeSearchCriteria(existingSlots, contextualSlots);
 
   const tenantName = await getTenantName(input.tenantId);
