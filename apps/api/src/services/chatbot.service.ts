@@ -1881,6 +1881,17 @@ export function buildFastQualificationTurn(
     const wordCount = normalized.split(/\s+/).filter(Boolean).length;
     const amount = message.replace(/,/g, '').match(/\$?\s*(\d{3,5})/)?.[1];
     if (!amount || wordCount > 4) return undefined;
+    const budgetFillerWords = new Set([
+      'budget', 'is', 'my', 'around', 'month', 'monthly', 'spend', 'can', 'i', 'the', 'a', 'about',
+    ]);
+    const leftover = normalized
+      .replace(/,/g, '')
+      .replace(/\$/g, '')
+      .replace(new RegExp(`\\b${amount}\\b`), '')
+      .split(/\s+/)
+      .filter(Boolean)
+      .filter((word) => !budgetFillerWords.has(word));
+    if (leftover.length > 0) return undefined;
     return {
       reply: buildRentalMoveInQuestion(amount),
       slots: { budget: amount },

@@ -1818,6 +1818,24 @@ describe('buildFastQualificationTurn (model deferral on rich messages)', () => {
     expect(result).toMatchObject({ slots: { budget: '2600' } });
   });
 
+  it('defers to the model for a short budget message mixed with another topic', () => {
+    const result = buildFastQualificationTurn(
+      '2600 but need parking',
+      { transaction_intent: 'rent', prospect_name: 'Carlos', preferred_area: 'Burnaby', preferred_province: 'British Columbia', bedrooms: '2', pets: 'dog' },
+      'Pacific Ridge Property Management',
+    );
+    expect(result).toBeUndefined();
+  });
+
+  it('defers to the model for a short budget message mixed with a question', () => {
+    const result = buildFastQualificationTurn(
+      '2600, is parking included?',
+      { transaction_intent: 'rent', prospect_name: 'Carlos', preferred_area: 'Burnaby', preferred_province: 'British Columbia', bedrooms: '2', pets: 'dog' },
+      'Pacific Ridge Property Management',
+    );
+    expect(result).toBeUndefined();
+  });
+
   it('defers to the model for a rich message during the move-in step', () => {
     const result = buildFastQualificationTurn(
       'honestly not sure yet, depends on when my lease ends',
