@@ -15,6 +15,24 @@ este spec) no encontró defectos de diseño — al contrario, ya resuelve exacta
 los riesgos de alucinación que preocupan (nunca inventa un ID de unidad u horario,
 nunca muta el perfil con confianza baja, el modelo nunca ejecuta acciones directamente).
 
+**Actualización (misma sesión, tras revisar el plan original
+`docs/superpowers/plans/2026-08-01-model-first-rental-conversation-plan.md`):**
+ese plan tenía 5 tareas; comparando contra el diff real fusionado, las Tareas 1-3
+(contrato, intérprete, aplicador de perfil) se completaron y cablearon en
+`chatbot.service.ts`, pero la Tarea 5 — que explícitamente decía "remove
+`buildFastQualificationTurn`'s use as the normal path" y "orquestar
+recomendaciones/reservas exclusivamente vía `executeRentalConversationAction`" —
+**nunca se completó**. `rental-conversation.actions.ts` (Tarea 4) quedó importado
+por nadie, código muerto. Esto explica el revert mejor que "decisión cautelosa":
+la sesión anterior se quedó a medio camino de la última tarea. Dado que el
+pipeline de recomendaciones/shortlist actual ya evolucionó con UX que ese
+`actions.ts` no conoce (recomendación alternativa, "quedarme con varias
+opciones" con link de shortlist), y confirmado con el usuario, **este spec NO
+resucita `rental-conversation.actions.ts`** — se completa solo lo que sí se
+implementó y quedó tipado/probado (intérprete + mapeo a formato legado),
+reutilizando el pipeline de recomendaciones actual sin tocarlo. Ver sección
+"Qué cambia" para el detalle.
+
 **Motivo de retomarlo ahora:** diagnóstico en vivo (ver conversación previa) confirmó
 que el bot se siente "cuadrado" porque el motor determinista es el camino principal
 y el modelo real (GLM-5.2) es el último recurso, casi nunca invocado. Además se encontró
@@ -30,21 +48,24 @@ El diseño de arquitectura, contrato `ConversationTurn`, manejo de confianza y
 flujo de datos para **renta** son los del documento original, sin cambios de fondo.
 Lo que sí cambia:
 
-1. **La capa de dependencias de acciones está desactualizada.** En los ~2 días
-   posteriores al revert, `shortlist.service.ts` y `scheduling.service.ts`
-   cambiaron de firma:
-   - `getAvailableSlots` pasó de `(input: {tenantId, conversationId, unitId}) => Promise<PendingTourSlot[]>`
-     a `(tenantId, unitId, adapter: ShowMojoAdapter) => Promise<AvailableSlotsResult>`
-     (ahora requiere el adapter y devuelve un objeto envuelto, no un arreglo plano).
-   - `scheduleTour` pasó de `(input: {tenantId, conversationId, unitId, slotIndex, slot}) => Promise<{scheduledAt}>`
-     a requerir `leadId`, `prospectName`, `prospectPhone?`, `prospectEmail?` y el
-     `adapter`, devolviendo también `showingId`, `showmojoUrl`, `confirmUrl`.
-   - `createShortlist` no cambió de forma relevante.
-
-   `rental-conversation.actions.ts` se reescribe para llamar estas firmas reales
-   (obteniendo `adapter`, `leadId` y datos de contacto del contexto de la
-   conversación antes de invocar `scheduling.service.ts`), sin cambiar la lógica
-   de qué intent dispara qué acción ni las validaciones de seguridad.
+1. **No se resucita `rental-conversation.actions.ts`.** El plan original de
+   Tarea 5 quería reemplazar TODO el pipeline de recomendaciones/shortlist/reservas
+   por ese orquestador, pero eso nunca se completó ni se probó en producción, y
+   ese archivo ya no refleja las firmas actuales de `shortlist.service.ts`/
+   `scheduling.service.ts` (`getAvailableSlots` ahora requiere el adapter de
+   ShowMojo y devuelve un objeto envuelto; `scheduleTour` ahora requiere `leadId`
+   y datos de contacto). En vez de adaptar y validar ese executor desde cero
+   contra un pipeline que además ganó funcionalidad nueva (recomendación
+   alternativa, "quedarme con varias opciones" con link de shortlist), se
+   restaura lo que **sí se completó y validó**: el intérprete produce un
+   `ConversationTurn` semántico, y una función pura (`resolveRentalTurnToInterpreted`,
+   ya escrita y probada en el commit revertido) lo traduce al `InterpretedTurn`
+   legado — el mismo formato que el pipeline de recomendaciones/shortlist/reservas
+   actual ya sabe consumir sin ningún cambio. El motor determinista
+   (`buildDeterministicQualificationTurn`/`buildFastQualificationTurn`) dejará
+   de tener prioridad sobre el intérprete para conversaciones de renta ya
+   iniciadas (sí se completa esa parte pendiente de la Tarea 5 original),
+   quedando solo como fallback ante fallo del proveedor.
 
 2. **Se extiende el mismo patrón a compra/venta** (`ownership-conversation.service.ts`),
    fuera del alcance del diseño original. Es diseño nuevo, sin precedente probado:
@@ -74,15 +95,21 @@ Lo que sí cambia:
 - `rental-conversation.types.ts` — sin cambios de diseño (contrato Zod estricto).
 - `rental-conversation.interpreter.ts` — sin cambios de diseño (confianza,
   validación de selección contra unidades/slots reales, `providerFailed`).
-- `rental-conversation.actions.ts` — **reescrito** contra las firmas actuales
-  de `shortlist.service.ts`/`scheduling.service.ts` (ver punto 1 arriba).
-- `rental-conversation.context.ts` — sin cambios de diseño.
+- `rental-conversation.context.ts` — sin cambios de diseño (`applyRentalProfilePatch`).
+- `chatbot.service.ts` — se agregan `resolveRentalTurnToInterpreted`,
+  `legacyIntentForRentalTurn`, `nextStateForRentalTurn` (las tres ya escritas y
+  probadas en el commit revertido) y se reescribe `callGlm` para llamar al
+  intérprete en vez de invocar `glm.reason` directamente. El pipeline de
+  recomendaciones/shortlist/reservas existente no cambia — sigue consumiendo
+  `InterpretedTurn` exactamente igual que hoy.
 - `ownership-conversation.types.ts`, `.interpreter.ts`, `.context.ts` — **nuevos**,
-  mismo patrón que renta, sin equivalente de `actions.ts`.
+  mismo patrón que renta, sin equivalente de `actions.ts` (ver justificación arriba).
 - `chatbot.service.ts` — el punto de entrada (`handleInboundMessageUnlocked`)
   se re-cablea para llamar al intérprete de renta u ownership como camino
-  principal según el `transaction_intent` detectado, cayendo a los builders
-  deterministas actuales solo cuando `providerFailed`.
+  principal una vez que `transaction_intent` está definido, cayendo a los
+  builders deterministas actuales solo cuando `providerFailed`. El turno
+  inicial de "¿renta, compra o venta?" (antes de que `transaction_intent`
+  exista) se queda determinista, igual que hoy.
 
 ## Flujo de datos y manejo de errores
 
@@ -97,9 +124,10 @@ orquestador de acciones. Las tres capas de seguridad ya acordadas:
 
 ## Plan de pruebas
 
-1. **Suite unitaria de renta**: resucitar y adaptar
-   `rental-conversation.{types,interpreter,actions,context}.test.ts` del commit
-   `4551eae` a las firmas actuales.
+1. **Suite unitaria de renta**: resucitar sin cambios
+   `rental-conversation.{types,interpreter,context}.test.ts` del commit `4551eae`,
+   más los tests de `resolveRentalTurnToInterpreted`/mapeo de intents ya escritos
+   en el diff de `chatbot.service.test.ts` de ese mismo commit.
 2. **Suite unitaria de ownership**: nueva, mismo patrón (confianza baja, corrección
    de campos, handoff al completar calificación).
 3. **Ajuste de `chatbot.service.test.ts`**: los tests que asumían el camino
