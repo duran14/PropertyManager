@@ -9,6 +9,42 @@ import {
   type InterpretedTurn,
 } from './chatbot.service.js';
 
+/**
+ * IMPORTANT — scope of this file after the model-first restoration:
+ *
+ * `runTranscript` below drives ONLY the deterministic layer
+ * (extractContextualConversationSlots, buildDeterministicQualificationTurn,
+ * buildConversationRepairTurn, alignInterpretedSlotsWithExpectedField,
+ * validateInterpretedLocation) — it never calls interpretRentalTurn,
+ * interpretOwnershipTurn, or any GlmAdapter. It also does not apply the
+ * three ownership-domain gates that handleInboundMessageUnlocked applies
+ * (see `isOwnershipConversation` in chatbot.service.ts):
+ *   - extractContextualConversationSlots runs unconditionally here, but in
+ *     production it's skipped entirely for buy/sell (it corrupts ownership
+ *     data — e.g. a $850,000 purchase budget landing as "50000" under the
+ *     wrong key "budget" instead of "purchase_budget").
+ *   - buildConversationRepairTurn runs here whenever `deterministic` is
+ *     undefined, but in production it's skipped entirely for buy/sell too.
+ *   - validateInterpretedLocation runs unconditionally here and in
+ *     production alike for rent, but is skipped for buy/sell in production.
+ * None of these three gates are applied by this harness for any category,
+ * which is exactly why it no longer represents the buy/sell production path.
+ *
+ * For `rent`-category scenarios this is still an accurate simulation:
+ * buildFastQualificationTurn/buildDeterministicQualificationTurn remain the
+ * PRIMARY path for short, unambiguous rental answers even after the
+ * restoration (Task 5 kept that fast path deliberately) — the model only
+ * takes over for messages these builders decline to answer.
+ *
+ * For `buy`/`sell`-category scenarios, this harness now exercises the
+ * DETERMINISTIC FALLBACK ONLY — the path `buildOwnershipConversationTurn`
+ * takes when the real GLM provider is unreachable (see
+ * chatbot.routing.test.ts for coverage of the model-as-primary path these
+ * scenarios no longer represent). That fallback path still needs to work
+ * correctly, so these 50 buy/sell transcripts remain valuable — just not as
+ * "what a buyer/seller conversation looks like in production" coverage.
+ */
+
 type TranscriptCategory = 'rent' | 'buy' | 'sell';
 type TranscriptStyle = 'expected' | 'unexpected';
 
@@ -335,7 +371,7 @@ function buyerScenario(index: number, [label, baseMessages]: readonly [string, r
   const rawName = baseMessages[1] ?? 'Prospect';
   const prospectName = titleCaseName(rawName);
   return {
-    name: `buy ${index < 13 ? 'expected' : 'unexpected'}: ${label}`,
+    name: `buy (deterministic fallback) ${index < 13 ? 'expected' : 'unexpected'}: ${label}`,
     category: 'buy',
     style: index < 13 ? 'expected' : 'unexpected',
     messages,
@@ -352,7 +388,7 @@ function sellerScenario(index: number, [label, messages]: readonly [string, read
   const rawName = messages[1] ?? 'Prospect';
   const prospectName = titleCaseName(rawName);
   return {
-    name: `sell ${index < 12 ? 'expected' : 'unexpected'}: ${label}`,
+    name: `sell (deterministic fallback) ${index < 12 ? 'expected' : 'unexpected'}: ${label}`,
     category: 'sell',
     style: index < 12 ? 'expected' : 'unexpected',
     messages: [...messages],
@@ -372,7 +408,7 @@ const scenarios: TranscriptScenario[] = [
   ...sellerCases.map((scenario, index) => sellerScenario(index, scenario)),
 ];
 
-describe('conversation transcript runner', () => {
+describe('conversation transcript runner (deterministic layer only — see file header comment)', () => {
   it('tracks 100 complete conversation scenarios across rent, buy, and sell', () => {
     expect(scenarios).toHaveLength(100);
     expect(scenarios.filter((scenario) => scenario.category === 'rent')).toHaveLength(50);

@@ -32,6 +32,12 @@ import {
   buildRentalSameBudgetLoopReply,
   buildRentalWelcomeByName,
 } from './rental-conversation.service.js';
+import { applyRentalProfilePatch } from './rental-conversation.context.js';
+import { interpretRentalTurn } from './rental-conversation.interpreter.js';
+import type { ConversationTurn, RentalProfile, RentalProfileField } from './rental-conversation.types.js';
+import { applyOwnershipProfilePatch } from './ownership-conversation.context.js';
+import { interpretOwnershipTurn } from './ownership-conversation.interpreter.js';
+import type { OwnershipConversationSemanticTurn, OwnershipProfile, OwnershipProfileField } from './ownership-conversation.types.js';
 
 export type ConversationState =
   | 'greeting'
@@ -188,8 +194,51 @@ export interface InterpretedTurn {
   clearSlots?: string[];
 }
 
+const rentalProfileFields = new Set<RentalProfileField>([
+  'prospect_name', 'transaction_intent', 'preferred_area', 'preferred_province',
+  'bedrooms', 'bedrooms_min', 'bedrooms_max', 'pets', 'budget', 'occupants', 'move_in_date',
+]);
+
+function isRentalProfileField(key: string): key is RentalProfileField {
+  return rentalProfileFields.has(key as RentalProfileField);
+}
+
+/**
+ * `rentalProfileFields` and `ownershipProfileFields` share several field names
+ * (prospect_name, transaction_intent, preferred_area, preferred_province, bedrooms).
+ * Those ambiguous keys must route to exactly one bucket, decided by the
+ * conversation's actual domain (`isOwnershipDomain`) rather than by field-name
+ * membership priority. Fields that are exclusive to one domain always route by
+ * their own predicate regardless of the conversation domain.
+ */
+export type ProfileSlotBucket = 'rental' | 'ownership' | 'operational';
+export function classifyProfileSlotKey(key: string, isOwnershipDomain: boolean): ProfileSlotBucket {
+  const isRental = isRentalProfileField(key);
+  const isOwnership = isOwnershipProfileField(key);
+  if (isRental && isOwnership) return isOwnershipDomain ? 'ownership' : 'rental';
+  if (isOwnership) return 'ownership';
+  if (isRental) return 'rental';
+  return 'operational';
+}
+
 export function shouldUseDeterministicFastPath(message: string): boolean {
   return /^\/(start|begin|reset)(\b|$)/i.test(message.trim());
+}
+
+/**
+ * Ante confianza baja del *modelo* (intent 'ask_clarification' que no vino
+ * del camino determinista), las heurísticas de contextualSlots y
+ * alignInterpretedSlotsWithExpectedField no deben mutar el perfil: ambas
+ * asumen que el mensaje es inequívoco, y un turno de baja confianza por
+ * definición no lo es. El camino determinista queda excluido a propósito:
+ * ya solo dispara en input inequívoco (p. ej. buildRentalNameClarification),
+ * así que no comparte esta ambigüedad y sus slots deben conservarse.
+ */
+export function shouldSkipContextualSlotHeuristics(
+  turn: InterpretedTurn,
+  cameFromDeterministicPath: boolean,
+): boolean {
+  return !cameFromDeterministicPath && turn.intent === 'ask_clarification';
 }
 
 export function sanitizeInterpretedTurn(turn: InterpretedTurn): InterpretedTurn {
@@ -692,7 +741,16 @@ async function handleInboundMessageUnlocked(
   const availableUnits = await getAvailableUnits(input.tenantId, existingSlots);
   const currentState = conversationState;
   const focusedUnit = availableUnits.find((unit) => unit.id === conversation.unitId);
-  const contextualSlots = extractContextualConversationSlots(input.body, existingSlots);
+  // extractContextualConversationSlots está afinada para renta (p. ej. su
+  // regex de presupuesto asume 3-5 dígitos, un rango de renta mensual). Para
+  // compra/venta los montos son de 6-7 dígitos y ese mismo regex trunca el
+  // valor (visto en prueba manual: "850000" se guardó como "50000") bajo una
+  // llave ("budget") que ni siquiera es la que usa el esquema de ownership
+  // ("purchase_budget") — así que no aporta nada ahí, solo corrompe datos.
+  const isOwnershipConversation = existingSlots.transaction_intent === 'buy' || existingSlots.transaction_intent === 'sell';
+  const contextualSlots = isOwnershipConversation
+    ? {}
+    : extractContextualConversationSlots(input.body, existingSlots);
   const searchCriteriaOverride = shouldPrioritizeSearchCriteria(existingSlots, contextualSlots);
 
   const tenantName = await getTenantName(input.tenantId);
@@ -709,8 +767,13 @@ async function handleInboundMessageUnlocked(
         next_state: currentState,
       }
     : undefined;
-  const repairTurn = buildConversationRepairTurn(input.body, existingSlots);
-  const qualificationTurn = buildDeterministicQualificationTurn(input.body, existingSlots, tenantName);
+  // buildConversationRepairTurn también está afinada para renta (sus guiones
+  // hablan de bedrooms/mascotas/presupuesto), así que se omite en ownership
+  // para no pre-emptar al modelo de compra/venta con un guion equivocado.
+  const repairTurn = isOwnershipConversation ? undefined : buildConversationRepairTurn(input.body, existingSlots);
+  const qualificationTurn = isOwnershipConversation
+    ? undefined
+    : buildDeterministicQualificationTurn(input.body, existingSlots, tenantName);
   const deterministicResult = existingSlots.tour_scheduled_at
     ? buildPostTourContextTurn(input.body, existingSlots)
     : qualificationTurn
@@ -718,14 +781,41 @@ async function handleInboundMessageUnlocked(
       ?? optionDecline
       ?? repairTurn
       ?? undefined;
-  let glmResult: InterpretedTurn = deterministicResult ?? await callGlm(deps.glm, {
-    currentState,
-    tenantId: input.tenantId,
-    userMessage: input.body,
-    history: prepareConversationHistory(conversation.messages, isStartCommand),
-    existingSlots,
-    availableUnits,
-  });
+
+  let glmResult: InterpretedTurn;
+  // Se registra si este turno vino del camino determinista (fast-path) para
+  // poder distinguirlo del camino del modelo más abajo (Finding 2: ante
+  // confianza baja del *modelo* no se debe mutar el perfil con heurísticas;
+  // el camino determinista ya solo dispara en input inequívoco, así que no
+  // aplica la misma restricción).
+  const glmResultCameFromDeterministicPath = Boolean(deterministicResult);
+  if (deterministicResult) {
+    glmResult = deterministicResult;
+  } else if (isOwnershipConversation) {
+    glmResult = await callOwnershipGlm(deps.glm, {
+      currentState,
+      tenantId: input.tenantId,
+      userMessage: input.body,
+      history: prepareConversationHistory(conversation.messages, isStartCommand),
+      existingSlots,
+    });
+  } else {
+    glmResult = await callGlm(deps.glm, {
+      currentState,
+      tenantId: input.tenantId,
+      userMessage: input.body,
+      history: prepareConversationHistory(conversation.messages, isStartCommand),
+      existingSlots,
+      availableUnits,
+      // Fallback real para una interrupción del proveedor (Finding 1): no se
+      // puede recomputar buildDeterministicQualificationTurn dentro de
+      // callGlm con estos mismos argumentos porque, si llegamos aquí, ese
+      // cálculo (qualificationTurn, arriba) ya devolvió undefined — recalcularlo
+      // solo reproduciría el mismo undefined. buildGlmFallback sí está diseñado
+      // para devolver siempre algo útil, así que se precomputa aquí y se pasa.
+      providerOutageFallback: buildGlmFallback(currentState, tenantName, input.body, existingSlots),
+    });
+  }
 
   if (searchCriteriaOverride && glmResult.intent === 'select_options') {
     glmResult = {
@@ -823,10 +913,21 @@ async function handleInboundMessageUnlocked(
     glmResult.slots = { ...(glmResult.slots ?? {}), transaction_intent: glmResult.intent };
   }
   glmResult = applyBroadBedroomRequestScope(sanitizeInterpretedTurn(glmResult), input.body);
-  if (glmResult.clearSlots?.length) {
+  const rentalProfileClear = new Set<RentalProfileField>();
+  const ownershipProfileClear = new Set<OwnershipProfileField>();
+  const operationalSlotsToClear: string[] = [];
+  for (const key of glmResult.clearSlots ?? []) {
+    const bucket = classifyProfileSlotKey(key, isOwnershipConversation);
+    if (bucket === 'rental') rentalProfileClear.add(key as RentalProfileField);
+    else if (bucket === 'ownership') ownershipProfileClear.add(key as OwnershipProfileField);
+    else operationalSlotsToClear.push(key);
+  }
+  if (operationalSlotsToClear.length > 0) {
     await prisma.conversationSlot.deleteMany({
-      where: { conversationId: conversation.id, key: { in: glmResult.clearSlots } },
+      where: { conversationId: conversation.id, key: { in: operationalSlotsToClear } },
     });
+  }
+  if (glmResult.clearSlots?.length) {
     for (const key of glmResult.clearSlots) delete existingSlots[key];
   }
   if (
@@ -836,10 +937,12 @@ async function handleInboundMessageUnlocked(
   ) {
     const correctedArea = contextualSlots.preferred_area;
     const correctedProvince = contextualSlots.preferred_province ?? 'British Columbia';
+    rentalProfileClear.add('preferred_area');
+    rentalProfileClear.add('preferred_province');
     await prisma.conversationSlot.deleteMany({
       where: {
         conversationId: conversation.id,
-        key: { in: ['preferred_area', 'preferred_province', 'location_confirmed'] },
+        key: 'location_confirmed',
       },
     });
     delete existingSlots.preferred_area;
@@ -857,9 +960,17 @@ async function handleInboundMessageUnlocked(
     glmResult.reply = `Thanks for correcting that. Just to confirm, do you mean ${correctedArea}, ${correctedProvince}?`;
     glmResult.intent = 'correct_information';
   }
-  glmResult.slots = { ...contextualSlots, ...(glmResult.slots ?? {}) };
-  glmResult = alignInterpretedSlotsWithExpectedField(glmResult, input.body, existingSlots);
-  glmResult = validateInterpretedLocation(glmResult, existingSlots);
+  // Finding 2: ver shouldSkipContextualSlotHeuristics.
+  const isLowConfidenceModelTurn = shouldSkipContextualSlotHeuristics(glmResult, glmResultCameFromDeterministicPath);
+  glmResult.slots = { ...(isLowConfidenceModelTurn ? {} : contextualSlots), ...(glmResult.slots ?? {}) };
+  glmResult = isLowConfidenceModelTurn
+    ? glmResult
+    : alignInterpretedSlotsWithExpectedField(glmResult, input.body, existingSlots);
+  // Finding 3: validateInterpretedLocation también asume el guion de
+  // confirmación de área de renta; en ownership dejaría un
+  // location_confirmation: 'pending' que nunca se resuelve, porque
+  // legacyIntentForOwnershipTurn nunca produce intent 'confirm'.
+  glmResult = isOwnershipConversation ? glmResult : validateInterpretedLocation(glmResult, existingSlots);
 
   const staleRecommendationSlots = recommendationStateSlotsToClear(existingSlots, glmResult.slots ?? {});
   if (staleRecommendationSlots.length > 0) {
@@ -870,19 +981,64 @@ async function handleInboundMessageUnlocked(
     for (const key of staleRecommendationSlots) delete existingSlots[key];
   }
 
-  if (glmResult.slots) {
-    for (const [key, value] of Object.entries(glmResult.slots)) {
-      if (value) {
-        await prisma.conversationSlot.upsert({
-          where: { conversationId_key: { conversationId: conversation.id, key } },
-          update: { value },
-          create: { conversationId: conversation.id, key, value },
-        });
-      }
+  const rentalProfileSet: RentalProfile = {};
+  const ownershipProfileSet: OwnershipProfile = {};
+  const operationalSlots: Record<string, string> = {};
+  for (const [key, value] of Object.entries(glmResult.slots ?? {})) {
+    if (!value) continue;
+    const bucket = classifyProfileSlotKey(key, isOwnershipConversation);
+    if (bucket === 'rental') rentalProfileSet[key as RentalProfileField] = value;
+    else if (bucket === 'ownership') ownershipProfileSet[key as OwnershipProfileField] = value;
+    else operationalSlots[key] = value;
+  }
+
+  let finalRentalProfile: RentalProfile | undefined;
+  if (rentalProfileClear.size > 0 || Object.keys(rentalProfileSet).length > 0) {
+    finalRentalProfile = await prisma.$transaction((tx) => applyRentalProfilePatch({
+      tx,
+      tenantId: input.tenantId,
+      conversationId: conversation.id,
+      leadId: conversation.leadId,
+      patch: { clear: [...rentalProfileClear], set: rentalProfileSet },
+    }));
+  }
+
+  let finalOwnershipProfile: OwnershipProfile | undefined;
+  if (ownershipProfileClear.size > 0 || Object.keys(ownershipProfileSet).length > 0) {
+    finalOwnershipProfile = await prisma.$transaction((tx) => applyOwnershipProfilePatch({
+      tx,
+      tenantId: input.tenantId,
+      conversationId: conversation.id,
+      leadId: conversation.leadId,
+      patch: { clear: [...ownershipProfileClear], set: ownershipProfileSet },
+    }));
+  }
+
+  for (const [key, value] of Object.entries(operationalSlots)) {
+    await prisma.conversationSlot.upsert({
+      where: { conversationId_key: { conversationId: conversation.id, key } },
+      update: { value },
+      create: { conversationId: conversation.id, key, value },
+    });
+  }
+
+  if (finalRentalProfile) {
+    for (const key of rentalProfileFields) {
+      if (finalRentalProfile[key] === undefined) delete existingSlots[key];
+    }
+  }
+  if (finalOwnershipProfile) {
+    for (const key of ownershipProfileFields) {
+      if (finalOwnershipProfile[key] === undefined) delete existingSlots[key];
     }
   }
 
-  const effectiveSlots = { ...existingSlots, ...(glmResult.slots ?? {}) };
+  const effectiveSlots: Record<string, string> = {
+    ...existingSlots,
+    ...finalRentalProfile,
+    ...finalOwnershipProfile,
+    ...(glmResult.slots ?? {}),
+  };
   const candidateInventory = glmResult.intent === 'request_more_options' && latestShortlist
     ? excludePreviouslyShownUnits(availableUnits, latestShortlist.unitIds)
     : availableUnits;
@@ -1247,84 +1403,217 @@ async function callGlm(
     history: Array<{ role: string; content: string }>;
     existingSlots: Record<string, string>;
     availableUnits: AvailableUnit[];
+    // Fallback a usar si el proveedor falla (ver Finding 1). Se precomputa en
+    // el caller con buildGlmFallback, que siempre devuelve algo, en vez de
+    // recalcular buildDeterministicQualificationTurn aquí con los mismos
+    // argumentos que ya, más arriba, dieron undefined para llegar a esta función.
+    providerOutageFallback: InterpretedTurn;
   },
 ): Promise<InterpretedTurn> {
   const knowledgeContext = await getTenantKnowledgeContext(ctx.tenantId, ctx.userMessage);
   const tenantName = await getTenantName(ctx.tenantId);
-  const systemPrompt = buildSystemPrompt(
-    ctx.currentState,
-    ctx.availableUnits,
-    ctx.existingSlots,
-    knowledgeContext,
-    tenantName,
-  );
-  const historyText = ctx.history
-    .slice(-10)
-    .map((message) => `${message.role}: ${message.content}`)
-    .join('\n');
-
-  const slotsText = Object.keys(ctx.existingSlots).length > 0
-    ? '\nKnown user information:\n' + Object.entries(ctx.existingSlots).map(([key, value]) => `  ${key}: ${value}`).join('\n')
-    : '';
-
-  try {
-    const res = await glm.reason({
-      systemPrompt,
-      userPrompt: `Agency: ${tenantName}\nHistory:\n${historyText}${slotsText}\n\nCurrent user message: ${ctx.userMessage}`,
-      responseSchema: {
-        type: 'object',
-        properties: {
-          reply: { type: 'string', description: 'Bot reply to the user (max 2-3 sentences)' },
-          intent: {
-            type: 'string',
-            enum: ['start', 'rent', 'buy', 'sell', 'provide_information', 'confirm', 'correct_information', 'ask_clarification', 'request_matches', 'request_more_options', 'select_options', 'schedule_tour', 'handoff', 'other'],
-          },
-          selected_options: {
-            type: 'array',
-            items: { type: 'integer' },
-            description: 'One-based option numbers referenced by the user. Empty unless selecting displayed options.',
-          },
-          selection_scope: {
-            type: 'string',
-            enum: ['single', 'multiple', 'all'],
-          },
-          slots: {
-            type: 'object',
-            description: 'Information extracted from the message (budget, move_in_date, occupants, pets, etc.)',
-            properties: {
-              prospect_name: { type: 'string' },
-              transaction_intent: { type: 'string', enum: ['rent', 'buy', 'sell'] },
-              budget: { type: 'string' },
-              move_in_date: { type: 'string' },
-              occupants: { type: 'string' },
-              pets: { type: 'string' },
-              preferred_area: { type: 'string' },
-              preferred_province: { type: 'string' },
-              bedrooms: { type: 'string', description: 'Number of bedrooms (0 for studio)' },
-            },
-          },
-          next_state: {
-            type: 'string',
-            enum: ['greeting', 'collecting_budget', 'collecting_movein', 'proposing_units', 'proposing_tour', 'scheduling', 'handoff'],
-          },
-        },
-        required: ['reply', 'intent', 'next_state'],
-      },
-      temperature: 0.7,
-    });
-
-    const parsed = parseGlmJsonResponse(res.content);
-    return {
-      reply: parsed.reply ?? 'What else can I help with?',
-      intent: parsed.intent,
-      slots: parsed.slots,
-      selected_options: parsed.selected_options,
-      selection_scope: parsed.selection_scope,
-      next_state: parsed.next_state,
-    };
-  } catch {
-    return buildGlmFallback(ctx.currentState, tenantName, ctx.userMessage, ctx.existingSlots);
+  const profile: RentalProfile = {};
+  for (const field of rentalProfileFields) {
+    if (ctx.existingSlots[field] !== undefined) profile[field] = ctx.existingSlots[field];
   }
+  const history = ctx.history
+    .slice(-10)
+    .filter((message): message is { role: 'user' | 'assistant'; content: string } =>
+      message.role === 'user' || message.role === 'assistant');
+  let pendingSlotCount = 0;
+  try {
+    const pendingSlots = JSON.parse(ctx.existingSlots.pending_slots ?? '[]') as unknown;
+    if (Array.isArray(pendingSlots)) pendingSlotCount = pendingSlots.length;
+  } catch {
+    pendingSlotCount = 0;
+  }
+
+  const { turn, providerFailed } = await interpretRentalTurn({
+    glm,
+    context: {
+      tenantName,
+      history,
+      profile,
+      selectedUnitId: ctx.existingSlots.selected_unit_id ?? ctx.existingSlots.scheduling_unit_id,
+      pendingSlotCount,
+      visibleUnits: ctx.availableUnits,
+      knowledgeContext,
+    },
+    message: ctx.userMessage,
+  });
+
+  const deterministicFallback = providerFailed ? ctx.providerOutageFallback : undefined;
+  return resolveRentalTurnToInterpreted({
+    turn,
+    providerFailed,
+    currentState: ctx.currentState,
+    availableUnits: ctx.availableUnits,
+    deterministicFallback,
+  });
+}
+
+/**
+ * Convierte el `ConversationTurn` semántico (resultado del intérprete) al
+ * `InterpretedTurn` legado que el handler ya sabe procesar. Es una función
+ * pura para poder probar el mapeo sin tocar Prisma ni al proveedor GLM.
+ */
+export function resolveRentalTurnToInterpreted(input: {
+  turn: ConversationTurn;
+  providerFailed: boolean;
+  currentState: ConversationState;
+  availableUnits: AvailableUnit[];
+  deterministicFallback?: InterpretedTurn;
+}): InterpretedTurn {
+  const { turn, providerFailed, currentState, availableUnits, deterministicFallback } = input;
+
+  if (providerFailed) {
+    if (deterministicFallback) return deterministicFallback;
+    return {
+      reply: turn.reply,
+      intent: 'ask_clarification',
+      next_state: currentState,
+    };
+  }
+
+  const lowConfidence = turn.confidence === 'low';
+  const intent = lowConfidence ? 'ask_clarification' : legacyIntentForRentalTurn(turn.intent);
+  const selectedOptions = turn.selection?.unitIds
+    ?.map((unitId) => availableUnits.findIndex((unit) => unit.id === unitId) + 1)
+    .filter((option) => option > 0);
+  return {
+    reply: turn.reply,
+    intent,
+    slots: turn.profile.set,
+    clearSlots: turn.profile.clear,
+    selected_options: selectedOptions?.length ? selectedOptions : undefined,
+    selection_scope: selectedOptions?.length
+      ? selectedOptions.length > 1 ? 'multiple' : 'single'
+      : undefined,
+    next_state: lowConfidence ? currentState : nextStateForRentalTurn(turn.intent, currentState),
+  };
+}
+
+function legacyIntentForRentalTurn(intent: ConversationTurn['intent']): ConversationIntent {
+  const intents: Record<ConversationTurn['intent'], ConversationIntent> = {
+    discover: 'provide_information',
+    compare: 'request_matches',
+    select_unit: 'select_options',
+    request_tour: 'schedule_tour',
+    choose_slot: 'confirm',
+    handoff: 'handoff',
+    other: 'other',
+  };
+  return intents[intent];
+}
+
+function nextStateForRentalTurn(
+  intent: ConversationTurn['intent'],
+  currentState: ConversationState,
+): ConversationState {
+  const states: Partial<Record<ConversationTurn['intent'], ConversationState>> = {
+    compare: 'proposing_tour',
+    select_unit: 'proposing_units',
+    request_tour: 'scheduling',
+    choose_slot: 'scheduling',
+    handoff: 'handoff',
+  };
+  return states[intent] ?? currentState;
+}
+
+const ownershipProfileFields = new Set<OwnershipProfileField>([
+  'prospect_name', 'transaction_intent', 'preferred_area', 'preferred_province',
+  'buyer_property_type', 'bedrooms', 'purchase_budget', 'financing_status',
+  'purchase_timeline', 'buyer_urgency', 'buyer_household', 'buyer_pets',
+  'buyer_priorities', 'contact_email', 'contact_phone', 'seller_property_address',
+  'seller_property_type', 'seller_bedrooms', 'occupancy_status', 'selling_timeline',
+  'seller_goal',
+]);
+
+function isOwnershipProfileField(key: string): key is OwnershipProfileField {
+  return ownershipProfileFields.has(key as OwnershipProfileField);
+}
+
+async function callOwnershipGlm(
+  glm: GlmAdapter,
+  ctx: {
+    currentState: ConversationState;
+    tenantId: string;
+    userMessage: string;
+    history: Array<{ role: string; content: string }>;
+    existingSlots: Record<string, string>;
+  },
+): Promise<InterpretedTurn> {
+  const knowledgeContext = await getTenantKnowledgeContext(ctx.tenantId, ctx.userMessage);
+  const tenantName = await getTenantName(ctx.tenantId);
+  const profile: OwnershipProfile = {};
+  for (const field of ownershipProfileFields) {
+    if (ctx.existingSlots[field] !== undefined) profile[field] = ctx.existingSlots[field];
+  }
+  const history = ctx.history
+    .slice(-10)
+    .filter((message): message is { role: 'user' | 'assistant'; content: string } =>
+      message.role === 'user' || message.role === 'assistant');
+
+  const { turn, providerFailed } = await interpretOwnershipTurn({
+    glm,
+    context: { tenantName, history, profile, knowledgeContext },
+    message: ctx.userMessage,
+  });
+
+  const deterministicFallback = providerFailed
+    ? buildOwnershipConversationTurn(ctx.userMessage, ctx.existingSlots)
+    : undefined;
+  return resolveOwnershipTurnToInterpreted({
+    turn,
+    providerFailed,
+    currentState: ctx.currentState,
+    deterministicFallback,
+  });
+}
+
+export function resolveOwnershipTurnToInterpreted(input: {
+  turn: OwnershipConversationSemanticTurn;
+  providerFailed: boolean;
+  currentState: ConversationState;
+  deterministicFallback?: InterpretedTurn;
+}): InterpretedTurn {
+  const { turn, providerFailed, currentState, deterministicFallback } = input;
+
+  if (providerFailed) {
+    if (deterministicFallback) return deterministicFallback;
+    return {
+      reply: turn.reply,
+      intent: 'ask_clarification',
+      next_state: currentState,
+    };
+  }
+
+  const lowConfidence = turn.confidence === 'low';
+  return {
+    reply: turn.reply,
+    intent: lowConfidence ? 'ask_clarification' : legacyIntentForOwnershipTurn(turn.intent),
+    slots: turn.profile.set,
+    clearSlots: turn.profile.clear,
+    // Finding 5: una vez en 'handoff', cualquier mensaje siguiente debe
+    // permanecer ahí — no hay una razón legítima para que un turno sin señal
+    // fuerte (p. ej. baja confianza, o un intent que no repite 'handoff')
+    // revierta la conversación a 'collecting_budget' y ponga BotReply.handoff
+    // de vuelta en false. Esto sigue el mismo principio que
+    // nextStateForRentalTurn (states[intent] ?? currentState: preservar el
+    // estado salvo que el intent mapee explícitamente a otro distinto).
+    next_state: lowConfidence || currentState === 'handoff'
+      ? currentState
+      : (turn.intent === 'handoff' ? 'handoff' : 'collecting_budget'),
+  };
+}
+
+function legacyIntentForOwnershipTurn(intent: OwnershipConversationSemanticTurn['intent']): ConversationIntent {
+  const intents: Record<OwnershipConversationSemanticTurn['intent'], ConversationIntent> = {
+    discover: 'provide_information',
+    handoff: 'handoff',
+    other: 'other',
+  };
+  return intents[intent];
 }
 
 export function parseGlmJsonResponse(content: string): {
@@ -1536,6 +1825,17 @@ function cityDistanceKm(from: string | undefined, to: string): number {
 function parseCanadianLocation(message: string): { area: string; province: string } | undefined {
   const cleaned = message.trim().replace(/[.!?]+$/, '').trim();
   if (!cleaned || /^\d+$/.test(cleaned)) return undefined;
+  // El caller a veces pasa un mensaje conversacional completo, no una
+  // respuesta de una sola ciudad (p. ej. "honestly not sure yet, what do
+  // you recommend for a young couple?"). Sin este guard, cualquier oración
+  // se aceptaba como nombre de lugar y terminaba en una confirmación de
+  // ciudad sin sentido.
+  if (
+    /[?!]/.test(message)
+    || cleaned.length > 40
+    || cleaned.split(/\s+/).length > 5
+    || /\b(?:not sure|don'?t know|do not know|what do you|why do you|recommend)\b/i.test(cleaned)
+  ) return undefined;
 
   const commaParts = cleaned.split(',').map((part) => part.trim()).filter(Boolean);
   if (commaParts.length >= 2) {
@@ -1786,8 +2086,20 @@ export function buildFastQualificationTurn(
   }
 
   if (!existingSlots.budget) {
+    const wordCount = normalized.split(/\s+/).filter(Boolean).length;
     const amount = message.replace(/,/g, '').match(/\$?\s*(\d{3,5})/)?.[1];
-    if (!amount) return undefined;
+    if (!amount || wordCount > 4) return undefined;
+    const budgetFillerWords = new Set([
+      'budget', 'is', 'my', 'around', 'month', 'monthly', 'spend', 'can', 'i', 'the', 'a', 'about',
+    ]);
+    const leftover = normalized
+      .replace(/,/g, '')
+      .replace(/\$/g, '')
+      .replace(new RegExp(`\\b${amount}\\b`), '')
+      .split(/\s+/)
+      .filter(Boolean)
+      .filter((word) => !budgetFillerWords.has(word));
+    if (leftover.length > 0) return undefined;
     return {
       reply: buildRentalMoveInQuestion(amount),
       slots: { budget: amount },
@@ -1796,6 +2108,11 @@ export function buildFastQualificationTurn(
   }
 
   if (!existingSlots.move_in_date && message) {
+    const hasDateSignal = /\b(?:asap|as soon as possible|immediately|right away)\b/i.test(normalized)
+      || /\b(?:jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\b/i.test(normalized)
+      || /\b20\d{2}\b/.test(normalized);
+    const wordCount = normalized.split(/\s+/).filter(Boolean).length;
+    if (!hasDateSignal && wordCount > 3) return undefined;
     const moveInTiming = canonicalizeMoveInTiming(message);
     return {
       reply: buildRentalMoveInAcknowledgement(moveInTiming),
@@ -2345,7 +2662,7 @@ export function buildNoMatchAdjustmentTurn(
   return undefined;
 }
 
-function buildSystemPrompt(
+export function buildSystemPrompt(
   state: ConversationState,
   availableUnits: Array<AvailableUnit>,
   slots: Record<string, string>,

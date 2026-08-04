@@ -1,4 +1,5 @@
-﻿import { describe, expect, it } from 'vitest';
+﻿import { describe, expect, it, vi } from 'vitest';
+import type { GlmAdapter } from '@property-manager/adapters';
 import {
   buildGlmFallback,
   buildFastQualificationTurn,
@@ -47,7 +48,16 @@ import {
   shouldPrioritizeSearchCriteria,
   locationScopeSlotsToClearForBroadBedroomRequest,
   applyBroadBedroomRequestScope,
+  resolveRentalTurnToInterpreted,
+  resolveOwnershipTurnToInterpreted,
+  classifyProfileSlotKey,
+  shouldSkipContextualSlotHeuristics,
 } from './chatbot.service.js';
+import type { AvailableUnit, ConversationState, InterpretedTurn } from './chatbot.service.js';
+import type { ConversationTurn } from './rental-conversation.types.js';
+import { interpretRentalTurn } from './rental-conversation.interpreter.js';
+import { buildOwnershipConversationTurn } from './ownership-conversation.service.js';
+import type { OwnershipConversationSemanticTurn } from './ownership-conversation.types.js';
 
 describe('chatbot conversation identity', () => {
   it('invalidates stale selection and scheduling when search criteria change', () => {
@@ -1029,6 +1039,19 @@ describe('chatbot conversation identity', () => {
     });
   });
 
+  it('ignores an implausible location hallucinated from an ambiguous message', () => {
+    const turn = {
+      intent: 'provide_information' as const,
+      reply: 'Could you tell me more about what you need?',
+      slots: {
+        preferred_area: 'Honestly Not Sure Yet',
+        preferred_province: 'what do you recommend for a young couple',
+      },
+      next_state: 'collecting_budget' as const,
+    };
+    expect(validateInterpretedLocation(turn, {})).toEqual(turn);
+  });
+
   it('commits a pending location when the interpreted intent is confirmation', () => {
     expect(validateInterpretedLocation({
       intent: 'confirm',
@@ -1780,5 +1803,475 @@ describe('chatbot conversation identity', () => {
       { id:'four', name:'Four', propertyName:'B', city:'Burnaby', rentCents:280000, bedrooms:4, bathrooms:2, availableFrom:null, petPolicy:'No pets' },
     ];
     expect(filterQualifiedUnits(units, { bedrooms: '3+', pets: 'none' }).map((unit) => unit.id)).toEqual(['three', 'four']);
+  });
+});
+
+describe('buildFastQualificationTurn (model deferral on rich messages)', () => {
+  it('defers to the model for a rich message during the budget step', () => {
+    const result = buildFastQualificationTurn(
+      'my max is around 3200 but I could stretch to 3500 for the right place',
+      { transaction_intent: 'rent', prospect_name: 'Carlos', preferred_area: 'Burnaby', preferred_province: 'British Columbia', bedrooms: '2', pets: 'dog' },
+      'Pacific Ridge Property Management',
+    );
+    expect(result).toBeUndefined();
+  });
+
+  it('still answers a simple numeric budget directly', () => {
+    const result = buildFastQualificationTurn(
+      '2600',
+      { transaction_intent: 'rent', prospect_name: 'Carlos', preferred_area: 'Burnaby', preferred_province: 'British Columbia', bedrooms: '2', pets: 'dog' },
+      'Pacific Ridge Property Management',
+    );
+    expect(result).toMatchObject({ slots: { budget: '2600' } });
+  });
+
+  it('defers to the model for a short budget message mixed with another topic', () => {
+    const result = buildFastQualificationTurn(
+      '2600 but need parking',
+      { transaction_intent: 'rent', prospect_name: 'Carlos', preferred_area: 'Burnaby', preferred_province: 'British Columbia', bedrooms: '2', pets: 'dog' },
+      'Pacific Ridge Property Management',
+    );
+    expect(result).toBeUndefined();
+  });
+
+  it('defers to the model for a short budget message mixed with a question', () => {
+    const result = buildFastQualificationTurn(
+      '2600, is parking included?',
+      { transaction_intent: 'rent', prospect_name: 'Carlos', preferred_area: 'Burnaby', preferred_province: 'British Columbia', bedrooms: '2', pets: 'dog' },
+      'Pacific Ridge Property Management',
+    );
+    expect(result).toBeUndefined();
+  });
+
+  it('defers to the model for a rich message during the move-in step', () => {
+    const result = buildFastQualificationTurn(
+      'honestly not sure yet, depends on when my lease ends',
+      { transaction_intent: 'rent', prospect_name: 'Carlos', preferred_area: 'Burnaby', preferred_province: 'British Columbia', bedrooms: '2', pets: 'dog', budget: '2600' },
+      'Pacific Ridge Property Management',
+    );
+    expect(result).toBeUndefined();
+  });
+
+  it('still answers a simple move-in month directly', () => {
+    const result = buildFastQualificationTurn(
+      'September',
+      { transaction_intent: 'rent', prospect_name: 'Carlos', preferred_area: 'Burnaby', preferred_province: 'British Columbia', bedrooms: '2', pets: 'dog', budget: '2600' },
+      'Pacific Ridge Property Management',
+    );
+    expect(result).toMatchObject({ slots: { move_in_date: 'September' } });
+  });
+
+  it('still answers "as soon as possible" directly', () => {
+    const result = buildFastQualificationTurn(
+      'asap',
+      { transaction_intent: 'rent', prospect_name: 'Carlos', preferred_area: 'Burnaby', preferred_province: 'British Columbia', bedrooms: '2', pets: 'dog', budget: '2600' },
+      'Pacific Ridge Property Management',
+    );
+    expect(result).toMatchObject({ slots: { move_in_date: 'As soon as possible' } });
+  });
+});
+
+const adapterBurnabyUnit: AvailableUnit = {
+  id: 'unit_burnaby_410',
+  name: 'Suite 410',
+  rentCents: 275000,
+  city: 'Burnaby',
+  province: 'British Columbia',
+  propertyName: 'Cedar House',
+  address: '4100 Hastings Street',
+  bedrooms: 2,
+  bathrooms: 1,
+  availableFrom: new Date('2026-09-01T00:00:00.000Z'),
+  petPolicy: 'Pet friendly',
+};
+
+describe('resolveRentalTurnToInterpreted (semantic adapter mapping)', () => {
+  function rentalTurn(overrides: Partial<ConversationTurn> = {}): ConversationTurn {
+    return {
+      reply: 'Got it.',
+      intent: 'discover',
+      confidence: 'high',
+      profile: { set: {}, clear: [] },
+      ...overrides,
+    };
+  }
+
+  it('maps a name correction from the semantic turn into the legacy slots', () => {
+    const result = resolveRentalTurnToInterpreted({
+      turn: rentalTurn({
+        reply: 'Thanks for the correction, Carlos.',
+        intent: 'discover',
+        profile: { set: { prospect_name: 'Carlos' }, clear: [] },
+      }),
+      providerFailed: false,
+      currentState: 'collecting_budget',
+      availableUnits: [adapterBurnabyUnit],
+    });
+
+    expect(result).toMatchObject({
+      intent: 'provide_information',
+      slots: { prospect_name: 'Carlos' },
+    });
+    expect(result.reply).toBe('Thanks for the correction, Carlos.');
+  });
+
+  it('filters a model-selected invented unit ID into a safe clarification', () => {
+    const result = resolveRentalTurnToInterpreted({
+      turn: rentalTurn({
+        reply: 'Which option would you like?',
+        intent: 'select_unit',
+        selection: { unitIds: ['invented-unit'] },
+      }),
+      providerFailed: false,
+      currentState: 'proposing_units',
+      availableUnits: [adapterBurnabyUnit],
+    });
+
+    expect(result.selected_options).toBeUndefined();
+  });
+
+  it('maps a valid choose_slot turn to a confirm intent in the scheduling state', () => {
+    const result = resolveRentalTurnToInterpreted({
+      turn: rentalTurn({
+        reply: 'I selected that time.',
+        intent: 'choose_slot',
+        selection: { slotIndex: 1 },
+      }),
+      providerFailed: false,
+      currentState: 'scheduling',
+      availableUnits: [adapterBurnabyUnit],
+    });
+
+    expect(result.intent).toBe('confirm');
+    expect(result.next_state).toBe('scheduling');
+  });
+
+  it('returns the deterministic fallback turn when the provider failed', () => {
+    const deterministicFallback = buildDeterministicQualificationTurn('a', {}, 'Pacific Ridge Property Management');
+
+    const result = resolveRentalTurnToInterpreted({
+      turn: rentalTurn({ reply: 'Could you clarify that in one sentence?', confidence: 'low' }),
+      providerFailed: true,
+      currentState: 'greeting',
+      availableUnits: [adapterBurnabyUnit],
+      deterministicFallback,
+    });
+
+    expect(result).toBe(deterministicFallback);
+    expect(result.slots).toMatchObject({ transaction_intent: 'rent' });
+  });
+
+  it('falls back to a safe clarification on outage when no deterministic turn applies', () => {
+    const result = resolveRentalTurnToInterpreted({
+      turn: rentalTurn({ reply: 'Could you clarify that in one sentence?', confidence: 'low' }),
+      providerFailed: true,
+      currentState: 'proposing_tour',
+      availableUnits: [adapterBurnabyUnit],
+    });
+
+    expect(result).toMatchObject({
+      intent: 'ask_clarification',
+      reply: 'Could you clarify that in one sentence?',
+      next_state: 'proposing_tour',
+    });
+  });
+
+  it('preserves a low-confidence clarification from the model as ask_clarification', () => {
+    const result = resolveRentalTurnToInterpreted({
+      turn: rentalTurn({
+        reply: 'Which city did you mean?',
+        intent: 'discover',
+        confidence: 'low',
+      }),
+      providerFailed: false,
+      currentState: 'collecting_budget',
+      availableUnits: [adapterBurnabyUnit],
+    });
+
+    expect(result).toMatchObject({
+      intent: 'ask_clarification',
+      reply: 'Which city did you mean?',
+      next_state: 'collecting_budget',
+    });
+  });
+});
+
+describe('rental provider-outage fallback (Finding 1: the fallback must not be dead code)', () => {
+  it('never lets recomputing buildDeterministicQualificationTurn stand in as the outage fallback, because it reproduces undefined', () => {
+    // This is the exact bug: callGlm is only reached once buildDeterministicQualificationTurn
+    // (via `qualificationTurn`, upstream in handleInboundMessageUnlocked) already returned
+    // undefined for this very message and these very slots. Recomputing it inside callGlm
+    // with the same arguments can only return undefined again.
+    const existingSlots = {
+      transaction_intent: 'rent',
+      prospect_name: 'Priya',
+      preferred_area: 'Burnaby',
+      bedrooms: '2',
+      pets: 'dog',
+      budget: '2800',
+      move_in_date: 'September 2026',
+    };
+    const message = 'Thanks for chatting, this has been really pleasant so far!';
+    expect(buildDeterministicQualificationTurn(message, existingSlots, 'Pacific Ridge Property Management')).toBeUndefined();
+  });
+
+  it('gives a real, useful reply on a genuine provider outage past the fast-path guards, not the generic safe-clarification text', async () => {
+    const tenantName = 'Pacific Ridge Property Management';
+    const currentState: ConversationState = 'collecting_movein';
+    // Same rental state as above: nothing left for the fast path to ask
+    // deterministically (transaction_intent, prospect_name, preferred_area,
+    // bedrooms, pets, budget, move_in_date are all already set).
+    const existingSlots = {
+      transaction_intent: 'rent',
+      prospect_name: 'Priya',
+      preferred_area: 'Burnaby',
+      bedrooms: '2',
+      pets: 'dog',
+      budget: '2800',
+      move_in_date: 'September 2026',
+    };
+    const message = 'Thanks for chatting, this has been really pleasant so far!';
+
+    const failingGlm = {
+      name: 'glm',
+      reason: vi.fn(async () => { throw new Error('provider outage'); }),
+    } as unknown as GlmAdapter;
+
+    const { turn, providerFailed } = await interpretRentalTurn({
+      glm: failingGlm,
+      context: {
+        tenantName,
+        history: [],
+        profile: existingSlots,
+        pendingSlotCount: 0,
+        visibleUnits: [],
+        knowledgeContext: '',
+      },
+      message,
+    });
+    expect(providerFailed).toBe(true);
+
+    // This mirrors exactly what callGlm now does: precompute the fallback
+    // with buildGlmFallback (which always returns something) instead of
+    // recomputing buildDeterministicQualificationTurn.
+    const providerOutageFallback = buildGlmFallback(currentState, tenantName, message, existingSlots);
+
+    const result = resolveRentalTurnToInterpreted({
+      turn,
+      providerFailed,
+      currentState,
+      availableUnits: [],
+      deterministicFallback: providerOutageFallback,
+    });
+
+    expect(result.reply).not.toBe('Could you clarify that in one sentence?');
+    expect(result).toMatchObject({
+      reply: "I'm still with you. Let me continue from the information you've already shared.",
+      next_state: 'collecting_movein',
+    });
+  });
+});
+
+describe('resolveOwnershipTurnToInterpreted (semantic adapter mapping)', () => {
+  function ownershipTurn(overrides: Partial<OwnershipConversationSemanticTurn> = {}): OwnershipConversationSemanticTurn {
+    return {
+      reply: 'Got it.',
+      intent: 'discover',
+      confidence: 'high',
+      profile: { set: {}, clear: [] },
+      ...overrides,
+    };
+  }
+
+  it('maps a discover turn to provide_information and keeps collecting_budget as the state', () => {
+    const result = resolveOwnershipTurnToInterpreted({
+      turn: ownershipTurn({
+        reply: 'Got it, a $850k budget.',
+        profile: { set: { purchase_budget: '850000' }, clear: [] },
+      }),
+      providerFailed: false,
+      currentState: 'collecting_budget',
+    });
+
+    expect(result).toMatchObject({
+      intent: 'provide_information',
+      slots: { purchase_budget: '850000' },
+      next_state: 'collecting_budget',
+    });
+  });
+
+  it('maps a handoff turn to the handoff state', () => {
+    const result = resolveOwnershipTurnToInterpreted({
+      turn: ownershipTurn({ reply: 'Connecting you now.', intent: 'handoff' }),
+      providerFailed: false,
+      currentState: 'collecting_budget',
+    });
+
+    expect(result).toMatchObject({ intent: 'handoff', next_state: 'handoff' });
+  });
+
+  it('preserves a low-confidence clarification as ask_clarification', () => {
+    const result = resolveOwnershipTurnToInterpreted({
+      turn: ownershipTurn({ reply: 'Which city did you mean?', confidence: 'low' }),
+      providerFailed: false,
+      currentState: 'collecting_budget',
+    });
+
+    expect(result).toMatchObject({ intent: 'ask_clarification', reply: 'Which city did you mean?' });
+  });
+
+  it('returns the deterministic fallback turn when the provider failed', () => {
+    const deterministicFallback = buildOwnershipConversationTurn('I want to buy', {});
+
+    const result = resolveOwnershipTurnToInterpreted({
+      turn: ownershipTurn({ confidence: 'low' }),
+      providerFailed: true,
+      currentState: 'greeting',
+      deterministicFallback,
+    });
+
+    expect(result).toBe(deterministicFallback);
+  });
+
+  it('falls back to a safe clarification on outage when no deterministic turn applies', () => {
+    const result = resolveOwnershipTurnToInterpreted({
+      turn: ownershipTurn({ reply: 'Could you clarify that in one sentence?', confidence: 'low' }),
+      providerFailed: true,
+      currentState: 'collecting_budget',
+    });
+
+    expect(result).toMatchObject({
+      intent: 'ask_clarification',
+      reply: 'Could you clarify that in one sentence?',
+      next_state: 'collecting_budget',
+    });
+  });
+
+  it('Finding 5: stays in handoff on the next message instead of regressing to collecting_budget', () => {
+    const result = resolveOwnershipTurnToInterpreted({
+      turn: ownershipTurn({ reply: 'Sure, one more thing...', intent: 'discover', confidence: 'high' }),
+      providerFailed: false,
+      currentState: 'handoff',
+    });
+
+    expect(result.next_state).toBe('handoff');
+  });
+
+  it('Finding 5: a low-confidence turn after handoff also stays in handoff, not collecting_budget', () => {
+    const result = resolveOwnershipTurnToInterpreted({
+      turn: ownershipTurn({ reply: 'Could you clarify that in one sentence?', confidence: 'low' }),
+      providerFailed: false,
+      currentState: 'handoff',
+    });
+
+    expect(result.next_state).toBe('handoff');
+  });
+
+  it('still transitions into handoff from a non-handoff state when the turn says so', () => {
+    const result = resolveOwnershipTurnToInterpreted({
+      turn: ownershipTurn({ reply: 'Connecting you now.', intent: 'handoff' }),
+      providerFailed: false,
+      currentState: 'collecting_budget',
+    });
+
+    expect(result.next_state).toBe('handoff');
+  });
+});
+
+describe('classifyProfileSlotKey (shared rental/ownership field routing)', () => {
+  it('routes a field shared by both profiles to ownership when the conversation is in the ownership domain', () => {
+    expect(classifyProfileSlotKey('preferred_area', true)).toBe('ownership');
+    expect(classifyProfileSlotKey('prospect_name', true)).toBe('ownership');
+    expect(classifyProfileSlotKey('transaction_intent', true)).toBe('ownership');
+    expect(classifyProfileSlotKey('preferred_province', true)).toBe('ownership');
+    expect(classifyProfileSlotKey('bedrooms', true)).toBe('ownership');
+  });
+
+  it('routes the same shared fields to rental when the conversation is not (yet) in the ownership domain', () => {
+    expect(classifyProfileSlotKey('preferred_area', false)).toBe('rental');
+    expect(classifyProfileSlotKey('prospect_name', false)).toBe('rental');
+    expect(classifyProfileSlotKey('transaction_intent', false)).toBe('rental');
+    expect(classifyProfileSlotKey('preferred_province', false)).toBe('rental');
+    expect(classifyProfileSlotKey('bedrooms', false)).toBe('rental');
+  });
+
+  it('keeps rental-exclusive fields routed to rental regardless of domain', () => {
+    expect(classifyProfileSlotKey('bedrooms_min', true)).toBe('rental');
+    expect(classifyProfileSlotKey('pets', true)).toBe('rental');
+    expect(classifyProfileSlotKey('move_in_date', false)).toBe('rental');
+  });
+
+  it('keeps ownership-exclusive fields routed to ownership regardless of domain', () => {
+    expect(classifyProfileSlotKey('buyer_property_type', false)).toBe('ownership');
+    expect(classifyProfileSlotKey('purchase_budget', false)).toBe('ownership');
+    expect(classifyProfileSlotKey('seller_goal', true)).toBe('ownership');
+  });
+
+  it('routes unrecognized keys to operational in either domain', () => {
+    expect(classifyProfileSlotKey('shortlist_scope', true)).toBe('operational');
+    expect(classifyProfileSlotKey('tour_scheduled_at', false)).toBe('operational');
+  });
+});
+
+describe('shouldSkipContextualSlotHeuristics (Finding 2: never mutate the profile on low confidence)', () => {
+  it('demonstrates the bug precondition: the bedroom-range regex fires regardless of the model confidence', () => {
+    // "two or three bedrooms, I honestly can't decide" is exactly the kind of
+    // ambiguous message the model should (and, per the scenario, does) mark
+    // confidence: 'low' for — but extractContextualConversationSlots has no
+    // notion of confidence at all, so its bedroom-range regex still matches.
+    const contextualSlots = extractContextualConversationSlots(
+      'two or three bedrooms, I honestly can\'t decide, what would you suggest?',
+      { transaction_intent: 'rent', prospect_name: 'Dana', preferred_area: 'Burnaby' },
+    );
+    expect(contextualSlots).toMatchObject({ bedrooms_min: '2', bedrooms_max: '3' });
+  });
+
+  it('flags a low-confidence turn from the model path for skipping', () => {
+    const modelLowConfidenceTurn: InterpretedTurn = {
+      reply: 'Could you clarify that in one sentence?',
+      intent: 'ask_clarification',
+      slots: {},
+    };
+    expect(shouldSkipContextualSlotHeuristics(modelLowConfidenceTurn, false)).toBe(true);
+  });
+
+  it('does not flag an ask_clarification turn that came from the deterministic path', () => {
+    // buildRentalNameClarification (via buildFastQualificationTurn) legitimately
+    // returns intent: 'ask_clarification' from the deterministic path on
+    // unambiguous input — that has none of the model's confidence ambiguity
+    // and must not be affected by this guard.
+    const deterministicClarificationTurn: InterpretedTurn = {
+      reply: "I'm only asking for your first name so I can make the conversation more personal.",
+      intent: 'ask_clarification',
+      slots: {},
+    };
+    expect(shouldSkipContextualSlotHeuristics(deterministicClarificationTurn, true)).toBe(false);
+  });
+
+  it('does not flag a high-confidence model turn', () => {
+    const highConfidenceTurn: InterpretedTurn = {
+      reply: 'Got it, two bedrooms.',
+      intent: 'provide_information',
+      slots: { bedrooms: '2' },
+    };
+    expect(shouldSkipContextualSlotHeuristics(highConfidenceTurn, false)).toBe(false);
+  });
+
+  it('proves the fix: contextualSlots are discarded from the merged slots when the model turn is low-confidence', () => {
+    const contextualSlots = extractContextualConversationSlots(
+      'two or three bedrooms, I honestly can\'t decide, what would you suggest?',
+      { transaction_intent: 'rent', prospect_name: 'Dana', preferred_area: 'Burnaby' },
+    );
+    const lowConfidenceModelTurn: InterpretedTurn = {
+      reply: 'Could you clarify that in one sentence?',
+      intent: 'ask_clarification',
+      slots: {},
+    };
+    const skip = shouldSkipContextualSlotHeuristics(lowConfidenceModelTurn, false);
+
+    const mergedSlots = { ...(skip ? {} : contextualSlots), ...(lowConfidenceModelTurn.slots ?? {}) };
+
+    expect(mergedSlots).not.toHaveProperty('bedrooms_min');
+    expect(mergedSlots).not.toHaveProperty('bedrooms_max');
   });
 });
