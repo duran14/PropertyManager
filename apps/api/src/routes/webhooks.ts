@@ -11,6 +11,7 @@
  */
 import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
+import type { InboundMessage } from '@property-manager/adapters';
 import { bankNotificationQueue } from '../jobs/queues.js';
 import { getAdapters } from '../config/adapters.js';
 import { getEnv } from '../config/env.js';
@@ -74,14 +75,38 @@ webhooksRouter.post('/buildium', async (req, res, next) => {
 });
 
 // --- Webhook de Twilio (WhatsApp/SMS entrantes) ---
+//
+// Las tres rutas de abajo (/twilio/sms, /twilio/whatsapp, /twilio genérica)
+// comparten `acknowledgeAndDispatch`: reconocen a Twilio de inmediato — no
+// esperan a que el bot piense. La respuesta real se entrega aparte, vía
+// messagingAdapter.send() (llamada REST saliente a la API de Twilio) dentro
+// de handleInboundMessage; nada de la respuesta depende de que esta
+// conexión HTTP del webhook siga abierta. Con el modelo como intérprete
+// principal, un solo turno puede tardar 6-15+ segundos — más de lo que
+// Twilio espera antes de marcar el webhook como fallido. El claim se queda
+// síncrono (escritura rápida a la BD) para que los reintentos de Twilio
+// sigan deduplicándose antes de que nunca lleguemos a responder con ACK.
+async function acknowledgeAndDispatch(
+  req: Request,
+  res: Response,
+  channel: 'sms' | 'whatsapp',
+): Promise<void> {
+  const claim = await claimAndPrepareTwilioMessage(req, channel);
+  if (!claim.ok) {
+    res.status(claim.status).json({ error: claim.error });
+    return;
+  }
+  sendTwilioWebhookAccepted(res);
+  if (claim.shouldProcess) {
+    void processClaimedTwilioMessage(claim).catch((err) => {
+      console.error('[Twilio webhook] Background processing failed:', err);
+    });
+  }
+}
+
 webhooksRouter.post('/twilio/sms', async (req, res, next) => {
   try {
-    const result = await processTwilioMessage(req, 'sms');
-    if (!result.ok) {
-      res.status(result.status).json({ error: result.error });
-      return;
-    }
-    sendTwilioWebhookAccepted(res);
+    await acknowledgeAndDispatch(req, res, 'sms');
   } catch (err) {
     next(err);
   }
@@ -89,12 +114,7 @@ webhooksRouter.post('/twilio/sms', async (req, res, next) => {
 
 webhooksRouter.post('/twilio/whatsapp', async (req, res, next) => {
   try {
-    const result = await processTwilioMessage(req, 'whatsapp');
-    if (!result.ok) {
-      res.status(result.status).json({ error: result.error });
-      return;
-    }
-    sendTwilioWebhookAccepted(res);
+    await acknowledgeAndDispatch(req, res, 'whatsapp');
   } catch (err) {
     next(err);
   }
@@ -104,12 +124,7 @@ webhooksRouter.post('/twilio', async (req, res, next) => {
   try {
     const from = typeof req.body?.From === 'string' ? req.body.From : '';
     const channel = from.startsWith('whatsapp:') ? 'whatsapp' : 'sms';
-    const result = await processTwilioMessage(req, channel);
-    if (!result.ok) {
-      res.status(result.status).json({ error: result.error });
-      return;
-    }
-    sendTwilioWebhookAccepted(res);
+    await acknowledgeAndDispatch(req, res, channel);
   } catch (err) {
     next(err);
   }
@@ -139,10 +154,31 @@ webhooksRouter.post('/showmojo', async (req, res, next) => {
   }
 });
 
-async function processTwilioMessage(
+export type TwilioClaimResult =
+  | { ok: false; status: 400 | 403 | 409; error: string }
+  | { ok: true; shouldProcess: false }
+  | { ok: true; shouldProcess: true; job: ClaimedTwilioMessageJob };
+
+export type ClaimedTwilioMessageJob = {
+  tenantId: string;
+  messageSid: string;
+  claimToken: string;
+  channel: 'sms' | 'whatsapp';
+  inbound: InboundMessage;
+  mediaUrls: string[] | undefined;
+};
+
+/**
+ * Validates the request, deduplicates by MessageSid, and parses the
+ * payload — everything that must finish before Twilio gets a response.
+ * All of this is fast (signature check, DB claim, payload parsing); the
+ * slow part (the bot actually thinking) happens in
+ * processClaimedTwilioMessage, dispatched without being awaited here.
+ */
+export async function claimAndPrepareTwilioMessage(
   req: Request,
   channel: 'sms' | 'whatsapp',
-): Promise<{ ok: true } | { ok: false; status: 400 | 403 | 409; error: string }> {
+): Promise<TwilioClaimResult> {
   if (!hasValidTwilioSignature(req)) {
     return { ok: false, status: 403, error: 'Invalid Twilio signature' };
   }
@@ -155,7 +191,7 @@ async function processTwilioMessage(
   const messageSid = (req.body as Record<string, string>).MessageSid;
   const claim = await claimTwilioMessage(tenantId, messageSid);
   if (claim.state === 'completed') {
-    return { ok: true };
+    return { ok: true, shouldProcess: false };
   }
   if (claim.state === 'processing') {
     return { ok: false, status: 409, error: 'Twilio message is still processing' };
@@ -168,20 +204,44 @@ async function processTwilioMessage(
   const messagingAdapter = channel === 'whatsapp' ? adapters.messaging.whatsapp : adapters.messaging.sms;
   try {
     const inbound = await messagingAdapter.parseWebhook(headersToRecord(req), req.body);
-    await handleInboundMessage(
-      {
+    return {
+      ok: true,
+      shouldProcess: true,
+      job: {
         tenantId,
-        from: inbound.from,
-        body: inbound.body,
+        messageSid,
+        claimToken: claim.claimToken,
         channel,
+        inbound,
         mediaUrls: collectTwilioMediaUrls(req.body),
       },
-      { glm: adapters.glm, messaging: messagingAdapter, showmojo: adapters.showmojo },
-    );
-    await completeTwilioMessage(tenantId, messageSid, claim.claimToken);
-    return { ok: true };
+    };
   } catch (error) {
     await failTwilioMessage(tenantId, messageSid, claim.claimToken);
+    throw error;
+  }
+}
+
+/**
+ * Runs the bot and delivers the reply. Deliberately NOT awaited by the
+ * route handler — Twilio already has its 200 response. Owns its own
+ * error handling: there is no HTTP request left to report failure to,
+ * so a failure here must mark the receipt failed and log, not throw.
+ */
+export async function processClaimedTwilioMessage(
+  claim: Extract<TwilioClaimResult, { shouldProcess: true }>,
+): Promise<void> {
+  const { tenantId, messageSid, claimToken, channel, inbound, mediaUrls } = claim.job;
+  const adapters = getAdapters();
+  const messagingAdapter = channel === 'whatsapp' ? adapters.messaging.whatsapp : adapters.messaging.sms;
+  try {
+    await handleInboundMessage(
+      { tenantId, from: inbound.from, body: inbound.body, channel, mediaUrls },
+      { glm: adapters.glm, messaging: messagingAdapter, showmojo: adapters.showmojo },
+    );
+    await completeTwilioMessage(tenantId, messageSid, claimToken);
+  } catch (error) {
+    await failTwilioMessage(tenantId, messageSid, claimToken);
     throw error;
   }
 }
