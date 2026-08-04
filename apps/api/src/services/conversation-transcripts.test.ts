@@ -17,10 +17,18 @@ import {
  * buildConversationRepairTurn, alignInterpretedSlotsWithExpectedField,
  * validateInterpretedLocation) — it never calls interpretRentalTurn,
  * interpretOwnershipTurn, or any GlmAdapter. It also does not apply the
- * ownership-domain gates that handleInboundMessageUnlocked applies around
- * buildConversationRepairTurn/validateInterpretedLocation (see
- * `isOwnershipConversation` in chatbot.service.ts) — this harness always
- * calls both unconditionally, which no longer matches production for buy/sell.
+ * three ownership-domain gates that handleInboundMessageUnlocked applies
+ * (see `isOwnershipConversation` in chatbot.service.ts):
+ *   - extractContextualConversationSlots runs unconditionally here, but in
+ *     production it's skipped entirely for buy/sell (it corrupts ownership
+ *     data — e.g. a $850,000 purchase budget landing as "50000" under the
+ *     wrong key "budget" instead of "purchase_budget").
+ *   - buildConversationRepairTurn runs here whenever `deterministic` is
+ *     undefined, but in production it's skipped entirely for buy/sell too.
+ *   - validateInterpretedLocation runs unconditionally here and in
+ *     production alike for rent, but is skipped for buy/sell in production.
+ * None of these three gates are applied by this harness for any category,
+ * which is exactly why it no longer represents the buy/sell production path.
  *
  * For `rent`-category scenarios this is still an accurate simulation:
  * buildFastQualificationTurn/buildDeterministicQualificationTurn remain the
