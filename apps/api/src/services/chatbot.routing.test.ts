@@ -221,4 +221,19 @@ describe('chatbot routing integration (handleInboundMessage)', () => {
     // not dead code like the rental fallback was before Finding 1's fix.
     expect(reply.replyText).toContain('pleasure to meet you, Sarah');
   });
+
+  it('creates a lead with source "messenger" for a channel: "messenger" inbound message', async () => {
+    const { glm } = glmReturning('{}');
+
+    await handleInboundMessage(
+      { tenantId: TENANT_ID, from: 'routing-messenger-1', body: 'hi', channel: 'messenger' },
+      { glm, messaging, showmojo },
+    );
+
+    const lead = await prisma.lead.findFirst({
+      where: { tenantId: TENANT_ID, phone: 'routing-messenger-1' },
+    });
+    expect(lead?.source).toBe('messenger');
+    expect(lead?.preferredChannel).toBe('messenger');
+  });
 });

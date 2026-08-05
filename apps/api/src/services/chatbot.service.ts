@@ -2888,7 +2888,7 @@ async function ensureLead(
   conversationId: string,
   fromPhone: string,
   firstMessage: string,
-  channel: string,
+  channel: ChatChannel,
   unitId?: string,
 ): Promise<boolean> {
   const linkedConversation = await prisma.chatConversation.findUnique({
@@ -2935,11 +2935,12 @@ async function ensureLead(
   return true;
 }
 
-function getLeadSourceForChannel(channel: string): 'telegram' | 'web' | 'email' | 'sms' | 'whatsapp' {
+function getLeadSourceForChannel(channel: ChatChannel): ChatChannel {
   if (channel === 'telegram') return 'telegram';
   if (channel === 'web') return 'web';
   if (channel === 'email') return 'email';
   if (channel === 'sms') return 'sms';
+  if (channel === 'messenger') return 'messenger';
   return 'whatsapp';
 }
 
