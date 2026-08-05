@@ -211,7 +211,7 @@ describe('Twilio webhook ack/dispatch split', () => {
     if (!claim.ok || !claim.shouldProcess) throw new Error('Expected a processable claim');
 
     // Fuerza a handleInboundMessage a lanzar sin tocar tenantId/messageSid/
-    // claimToken (failTwilioMessage necesita esos tres exactos para
+    // claimToken (failWebhookMessage necesita esos tres exactos para
     // encontrar y actualizar el recibo correcto): un canal fuera del enum
     // de Prisma revienta en el primer upsert de ChatConversation.
     const brokenClaim: Extract<TwilioClaimResult, { shouldProcess: true }> = {

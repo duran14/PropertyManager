@@ -7,6 +7,7 @@ const apiSrc = join(process.cwd(), 'src');
 const sensitiveFiles = [
   'services/bills.service.ts',
   'services/reconciliation.service.ts',
+  'services/webhook-receipt.service.ts',
   'routes/bills.ts',
   'routes/reconciliation.ts',
 ];
