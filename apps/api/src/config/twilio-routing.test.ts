@@ -23,9 +23,9 @@ describe('Twilio shared channel routing', () => {
     expect(webhooksSource).toContain('From and Body are required');
     expect(webhooksSource).toContain('sendTwilioWebhookAccepted');
     expect(webhooksSource).toContain('validateTwilioWebhookSignature');
-    expect(webhooksSource).toContain('claimTwilioMessage');
-    expect(webhooksSource).toContain('completeTwilioMessage');
-    expect(webhooksSource).toContain('failTwilioMessage');
+    expect(webhooksSource).toContain('claimWebhookMessage');
+    expect(webhooksSource).toContain('completeWebhookMessage');
+    expect(webhooksSource).toContain('failWebhookMessage');
     expect(webhooksSource).toContain('x-twilio-signature');
     expect(webhooksSource).toContain('<Response></Response>');
     expect(webhooksSource).toContain('text/xml');

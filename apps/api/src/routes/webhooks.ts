@@ -19,11 +19,13 @@ import { handleInboundMessage } from '../services/chatbot.service.js';
 import { createLeadFromShowMojo } from '../services/leads.service.js';
 import {
   buildTwilioWebhookUrl,
-  claimTwilioMessage,
-  completeTwilioMessage,
-  failTwilioMessage,
   validateTwilioWebhookSignature,
 } from '../services/twilio-webhook-security.service.js';
+import {
+  claimWebhookMessage,
+  completeWebhookMessage,
+  failWebhookMessage,
+} from '../services/webhook-receipt.service.js';
 
 // Re-export para que el route de chat use el mismo helper.
 export { getTenantId };
@@ -189,7 +191,7 @@ export async function claimAndPrepareTwilioMessage(
 
   const tenantId = getTwilioTenantId(req);
   const messageSid = (req.body as Record<string, string>).MessageSid;
-  const claim = await claimTwilioMessage(tenantId, messageSid);
+  const claim = await claimWebhookMessage('twilio', tenantId, messageSid);
   if (claim.state === 'completed') {
     return { ok: true, shouldProcess: false };
   }
@@ -217,7 +219,7 @@ export async function claimAndPrepareTwilioMessage(
       },
     };
   } catch (error) {
-    await failTwilioMessage(tenantId, messageSid, claim.claimToken);
+    await failWebhookMessage('twilio', tenantId, messageSid, claim.claimToken);
     throw error;
   }
 }
@@ -239,9 +241,9 @@ export async function processClaimedTwilioMessage(
       { tenantId, from: inbound.from, body: inbound.body, channel, mediaUrls },
       { glm: adapters.glm, messaging: messagingAdapter, showmojo: adapters.showmojo },
     );
-    await completeTwilioMessage(tenantId, messageSid, claimToken);
+    await completeWebhookMessage('twilio', tenantId, messageSid, claimToken);
   } catch (error) {
-    await failTwilioMessage(tenantId, messageSid, claimToken);
+    await failWebhookMessage('twilio', tenantId, messageSid, claimToken);
     throw error;
   }
 }

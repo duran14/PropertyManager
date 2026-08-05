@@ -1,6 +1,4 @@
-import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
-import { prisma } from '../config/db.js';
-import { withTenant } from '../config/tenant-context.js';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 
 interface ValidateTwilioWebhookSignatureInput {
   authToken: string;
@@ -33,63 +31,6 @@ export function validateTwilioWebhookSignature(
   }
 
   return supplied.length === expected.length && timingSafeEqual(supplied, expected);
-}
-
-export type TwilioMessageClaim =
-  | { state: 'acquired'; claimToken: string }
-  | { state: 'processing' }
-  | { state: 'completed' }
-  | { state: 'failed' };
-
-export async function claimTwilioMessage(
-  tenantId: string,
-  messageSid: string,
-): Promise<TwilioMessageClaim> {
-  return withTenant(prisma, tenantId, async (tx) => {
-    const claimToken = randomUUID();
-    const result = await tx.webhookReceipt.createMany({
-      data: [{ tenantId, provider: 'twilio', providerMessageId: messageSid, claimToken }],
-      skipDuplicates: true,
-    });
-    if (result.count === 1) {
-      return { state: 'acquired', claimToken };
-    }
-
-    const receipt = await tx.webhookReceipt.findUniqueOrThrow({
-      where: {
-        tenantId_provider_providerMessageId: {
-          tenantId,
-          provider: 'twilio',
-          providerMessageId: messageSid,
-        },
-      },
-    });
-    if (receipt.status === 'completed') return { state: 'completed' };
-    if (receipt.status === 'failed') return { state: 'failed' };
-    return { state: 'processing' };
-  });
-}
-
-export async function failTwilioMessage(
-  tenantId: string,
-  messageSid: string,
-  claimToken: string,
-): Promise<void> {
-  await withTenant(prisma, tenantId, (tx) => tx.webhookReceipt.updateMany({
-    where: { tenantId, provider: 'twilio', providerMessageId: messageSid, status: 'processing', claimToken },
-    data: { status: 'failed' },
-  }));
-}
-
-export async function completeTwilioMessage(
-  tenantId: string,
-  messageSid: string,
-  claimToken: string,
-): Promise<void> {
-  await withTenant(prisma, tenantId, (tx) => tx.webhookReceipt.updateMany({
-    where: { tenantId, provider: 'twilio', providerMessageId: messageSid, status: 'processing', claimToken },
-    data: { status: 'completed' },
-  }));
 }
 
 function ensureTrailingSlash(value: string): string {

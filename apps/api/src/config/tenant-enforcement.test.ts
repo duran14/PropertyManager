@@ -9,7 +9,6 @@ const sensitiveFiles = [
   'services/reconciliation.service.ts',
   'routes/bills.ts',
   'routes/reconciliation.ts',
-  'services/twilio-webhook-security.service.ts',
 ];
 
 describe('tenant context enforcement', () => {
