@@ -612,6 +612,38 @@ export function alignInterpretedSlotsWithExpectedField(
   return { ...turn, slots };
 }
 
+// Heurística ligera: no hay un campo de idioma en el perfil (el modelo
+// simplemente refleja el idioma del usuario en turn.reply), así que la
+// frase de confirmación de ubicación que añadimos aquí debe adivinar el
+// idioma a partir de esa misma respuesta para no mezclar inglés fijo con
+// una respuesta en español.
+function looksLikeSpanish(text: string | undefined): boolean {
+  if (!text) return false;
+  if (/[ñ¿¡]/.test(text)) return true;
+  if (/[áéíóúÁÉÍÓÚ]/.test(text)) return true;
+  return /\b(hola|s[ií]|gracias|quiero|necesito|busco|cu[aá]nt[ao]s?|d[oó]nde|correcto|perfecto|entonces|recamaras?|recámaras?|habitaciones|presupuesto|mudanza|renta)\b/i.test(text);
+}
+
+function areaConfirmationQuestion(area: string, province: string, spanish: boolean): string {
+  return spanish
+    ? `Solo para confirmar, ¿te refieres a ${area}, ${province}?`
+    : `Just to confirm, do you mean ${area}, ${province}?`;
+}
+
+function areaConfirmedFollowUp(area: string, province: string, spanish: boolean): string {
+  return spanish
+    ? `Perfecto — ${area}, ${province}. ¿Cuántas recámaras necesitas?`
+    : `Perfect — ${area}, ${province}. How many bedrooms do you need?`;
+}
+
+// Añade la pregunta/confirmación de ubicación a la respuesta del modelo en
+// vez de reemplazarla por completo, para no perder el reconocimiento de
+// otros campos que el usuario haya dado en el mismo mensaje.
+function appendLocationFollowUp(originalReply: string, followUp: string): string {
+  const trimmed = originalReply.trim();
+  return trimmed ? `${trimmed} ${followUp}` : followUp;
+}
+
 export function validateInterpretedLocation(
   turn: InterpretedTurn,
   existingSlots: Record<string, string>,
@@ -622,9 +654,13 @@ export function validateInterpretedLocation(
     && existingSlots.pending_area
     && existingSlots.pending_province
   ) {
+    const spanish = looksLikeSpanish(turn.reply);
     return {
       ...turn,
-      reply: `Perfect — ${existingSlots.pending_area}, ${existingSlots.pending_province}. How many bedrooms do you need?`,
+      reply: appendLocationFollowUp(
+        turn.reply,
+        areaConfirmedFollowUp(existingSlots.pending_area, existingSlots.pending_province, spanish),
+      ),
       slots: {
         ...(turn.slots ?? {}),
         preferred_area: existingSlots.pending_area,
@@ -646,7 +682,7 @@ export function validateInterpretedLocation(
   const { preferred_area: _area, preferred_province: _province, ...otherSlots } = turn.slots ?? {};
   return {
     ...turn,
-    reply: `Just to confirm, do you mean ${location.area}, ${location.province}?`,
+    reply: appendLocationFollowUp(turn.reply, areaConfirmationQuestion(location.area, location.province, looksLikeSpanish(turn.reply))),
     slots: {
       ...otherSlots,
       pending_area: location.area,
@@ -957,7 +993,12 @@ async function handleInboundMessageUnlocked(
       delete glmResult.slots.preferred_area;
       delete glmResult.slots.preferred_province;
     }
-    glmResult.reply = `Thanks for correcting that. Just to confirm, do you mean ${correctedArea}, ${correctedProvince}?`;
+    const spanishCorrection = looksLikeSpanish(glmResult.reply);
+    const correctionAck = spanishCorrection ? 'Gracias por la corrección.' : 'Thanks for correcting that.';
+    glmResult.reply = appendLocationFollowUp(
+      glmResult.reply,
+      `${correctionAck} ${areaConfirmationQuestion(correctedArea, correctedProvince, spanishCorrection)}`,
+    );
     glmResult.intent = 'correct_information';
   }
   // Finding 2: ver shouldSkipContextualSlotHeuristics.

@@ -1021,7 +1021,7 @@ describe('chatbot conversation identity', () => {
     });
   });
 
-  it('turns a model-extracted location into a city and province confirmation', () => {
+  it('turns a model-extracted location into a city and province confirmation, keeping the model reply', () => {
     expect(validateInterpretedLocation({
       intent: 'provide_information',
       reply: 'Port Coquitlam sounds good.',
@@ -1029,13 +1029,24 @@ describe('chatbot conversation identity', () => {
       next_state: 'collecting_movein',
     }, {})).toEqual({
       intent: 'provide_information',
-      reply: 'Just to confirm, do you mean Port Coquitlam, British Columbia?',
+      reply: 'Port Coquitlam sounds good. Just to confirm, do you mean Port Coquitlam, British Columbia?',
       slots: {
         pending_area: 'Port Coquitlam',
         pending_province: 'British Columbia',
         location_confirmation: 'pending',
       },
       next_state: 'collecting_budget',
+    });
+  });
+
+  it('asks the location confirmation in Spanish when the model reply was in Spanish', () => {
+    expect(validateInterpretedLocation({
+      intent: 'provide_information',
+      reply: 'Perfecto, con gusto te ayudo con eso.',
+      slots: { preferred_area: 'POCO' },
+      next_state: 'collecting_movein',
+    }, {})).toMatchObject({
+      reply: 'Perfecto, con gusto te ayudo con eso. Solo para confirmar, ¿te refieres a Port Coquitlam, British Columbia?',
     });
   });
 
@@ -1068,6 +1079,21 @@ describe('chatbot conversation identity', () => {
       location_confirmation: 'confirmed',
       location_confirmed: 'yes',
     });
+  });
+
+  it('keeps the model acknowledgement of other fields when confirming a pending location', () => {
+    expect(validateInterpretedLocation({
+      intent: 'confirm',
+      reply: 'Sí, y también necesito 2 recámaras.',
+      slots: {},
+      next_state: 'collecting_movein',
+    }, {
+      pending_area: 'Port Coquitlam',
+      pending_province: 'British Columbia',
+      location_confirmation: 'pending',
+    }).reply).toBe(
+      'Sí, y también necesito 2 recámaras. Perfecto — Port Coquitlam, British Columbia. ¿Cuántas recámaras necesitas?',
+    );
   });
 
   it('recovers a known city abbreviation when the model omits the location slot', () => {
