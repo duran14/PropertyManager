@@ -1,11 +1,8 @@
+import { createHmac } from 'node:crypto';
 import type { Request } from 'express';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { prisma } from '../config/db.js';
-import {
-  claimAndPrepareTwilioMessage,
-  processClaimedTwilioMessage,
-  type TwilioClaimResult,
-} from './webhooks.js';
+import { buildTwilioWebhookUrl } from '../services/twilio-webhook-security.service.js';
 
 /**
  * Prueba que la separación "ACK rápido / procesamiento lento" del webhook
@@ -19,13 +16,62 @@ import {
  * No revalida la máquina de estados de claim/complete/fail en sí (ya
  * cubierta en twilio-webhook-security.service.test.ts); esto prueba que
  * las rutas realmente usan esas primitivas en el orden correcto.
+ *
+ * La firma y el tenant de Twilio se validan con un TWILIO_AUTH_TOKEN/
+ * TWILIO_DEFAULT_TENANT_ID de prueba (mockeados abajo), no con lo que haya
+ * en el .env real del desarrollador: hasValidTwilioSignature/
+ * getTwilioTenantId en webhooks.ts se comportan distinto según haya o no
+ * credenciales reales configuradas, así que este test no puede depender de
+ * eso — y menos aún arriesgarse a tocar el tenant demo real si algún día
+ * TWILIO_DEFAULT_TENANT_ID coincidiera con uno real. TWILIO_ACCOUNT_SID y
+ * ZAI_API_KEY se vacían explícitamente para que getAdapters() siga usando
+ * los adapters mock (sin esto, un TWILIO_AUTH_TOKEN no vacío combinado con
+ * el TWILIO_ACCOUNT_SID/ZAI_API_KEY reales del .env activaría los adapters
+ * reales de Twilio/GLM y processClaimedTwilioMessage intentaría llamadas
+ * de red reales).
  */
 
 const TENANT_ID = 'tenant_test_twilio_webhook_routing';
+const TEST_TWILIO_AUTH_TOKEN = 'test-only-twilio-auth-token';
+const TEST_API_URL = 'https://pm-api.test.example.com';
+
+vi.mock('../config/env.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../config/env.js')>();
+  return {
+    ...actual,
+    getEnv: () => ({
+      ...actual.getEnv(),
+      TWILIO_AUTH_TOKEN: TEST_TWILIO_AUTH_TOKEN,
+      TWILIO_ACCOUNT_SID: '',
+      TWILIO_DEFAULT_TENANT_ID: TENANT_ID,
+      API_URL: TEST_API_URL,
+      ZAI_API_KEY: '',
+    }),
+  };
+});
+
+const {
+  claimAndPrepareTwilioMessage,
+  processClaimedTwilioMessage,
+} = await import('./webhooks.js');
+type TwilioClaimResult = Awaited<ReturnType<typeof claimAndPrepareTwilioMessage>>;
+
+function signTwilioRequest(path: string, body: Record<string, string>): string {
+  const url = buildTwilioWebhookUrl(TEST_API_URL, path);
+  const payload = Object.keys(body)
+    .sort()
+    .reduce((value, key) => value + key + body[key], url);
+  return createHmac('sha1', TEST_TWILIO_AUTH_TOKEN).update(payload, 'utf8').digest('base64');
+}
 
 function fakeTwilioRequest(body: Record<string, string>): Request {
+  const path = '/webhooks/twilio/sms';
   return {
-    headers: { 'x-tenant-id': TENANT_ID },
+    headers: {
+      'x-tenant-id': TENANT_ID,
+      'x-twilio-signature': signTwilioRequest(path, body),
+    },
+    originalUrl: path,
     body,
   } as unknown as Request;
 }
