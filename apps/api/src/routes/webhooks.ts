@@ -21,6 +21,8 @@ import {
   buildTwilioWebhookUrl,
   validateTwilioWebhookSignature,
 } from '../services/twilio-webhook-security.service.js';
+import { validateMessengerWebhookSignature } from '../services/messenger-webhook-security.service.js';
+import { extractMessengerTextMessage } from '@property-manager/adapters';
 import {
   claimWebhookMessage,
   completeWebhookMessage,
@@ -127,6 +129,23 @@ webhooksRouter.post('/twilio', async (req, res, next) => {
     const from = typeof req.body?.From === 'string' ? req.body.From : '';
     const channel = from.startsWith('whatsapp:') ? 'whatsapp' : 'sms';
     await acknowledgeAndDispatch(req, res, channel);
+  } catch (err) {
+    next(err);
+  }
+});
+
+webhooksRouter.get('/messenger', (req, res) => {
+  const result = resolveMessengerVerificationChallenge(req.query as Record<string, unknown>);
+  if (result.status === 200) {
+    res.status(200).type('text/plain').send(result.challenge);
+    return;
+  }
+  res.status(result.status).end();
+});
+
+webhooksRouter.post('/messenger', async (req, res, next) => {
+  try {
+    await acknowledgeAndDispatchMessenger(req, res);
   } catch (err) {
     next(err);
   }
@@ -315,4 +334,131 @@ function getTwilioMediaIndex(key: string): number {
 
 function sendTwilioWebhookAccepted(res: Response): void {
   res.status(200).type('text/xml').send('<Response></Response>');
+}
+
+export function resolveMessengerVerificationChallenge(
+  query: Record<string, unknown>,
+): { status: 200; challenge: string } | { status: 403 | 404 } {
+  const env = getEnv();
+  if (!env.MESSENGER_VERIFY_TOKEN) {
+    return { status: 404 };
+  }
+  const mode = query['hub.mode'];
+  const token = query['hub.verify_token'];
+  const challenge = query['hub.challenge'];
+  if (mode === 'subscribe' && token === env.MESSENGER_VERIFY_TOKEN && typeof challenge === 'string') {
+    return { status: 200, challenge };
+  }
+  return { status: 403 };
+}
+
+export type MessengerClaimResult =
+  | { ok: false; status: 403 | 409; error: string }
+  | { ok: true; shouldProcess: false }
+  | { ok: true; shouldProcess: true; job: ClaimedMessengerMessageJob };
+
+export type ClaimedMessengerMessageJob = {
+  tenantId: string;
+  mid: string;
+  claimToken: string;
+  inbound: InboundMessage;
+};
+
+function hasValidMessengerSignature(req: Request): boolean {
+  const env = getEnv();
+  if (!env.MESSENGER_APP_SECRET) {
+    return true;
+  }
+  const signatureHeader = req.headers['x-hub-signature-256'];
+  const rawBody = (req as Request & { rawBody?: Buffer }).rawBody ?? Buffer.alloc(0);
+  return validateMessengerWebhookSignature({
+    appSecret: env.MESSENGER_APP_SECRET,
+    rawBody,
+    signatureHeader: typeof signatureHeader === 'string' ? signatureHeader : undefined,
+  });
+}
+
+/**
+ * Igual que claimAndPrepareTwilioMessage: solo el trabajo rápido antes de
+ * responderle a Meta (firma, extracción del mensaje, claim/dedup). A
+ * diferencia de Twilio, el ID de dedup (`mid`) está anidado dentro del
+ * payload — hay que parsearlo antes de poder reclamar.
+ */
+export async function claimAndPrepareMessengerMessage(req: Request): Promise<MessengerClaimResult> {
+  if (!hasValidMessengerSignature(req)) {
+    return { ok: false, status: 403, error: 'Invalid Messenger signature' };
+  }
+
+  const extracted = extractMessengerTextMessage(req.body);
+  if (!extracted) {
+    // Eco, adjunto, postback, o payload sin nada procesable: no es un
+    // error — Meta debe seguir viendo 200, simplemente no hay nada que
+    // reclamar ni procesar.
+    return { ok: true, shouldProcess: false };
+  }
+
+  const env = getEnv();
+  const tenantId = env.MESSENGER_DEFAULT_TENANT_ID;
+  const claim = await claimWebhookMessage('messenger', tenantId, extracted.mid);
+  if (claim.state === 'completed') {
+    return { ok: true, shouldProcess: false };
+  }
+  if (claim.state === 'processing') {
+    return { ok: false, status: 409, error: 'Messenger message is still processing' };
+  }
+  if (claim.state === 'failed') {
+    return { ok: false, status: 409, error: 'Messenger message requires manual retry' };
+  }
+
+  return {
+    ok: true,
+    shouldProcess: true,
+    job: {
+      tenantId,
+      mid: extracted.mid,
+      claimToken: claim.claimToken,
+      inbound: {
+        from: extracted.senderId,
+        body: extracted.text,
+        channel: 'messenger',
+        receivedAt: new Date().toISOString(),
+        messageId: extracted.mid,
+      },
+    },
+  };
+}
+
+/**
+ * Igual que processClaimedTwilioMessage: corre el bot y entrega la
+ * respuesta, sin bloquear la conexión HTTP del webhook (no se espera).
+ */
+export async function processClaimedMessengerMessage(
+  claim: Extract<MessengerClaimResult, { shouldProcess: true }>,
+): Promise<void> {
+  const { tenantId, mid, claimToken, inbound } = claim.job;
+  const adapters = getAdapters();
+  try {
+    await handleInboundMessage(
+      { tenantId, from: inbound.from, body: inbound.body, channel: 'messenger' },
+      { glm: adapters.glm, messaging: adapters.messaging.messenger, showmojo: adapters.showmojo },
+    );
+    await completeWebhookMessage('messenger', tenantId, mid, claimToken);
+  } catch (error) {
+    await failWebhookMessage('messenger', tenantId, mid, claimToken);
+    throw error;
+  }
+}
+
+async function acknowledgeAndDispatchMessenger(req: Request, res: Response): Promise<void> {
+  const claim = await claimAndPrepareMessengerMessage(req);
+  if (!claim.ok) {
+    res.status(claim.status).json({ error: claim.error });
+    return;
+  }
+  res.status(200).json({ status: 'received' });
+  if (claim.shouldProcess) {
+    void processClaimedMessengerMessage(claim).catch((err) => {
+      console.error('[Messenger webhook] Background processing failed:', err);
+    });
+  }
 }

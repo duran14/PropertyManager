@@ -39,7 +39,12 @@ export function createApp(): express.Application {
       credentials: true,
     }),
   );
-  app.use(express.json({ limit: '2mb' }));
+  app.use(express.json({
+    limit: '2mb',
+    verify: (req, _res, buf) => {
+      (req as express.Request & { rawBody?: Buffer }).rawBody = buf;
+    },
+  }));
   app.use(express.urlencoded({ extended: false }));
   app.use(cookieParser());
 
