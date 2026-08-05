@@ -1,17 +1,14 @@
 /**
- * Mock de Facebook Messenger (Send/Receive API).
- *
- * Placeholder mínimo para que `ChatChannel`/`IntegrationKey` incluyan
- * 'messenger' de forma exhaustiva en el factory sin romper el build.
- * La lógica real de envío/parseo de webhooks de Messenger se implementa
- * en un task posterior (adapter real + wiring del factory + rutas de webhook).
+ * Mock de la Graph API de Messenger.
+ * Simula el envío y recepción de mensajes sin llamar a Meta.
  */
 import type {
+  ChatChannel,
   InboundMessage,
   MessagingAdapter,
   OutboundMessage,
-  ChatChannel,
 } from '../contracts.js';
+import { extractMessengerTextMessage } from '../real/messenger-payload.js';
 
 export class MessengerMockAdapter implements MessagingAdapter {
   readonly channel: ChatChannel = 'messenger';
@@ -23,10 +20,17 @@ export class MessengerMockAdapter implements MessagingAdapter {
     return { messageId: `messenger_msg_${Date.now()}` };
   }
 
-  async parseWebhook(
-    _headers: Record<string, string>,
-    _body: unknown,
-  ): Promise<InboundMessage> {
-    throw new Error('Messenger webhook parsing no está implementado todavía.');
+  async parseWebhook(_headers: Record<string, string>, body: unknown): Promise<InboundMessage> {
+    const extracted = extractMessengerTextMessage(body);
+    if (!extracted) {
+      throw new Error('Messenger webhook payload sin mensaje de texto procesable (eco, adjunto, o postback)');
+    }
+    return {
+      from: extracted.senderId,
+      body: extracted.text,
+      channel: 'messenger',
+      receivedAt: new Date().toISOString(),
+      messageId: extracted.mid,
+    };
   }
 }
