@@ -115,6 +115,10 @@ pnpm --filter @property-manager/core test   # lógica de dominio
 
 ## Próximos pasos (post-MVP)
 
+Roadmap detallado de las siguientes 6 fases (Messenger, screening, trust
+accounting, syndication, QuickBooks, nómina embebida) en
+[`docs/PRODUCT_ROADMAP.md`](./docs/PRODUCT_ROADMAP.md).
+
 - RLS (Row-Level Security) policies en Postgres
 - Adapters reales para Buildium, QBO, Twilio, Plaid
 - Data residency en ca-central-1 (PIPEDA)
