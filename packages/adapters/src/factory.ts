@@ -38,6 +38,7 @@ import { WebChatMockAdapter } from './mocks/webchat.mock.js';
 import { EmailMockAdapter } from './mocks/email.mock.js';
 import { GlmRealAdapter } from './real/glm.real.js';
 import { TelegramRealAdapter } from './real/telegram.real.js';
+import { MessengerRealAdapter } from './real/messenger.real.js';
 import { TwilioRealAdapter } from './real/twilio.real.js';
 import { ResendEmailAdapter } from './real/resend-email.real.js';
 
@@ -117,7 +118,9 @@ export function createAdapters(env: Env): Adapters {
       telegram: isIntegrationConfigured(env, 'telegram')
         ? new TelegramRealAdapter(env.TELEGRAM_BOT_TOKEN)
         : new TelegramMockAdapter(),
-      messenger: new MessengerMockAdapter(),
+      messenger: isIntegrationConfigured(env, 'messenger')
+        ? new MessengerRealAdapter(env.MESSENGER_PAGE_ACCESS_TOKEN)
+        : new MessengerMockAdapter(),
       web: new WebChatMockAdapter(),
       email: isIntegrationConfigured(env, 'email')
         ? new ResendEmailAdapter({ apiKey: env.RESEND_API_KEY, from: env.RESEND_FROM_EMAIL })

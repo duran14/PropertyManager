@@ -4,6 +4,8 @@ import { TwilioMockAdapter } from './mocks/twilio.mock.js';
 import { GlmMockAdapter } from './mocks/glm.mock.js';
 import { GlmRealAdapter } from './real/glm.real.js';
 import { TwilioRealAdapter } from './real/twilio.real.js';
+import { MessengerMockAdapter } from './mocks/messenger.mock.js';
+import { MessengerRealAdapter } from './real/messenger.real.js';
 import type { Env } from '@property-manager/config';
 
 const baseEnv: Env = {
@@ -114,5 +116,23 @@ describe('createAdapters', () => {
     expect(adapters.glm).toBeInstanceOf(GlmRealAdapter);
     expect(adapters.glm).not.toBeInstanceOf(GlmMockAdapter);
     expect(adapters.mockModes.glm).toBe(false);
+  });
+
+  it('uses Messenger mock messaging when Messenger credentials are not configured', () => {
+    const adapters = createAdapters(baseEnv);
+
+    expect(adapters.messaging.messenger).toBeInstanceOf(MessengerMockAdapter);
+    expect(adapters.mockModes.messenger).toBe(true);
+  });
+
+  it('uses Messenger real messaging when Messenger credentials are configured', () => {
+    const adapters = createAdapters({
+      ...baseEnv,
+      MESSENGER_PAGE_ACCESS_TOKEN: 'page-token-123',
+      MESSENGER_APP_SECRET: 'app-secret-123',
+    });
+
+    expect(adapters.messaging.messenger).toBeInstanceOf(MessengerRealAdapter);
+    expect(adapters.mockModes.messenger).toBe(false);
   });
 });
