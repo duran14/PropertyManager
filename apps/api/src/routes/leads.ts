@@ -12,6 +12,7 @@
  */
 import { Router } from 'express';
 import { z } from 'zod';
+import type { ChatChannel } from '@property-manager/adapters';
 import { prisma } from '../config/db.js';
 import { getAdapters } from '../config/adapters.js';
 import { requireAuth, requireUser } from '../auth/context.js';
@@ -551,7 +552,7 @@ leadsRouter.post('/simulate-chat', requireAuth, async (req, res, next) => {
       return;
     }
     const adapters = getAdapters();
-    const ch = (channel ?? 'whatsapp') as 'whatsapp' | 'sms' | 'telegram' | 'web' | 'email';
+    const ch = (channel ?? 'whatsapp') as ChatChannel;
     const result = await handleInboundMessage(
       { tenantId: user.tenantId, from, body, channel: ch },
       { glm: adapters.glm, messaging: adapters.messaging[ch], showmojo: adapters.showmojo },

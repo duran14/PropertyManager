@@ -149,7 +149,7 @@ export interface TwilioAdapter {
 // =============================================================================
 
 /** Canal de mensajería soportado por el chatbot. */
-export type ChatChannel = 'whatsapp' | 'sms' | 'telegram' | 'web' | 'email';
+export type ChatChannel = 'whatsapp' | 'sms' | 'telegram' | 'messenger' | 'web' | 'email';
 
 /** Mensaje saliente del bot hacia el usuario. */
 export interface OutboundMessage {

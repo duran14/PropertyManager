@@ -11,6 +11,7 @@
  */
 import { Router } from 'express';
 import { z } from 'zod';
+import type { ChatChannel } from '@property-manager/adapters';
 import { getAdapters } from '../config/adapters.js';
 import { prisma } from '../config/db.js';
 import { requireAuth, requireUser } from '../auth/context.js';
@@ -448,12 +449,12 @@ chatRouter.post('/conversations/:id/reply', requireAuth, async (req, res, next) 
     // Send through the matching channel.
     const adapters = getAdapters();
     const messagingAdapter =
-      adapters.messaging[conversation.channel as 'whatsapp' | 'sms' | 'telegram' | 'web' | 'email'];
+      adapters.messaging[conversation.channel as ChatChannel];
     if (messagingAdapter) {
       await messagingAdapter.send({
         to: getReplyAddressFromConversation(conversation.externalId),
         body: parsed.data.message,
-        channel: conversation.channel as 'whatsapp' | 'sms' | 'telegram' | 'web' | 'email',
+        channel: conversation.channel as ChatChannel,
       });
     }
 

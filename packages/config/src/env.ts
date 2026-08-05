@@ -102,6 +102,16 @@ const envSchema = z.object({
       z.string().min(1).default('tenant_demo_pm'),
     ),
 
+  // --- Facebook Messenger (bot) ---
+  MESSENGER_PAGE_ACCESS_TOKEN: z.string().optional().default(''),
+  MESSENGER_APP_SECRET: z.string().optional().default(''),
+  MESSENGER_VERIFY_TOKEN: z.string().optional().default(''),
+  MESSENGER_DEFAULT_TENANT_ID: z
+    .preprocess(
+      (value) => (value === '' ? undefined : value),
+      z.string().min(1).default('tenant_demo_pm'),
+    ),
+
   // --- Resend (correo transaccional) ---
   RESEND_API_KEY: z.string().optional().default(''),
   RESEND_FROM_EMAIL: z.string().optional().default(''),
@@ -123,6 +133,7 @@ export type IntegrationKey =
   | 'showmojo'
   | 'docusign'
   | 'telegram'
+  | 'messenger'
   | 'email';
 
 /**
@@ -166,6 +177,8 @@ export function isIntegrationConfigured(env: Env, key: IntegrationKey): boolean 
       return Boolean(env.DOCUSIGN_INTEGRATION_KEY && env.DOCUSIGN_USER_ID);
     case 'telegram':
       return Boolean(env.TELEGRAM_BOT_TOKEN);
+    case 'messenger':
+      return Boolean(env.MESSENGER_PAGE_ACCESS_TOKEN && env.MESSENGER_APP_SECRET);
     case 'email':
       return Boolean(env.RESEND_API_KEY && env.RESEND_FROM_EMAIL);
   }

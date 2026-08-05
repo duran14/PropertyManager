@@ -33,6 +33,7 @@ import { ShowMojoMockAdapter } from './mocks/showmojo.mock.js';
 import { StripeMockAdapter } from './mocks/stripe.mock.js';
 import { TwilioMockAdapter } from './mocks/twilio.mock.js';
 import { TelegramMockAdapter } from './mocks/telegram.mock.js';
+import { MessengerMockAdapter } from './mocks/messenger.mock.js';
 import { WebChatMockAdapter } from './mocks/webchat.mock.js';
 import { EmailMockAdapter } from './mocks/email.mock.js';
 import { GlmRealAdapter } from './real/glm.real.js';
@@ -80,6 +81,7 @@ export function createAdapters(env: Env): Adapters {
     showmojo: !isIntegrationConfigured(env, 'showmojo'),
     docusign: !isIntegrationConfigured(env, 'docusign'),
     telegram: !isIntegrationConfigured(env, 'telegram'),
+    messenger: !isIntegrationConfigured(env, 'messenger'),
     email: !isIntegrationConfigured(env, 'email'),
   };
 
@@ -115,6 +117,7 @@ export function createAdapters(env: Env): Adapters {
       telegram: isIntegrationConfigured(env, 'telegram')
         ? new TelegramRealAdapter(env.TELEGRAM_BOT_TOKEN)
         : new TelegramMockAdapter(),
+      messenger: new MessengerMockAdapter(),
       web: new WebChatMockAdapter(),
       email: isIntegrationConfigured(env, 'email')
         ? new ResendEmailAdapter({ apiKey: env.RESEND_API_KEY, from: env.RESEND_FROM_EMAIL })

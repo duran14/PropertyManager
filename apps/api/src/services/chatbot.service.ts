@@ -4,7 +4,7 @@
  * The bot uses structured GLM output, keeps conversation history, collects
  * prospect slots, proposes units, and hands scheduling off to ShowMojo.
  */
-import type { GlmAdapter, MessagingAdapter, ShowMojoAdapter } from '@property-manager/adapters';
+import type { ChatChannel, GlmAdapter, MessagingAdapter, ShowMojoAdapter } from '@property-manager/adapters';
 import { prisma } from '../config/db.js';
 import { writeAudit } from './audit.service.js';
 import { formatKnowledgeContext, rankKnowledgeChunks } from './knowledge-retrieval.service.js';
@@ -135,7 +135,7 @@ export interface InboundChatMessage {
   tenantId: string;
   from: string;
   body: string;
-  channel: 'whatsapp' | 'sms' | 'telegram' | 'web' | 'email';
+  channel: ChatChannel;
   mediaUrls?: string[];
 }
 

@@ -526,6 +526,7 @@ enum LeadSource {
   whatsapp // chatbot de WhatsApp
   sms // chatbot de SMS
   telegram // chatbot de Telegram
+  messenger // chatbot de Facebook Messenger
   web // chat web embebido
   email // contacto por email
   showmojo // registro de visita en ShowMojo
@@ -601,6 +602,7 @@ enum ChatChannel {
   whatsapp
   sms
   telegram
+  messenger
   web
   email
 }
