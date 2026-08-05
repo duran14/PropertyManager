@@ -94,6 +94,7 @@ realistas de BC. Para conectar APIs reales, añadir credenciales al `.env`:
 | Buildium | `BUILDIUM_CLIENT_ID`, `BUILDIUM_CLIENT_SECRET` |
 | QuickBooks Online | `QBO_CLIENT_ID`, `QBO_CLIENT_SECRET` |
 | Twilio (WhatsApp/SMS) | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_WHATSAPP_FROM` |
+| Facebook Messenger ([guía de setup](./docs/MESSENGER_SETUP.md)) | `MESSENGER_PAGE_ACCESS_TOKEN`, `MESSENGER_APP_SECRET`, `MESSENGER_VERIFY_TOKEN` |
 | Plaid (saldos bancarios) | `PLAID_CLIENT_ID`, `PLAID_SECRET` |
 | GLM (Z.ai) | `ZAI_API_KEY` |
 
