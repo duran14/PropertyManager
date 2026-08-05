@@ -5,6 +5,7 @@ export function buildWebhookTargets(apiUrl: string) {
     twilioSms: `${baseUrl}/webhooks/twilio/sms`,
     twilioWhatsapp: `${baseUrl}/webhooks/twilio/whatsapp`,
     telegram: `${baseUrl}/chat/webhooks/telegram`,
+    messenger: `${baseUrl}/webhooks/messenger`,
     showmojo: `${baseUrl}/webhooks/showmojo`,
   };
 }

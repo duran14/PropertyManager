@@ -5,6 +5,7 @@
  * prospect slots, proposes units, and hands scheduling off to ShowMojo.
  */
 import type { ChatChannel, GlmAdapter, MessagingAdapter, ShowMojoAdapter } from '@property-manager/adapters';
+import type { LeadSource } from '@prisma/client';
 import { prisma } from '../config/db.js';
 import { writeAudit } from './audit.service.js';
 import { formatKnowledgeContext, rankKnowledgeChunks } from './knowledge-retrieval.service.js';
@@ -2935,13 +2936,20 @@ async function ensureLead(
   return true;
 }
 
-function getLeadSourceForChannel(channel: ChatChannel): ChatChannel {
-  if (channel === 'telegram') return 'telegram';
-  if (channel === 'web') return 'web';
-  if (channel === 'email') return 'email';
-  if (channel === 'sms') return 'sms';
-  if (channel === 'messenger') return 'messenger';
-  return 'whatsapp';
+// Record<ChatChannel, LeadSource> forces TypeScript to enforce exhaustiveness:
+// adding a new ChatChannel without a matching entry here is a compile error,
+// not a silent fallback to the wrong lead source.
+const LEAD_SOURCE_BY_CHANNEL: Record<ChatChannel, LeadSource> = {
+  whatsapp: 'whatsapp',
+  sms: 'sms',
+  telegram: 'telegram',
+  messenger: 'messenger',
+  web: 'web',
+  email: 'email',
+};
+
+function getLeadSourceForChannel(channel: ChatChannel): LeadSource {
+  return LEAD_SOURCE_BY_CHANNEL[channel];
 }
 
 export function getConversationExternalId(input: Pick<InboundChatMessage, 'channel' | 'from'>): string {

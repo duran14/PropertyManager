@@ -83,6 +83,7 @@ interface UnitOption {
 const CHANNEL_STYLES: Record<string, string> = {
   whatsapp: 'bg-green-50 text-green-700',
   telegram: 'bg-blue-50 text-blue-700',
+  messenger: 'bg-indigo-50 text-indigo-700',
   web: 'bg-violet-50 text-violet-700',
   sms: 'bg-sky-50 text-sky-700',
   email: 'bg-amber-50 text-amber-700',

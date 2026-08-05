@@ -10,6 +10,7 @@ const SOURCE_META: Record<string, { label: string; icon: IconName; color: string
   whatsapp: { label: 'WhatsApp', icon: 'chat', color: 'bg-green-50 text-green-700' },
   sms: { label: 'SMS', icon: 'chat', color: 'bg-blue-50 text-blue-700' },
   telegram: { label: 'Telegram', icon: 'chat', color: 'bg-cyan-50 text-cyan-700' },
+  messenger: { label: 'Messenger', icon: 'chat', color: 'bg-indigo-50 text-indigo-700' },
   web: { label: 'Web chat', icon: 'chat', color: 'bg-violet-50 text-violet-700' },
   email: { label: 'Email', icon: 'document', color: 'bg-amber-50 text-amber-700' },
   showmojo: { label: 'ShowMojo', icon: 'sparkles', color: 'bg-violet-50 text-violet-700' },
@@ -86,7 +87,7 @@ export function LeadsPage() {
       </div>
 
       <div className="mb-4 flex gap-2 text-sm">
-        {['', 'whatsapp', 'sms', 'telegram', 'web', 'unit_url', 'showmojo'].map((f) => (
+        {['', 'whatsapp', 'sms', 'telegram', 'messenger', 'web', 'unit_url', 'showmojo'].map((f) => (
           <button
             key={f}
             onClick={() => setFilter(f)}

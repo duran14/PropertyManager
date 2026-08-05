@@ -8,6 +8,7 @@ describe('webhook config service', () => {
       twilioSms: 'https://pm-api.example.com/webhooks/twilio/sms',
       twilioWhatsapp: 'https://pm-api.example.com/webhooks/twilio/whatsapp',
       telegram: 'https://pm-api.example.com/chat/webhooks/telegram',
+      messenger: 'https://pm-api.example.com/webhooks/messenger',
       showmojo: 'https://pm-api.example.com/webhooks/showmojo',
     });
   });

@@ -62,7 +62,16 @@ export interface ReconciliationBatch {
   balanced: boolean;
 }
 
-export type LeadSource = 'unit_url' | 'whatsapp' | 'sms' | 'telegram' | 'web' | 'email' | 'showmojo' | 'manual';
+export type LeadSource =
+  | 'unit_url'
+  | 'whatsapp'
+  | 'sms'
+  | 'telegram'
+  | 'messenger'
+  | 'web'
+  | 'email'
+  | 'showmojo'
+  | 'manual';
 
 export type LeadStatus = 'new_' | 'contacted' | 'tour_scheduled' | 'qualified' | 'converted' | 'lost';
 

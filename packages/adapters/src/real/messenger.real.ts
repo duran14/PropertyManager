@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Adapter REAL de Facebook Messenger — usa la Graph API de Meta vía webhook
  * (a diferencia de Telegram, Messenger no soporta long-polling).
  */
@@ -8,7 +8,7 @@ import type {
   MessagingAdapter,
   OutboundMessage,
 } from '../contracts.js';
-import { extractMessengerTextMessage } from './messenger-payload.js';
+import { extractMessengerTextMessage, toMessengerInboundMessage } from './messenger-payload.js';
 
 const GRAPH_API_VERSION = 'v21.0';
 
@@ -40,12 +40,6 @@ export class MessengerRealAdapter implements MessagingAdapter {
     if (!extracted) {
       throw new Error('Messenger webhook payload sin mensaje de texto procesable (eco, adjunto, o postback)');
     }
-    return {
-      from: extracted.senderId,
-      body: extracted.text,
-      channel: 'messenger',
-      receivedAt: new Date().toISOString(),
-      messageId: extracted.mid,
-    };
+    return toMessengerInboundMessage(extracted);
   }
 }

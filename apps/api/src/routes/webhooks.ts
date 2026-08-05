@@ -22,7 +22,7 @@ import {
   validateTwilioWebhookSignature,
 } from '../services/twilio-webhook-security.service.js';
 import { validateMessengerWebhookSignature } from '../services/messenger-webhook-security.service.js';
-import { extractMessengerTextMessage } from '@property-manager/adapters';
+import { extractMessengerTextMessage, toMessengerInboundMessage } from '@property-manager/adapters';
 import {
   claimWebhookMessage,
   completeWebhookMessage,
@@ -417,13 +417,7 @@ export async function claimAndPrepareMessengerMessage(req: Request): Promise<Mes
       tenantId,
       mid: extracted.mid,
       claimToken: claim.claimToken,
-      inbound: {
-        from: extracted.senderId,
-        body: extracted.text,
-        channel: 'messenger',
-        receivedAt: new Date().toISOString(),
-        messageId: extracted.mid,
-      },
+      inbound: toMessengerInboundMessage(extracted),
     },
   };
 }

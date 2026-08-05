@@ -1,3 +1,5 @@
+import type { InboundMessage } from '../contracts.js';
+
 export interface MessengerTextMessage {
   senderId: string;
   mid: string;
@@ -36,4 +38,20 @@ export function extractMessengerTextMessage(body: unknown): MessengerTextMessage
     }
   }
   return null;
+}
+
+/**
+ * Construye el InboundMessage canónico a partir de un mensaje de texto de
+ * Messenger ya extraído. Único punto de verdad para esta forma — evita que
+ * el adapter real, el mock, y la ruta del webhook (que no puede llamar a
+ * parseWebhook porque necesita el `mid` antes de poder reclamar) diverjan.
+ */
+export function toMessengerInboundMessage(extracted: MessengerTextMessage): InboundMessage {
+  return {
+    from: extracted.senderId,
+    body: extracted.text,
+    channel: 'messenger',
+    receivedAt: new Date().toISOString(),
+    messageId: extracted.mid,
+  };
 }

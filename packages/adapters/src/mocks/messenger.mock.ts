@@ -8,7 +8,7 @@ import type {
   MessagingAdapter,
   OutboundMessage,
 } from '../contracts.js';
-import { extractMessengerTextMessage } from '../real/messenger-payload.js';
+import { extractMessengerTextMessage, toMessengerInboundMessage } from '../real/messenger-payload.js';
 
 export class MessengerMockAdapter implements MessagingAdapter {
   readonly channel: ChatChannel = 'messenger';
@@ -25,12 +25,6 @@ export class MessengerMockAdapter implements MessagingAdapter {
     if (!extracted) {
       throw new Error('Messenger webhook payload sin mensaje de texto procesable (eco, adjunto, o postback)');
     }
-    return {
-      from: extracted.senderId,
-      body: extracted.text,
-      channel: 'messenger',
-      receivedAt: new Date().toISOString(),
-      messageId: extracted.mid,
-    };
+    return toMessengerInboundMessage(extracted);
   }
 }

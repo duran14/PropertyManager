@@ -1,4 +1,4 @@
-﻿import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MessengerRealAdapter } from './messenger.real.js';
 
 describe('MessengerRealAdapter', () => {
