@@ -392,6 +392,48 @@ describe('closeOwnerStatement', () => {
     expect(saved.rentIncomeCents).toBe(200_000);
   });
 
+  it('does not withhold the reserve target twice when months are closed out of order', async () => {
+    // Cierra agosto primero (sin cierres previos, retiene hasta la meta),
+    // y luego cierra julio (un mes anterior, pero también sin cierres con
+    // periodo aún más antiguo). La reserva acumulada debe sumar TODOS los
+    // cierres de la propiedad, no solo los de periodo anterior al que se
+    // está cerrando — si no, cada cierre ve reserva previa = 0 y retiene
+    // la meta completa, duplicando lo retenido contra una sola meta.
+    const { property, unit } = await seed({ reserveTargetCents: 100_000 });
+    await addRent(unit.id, 200_000, new Date('2026-08-10T12:00:00Z'), 'rent-aug');
+    await addRent(unit.id, 200_000, new Date('2026-07-10T12:00:00Z'), 'rent-jul');
+
+    const closedAugust = await closeOwnerStatement({
+      tenantId: TENANT_ID, propertyId: property.id, period: '2026-08',
+      actorUserId: 'u_pm', now: AFTER_AUGUST,
+    });
+    expect(closedAugust.ok).toBe(true);
+    if (!closedAugust.ok) throw new Error('expected success');
+    const augustStatement = await prisma.ownerStatement.findUniqueOrThrow({
+      where: { id: closedAugust.statementId },
+    });
+    expect(augustStatement.reserveWithheldCents).toBe(100_000);
+
+    const closedJuly = await closeOwnerStatement({
+      tenantId: TENANT_ID, propertyId: property.id, period: '2026-07',
+      actorUserId: 'u_pm', now: AFTER_AUGUST,
+    });
+    expect(closedJuly.ok).toBe(true);
+    if (!closedJuly.ok) throw new Error('expected success');
+    const julyStatement = await prisma.ownerStatement.findUniqueOrThrow({
+      where: { id: closedJuly.statementId },
+    });
+    // La reserva ya se alcanzó en agosto; julio no debe retener nada más.
+    expect(julyStatement.reserveWithheldCents).toBe(0);
+
+    const totalWithheld = await prisma.ownerStatement.aggregate({
+      _sum: { reserveWithheldCents: true },
+      where: { tenantId: TENANT_ID, propertyId: property.id },
+    });
+    expect(totalWithheld._sum.reserveWithheldCents).toBeLessThanOrEqual(100_000);
+    expect(totalWithheld._sum.reserveWithheldCents).toBe(100_000);
+  });
+
   it('propagates an unexpected error instead of reporting a false "already closed"', async () => {
     const { property } = await seed();
     // Simula una falla real de BD (no una violación de unique constraint):

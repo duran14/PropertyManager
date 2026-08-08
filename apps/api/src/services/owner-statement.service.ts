@@ -83,12 +83,21 @@ export async function previewOwnerStatement(input: {
         ],
       },
     }),
+    // La reserva acumulada es la suma de TODOS los estados de cuenta ya
+    // cerrados de esta propiedad, no solo los de periodo anterior: nada
+    // obliga a cerrar los meses en orden (closeOwnerStatement solo exige
+    // que el periodo ya haya terminado), así que un mes pasado puede
+    // cerrarse después de uno futuro. Filtrar por `periodStart: { lt }`
+    // permitía cerrar, por ejemplo, agosto y luego julio, y cada cierre
+    // veía reserva previa = 0 y retenía la meta completa dos veces. Los
+    // estados guardados son inmutables, así que una vista previa que
+    // cambie retroactivamente (antes de cerrar) no rompe nada ya emitido.
     prisma.ownerStatement.aggregate({
       _sum: { reserveWithheldCents: true },
-      where: { propertyId: property.id, periodStart: { lt: periodStart } },
+      where: { tenantId: input.tenantId, propertyId: property.id },
     }),
     prisma.ownerStatement.findUnique({
-      where: { propertyId_periodStart: { propertyId: property.id, periodStart } },
+      where: { propertyId_periodStart: { propertyId: property.id, periodStart }, tenantId: input.tenantId },
       select: { id: true },
     }),
   ]);
@@ -232,20 +241,31 @@ export async function closeOwnerStatement(input: {
   // log de un cierre cuyo statement todavía no es definitivo. Se deja
   // fuera, después de que statement + instrucción de pago ya son atómicos
   // y están comiteados.
-  await writeAudit({
-    tenantId: input.tenantId,
-    actorId: input.actorUserId,
-    actorType: 'user',
-    action: 'owner_statement.closed',
-    entityType: 'owner_statement',
-    entityId: statementId,
-    payload: {
-      period: input.period,
-      propertyId: preview.propertyId,
-      ownerPayoutCents: preview.ownerPayoutCents,
-      shortfallCents: preview.shortfallCents,
-    },
-  });
+  //
+  // El cierre en sí ya está comiteado en este punto (statement + posible
+  // Transaction de distribución). Si writeAudit falla después de eso, el
+  // cierre SÍ ocurrió; dejar que el error se propague haría que el
+  // llamador reciba un 500 (o una excepción no manejada) por un cierre
+  // que en realidad tuvo éxito. Solo se loguea — el éxito real se reporta
+  // como éxito.
+  try {
+    await writeAudit({
+      tenantId: input.tenantId,
+      actorId: input.actorUserId,
+      actorType: 'user',
+      action: 'owner_statement.closed',
+      entityType: 'owner_statement',
+      entityId: statementId,
+      payload: {
+        period: input.period,
+        propertyId: preview.propertyId,
+        ownerPayoutCents: preview.ownerPayoutCents,
+        shortfallCents: preview.shortfallCents,
+      },
+    });
+  } catch (error) {
+    console.error('[OwnerStatement] writeAudit failed after close committed:', error);
+  }
 
   return { ok: true, statementId };
 }
