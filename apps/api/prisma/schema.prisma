@@ -464,6 +464,9 @@ model Lead {
   assignedUserId    String?
   createdAt         DateTime   @default(now())
   updatedAt         DateTime   @updatedAt
+  // Fase 1B: reactivación de leads inactivos
+  lastRemarketedAt  DateTime?
+  optedOutAt        DateTime?
 
   tenant             Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   unit               Unit?               @relation(fields: [unitId], references: [id])
