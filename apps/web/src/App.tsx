@@ -15,6 +15,7 @@ import { PhotosPage } from './pages/PhotosPage';
 import { ConversationsPage } from './pages/ConversationsPage';
 import { ShowingsPage } from './pages/ShowingsPage';
 import { PropertiesPage } from './pages/PropertiesPage';
+import { OwnerStatementsPage } from './pages/OwnerStatementsPage';
 import { useQuery } from '@tanstack/react-query';
 import { apiFetch } from './lib/apiClient';
 import type { Lease } from './lib/types';
@@ -68,6 +69,7 @@ function ProtectedRoutes() {
         <Route path="/bills" element={<BillsPage />} />
         <Route path="/leases" element={<LeasesRoute />} />
         <Route path="/reconciliation" element={<ReconciliationPage />} />
+        <Route path="/owner-statements" element={<OwnerStatementsPage />} />
         <Route path="/audit" element={<AuditPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

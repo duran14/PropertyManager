@@ -21,6 +21,7 @@ const NAV: NavItem[] = [
   { to: '/bills', label: 'Bills / OCR', icon: 'bills', roles: ['property_manager', 'bookkeeper', 'broker'] },
   { to: '/leases', label: 'Leases / RTA', icon: 'rta', roles: ['property_manager', 'bookkeeper', 'broker'] },
   { to: '/reconciliation', label: 'Reconciliation', icon: 'reconciliation', roles: ['bookkeeper', 'broker'] },
+  { to: '/owner-statements', label: 'Owner Statements', icon: 'reconciliation', roles: ['property_manager', 'bookkeeper'] },
   { to: '/audit', label: 'Audit Trail', icon: 'audit', roles: ['bookkeeper', 'broker'] },
 ];
 
