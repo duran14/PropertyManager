@@ -49,7 +49,23 @@ export async function deliverDueShortlistReminders(deps: {
 
 export async function sendDueShortlistReminders(now = new Date()): Promise<number> {
   const due = await prisma.propertyShortlist.findMany({
-    where: { remindersStopped: false, scheduledAt: null, nextReminderAt: { lte: now }, expiresAt: { gt: now } },
+    where: {
+      remindersStopped: false,
+      scheduledAt: null,
+      nextReminderAt: { lte: now },
+      expiresAt: { gt: now },
+      // Fix 6: Lead.optedOutAt solo se checaba en remarketing.service.ts —
+      // un lead que ya pidió no ser contactado podía seguir recibiendo
+      // recordatorios de shortlist si se creaba un PropertyShortlist nuevo
+      // después de su opt-out. `conversation.lead` es nullable (una
+      // conversación puede no tener lead vinculado aún), así que se excluye
+      // solo cuando el lead EXISTE y tiene optedOutAt seteado — NOT + is
+      // deja pasar tanto "sin lead" como "lead sin opt-out" (verificado
+      // directamente contra la base: `lead: { is: { optedOutAt: null } }`
+      // por sí solo excluiría también las conversaciones sin lead, que es
+      // el comportamiento incorrecto).
+      NOT: { conversation: { lead: { is: { optedOutAt: { not: null } } } } },
+    },
     include: { conversation: true },
     take: 50,
   });
