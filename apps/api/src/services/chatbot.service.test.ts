@@ -2304,6 +2304,8 @@ describe('shouldSkipContextualSlotHeuristics (Finding 2: never mutate the profil
 
   it.each([
     'no me contacten más por favor',
+    'no me contactes más',
+    'no me contacte más, gracias',
     'no me escriban más',
     'dejen de escribirme',
     'quítenme de la lista',
@@ -2322,6 +2324,20 @@ describe('shouldSkipContextualSlotHeuristics (Finding 2: never mutate the profil
     'no tengo mascotas',
     'estoy buscando algo con más espacio',
     'hola, quiero rentar un depa',
+    // Adversarial cases (found in code review): a past-tense complaint
+    // from an interested lead is not an opt-out request, and negating
+    // the opt-out phrase itself ("please DON'T stop...") means the
+    // opposite of opting out. A false positive here silently kills
+    // remarketing to a genuinely interested lead, which is worse than a
+    // false negative — see the "alta precisión" comment above
+    // OPT_OUT_PATTERNS.
+    '¿por qué no me contactaron antes?',
+    'no me contactó nadie de la inmobiliaria',
+    'no dejen de escribirme por favor, sigo interesado',
+    "please don't unsubscribe me, still interested",
+    'do not unsubscribe me please',
+    "don't stop contacting me, I love hearing from you",
+    "don't stop messaging me please",
   ])('does not flag an ordinary message as opt-out: %s', (message) => {
     expect(detectOptOutPhrase(message)).toBe(false);
   });

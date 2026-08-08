@@ -631,14 +631,23 @@ function looksLikeSpanish(text: string | undefined): boolean {
 // un falso negativo (alguien que de verdad no quiere más mensajes tiene
 // que escribirlo de forma más explícita una vez).
 const OPT_OUT_PATTERNS = [
-  /no me contact/i,
+  // Anchored to the subjunctive/imperative conjugations ("contacten",
+  // "contactes", "contacte") so past-tense complaints from an interested
+  // lead ("no me contactó nadie", "¿por qué no me contactaron antes?")
+  // don't false-positive as opt-out requests.
+  /no me contact(en|es|e)\b/i,
   /no me escriban? m[aá]s/i,
-  /dejen? de escribirme/i,
+  // Negative lookbehind excludes "no dejen de escribirme" ("please DON'T
+  // stop writing to me"), which means the opposite of opt-out.
+  /(?<!no )dejen? de escribirme/i,
   /qu[ií]tenme de la lista/i,
   /ya no me manden mensajes/i,
-  /\bunsubscribe\b/i,
-  /\bstop contacting me\b/i,
-  /\bstop messaging me\b/i,
+  // Same negation-blindness guard as above, applied to the English
+  // patterns: "don't unsubscribe me" / "don't stop contacting/messaging
+  // me" mean the opposite of opting out.
+  /(?<!don't )(?<!do not )\bunsubscribe\b/i,
+  /(?<!don't )(?<!do not )\bstop contacting me\b/i,
+  /(?<!don't )(?<!do not )\bstop messaging me\b/i,
 ];
 
 export function detectOptOutPhrase(message: string): boolean {
