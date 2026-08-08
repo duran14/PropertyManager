@@ -1,6 +1,23 @@
 import { describe, expect, it } from 'vitest';
 import { monthBoundsUtc, parseStatementPeriod } from './period.js';
 
+/** Renderiza una fecha UTC como local time en Vancouver: YYYY-MM-DD HH:mm:ss */
+function renderInVancouver(date: Date): string {
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Vancouver',
+    hour12: false,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+  const parts = formatter.formatToParts(date);
+  const get = (type: string): string => parts.find((p) => p.type === type)?.value ?? '?';
+  return `${get('year')}-${get('month')}-${get('day')} ${get('hour')}:${get('minute')}:${get('second')}`;
+}
+
 describe('parseStatementPeriod', () => {
   it('parses a valid YYYY-MM string', () => {
     expect(parseStatementPeriod('2026-08')).toEqual({ year: 2026, month: 8 });
@@ -23,31 +40,36 @@ describe('parseStatementPeriod', () => {
 
 describe('monthBoundsUtc', () => {
   it('anchors the month to midnight in Vancouver, not UTC', () => {
-    // Agosto 2026: Vancouver está en PDT (UTC-7), así que la medianoche
-    // local del 1 de agosto son las 07:00 UTC del mismo día.
+    // Verifica que periodStart, cuando se renderiza en Vancouver,
+    // es exactamente la medianoche del 1 del mes.
+    // Esto es inmune a cambios en tzdata y verifica la propiedad real.
     const { periodStart } = monthBoundsUtc(2026, 8);
-    expect(periodStart.toISOString()).toBe('2026-08-01T07:00:00.000Z');
+    expect(renderInVancouver(periodStart)).toBe('2026-08-01 00:00:00');
   });
 
   it('uses the first instant of the next month as an exclusive end', () => {
     const { periodEnd } = monthBoundsUtc(2026, 8);
-    expect(periodEnd.toISOString()).toBe('2026-09-01T07:00:00.000Z');
+    // periodEnd renderizado en Vancouver debe ser medianoche del 1 de septiembre.
+    expect(renderInVancouver(periodEnd)).toBe('2026-09-01 00:00:00');
   });
 
   it('rolls over the year for December', () => {
     const { periodStart, periodEnd } = monthBoundsUtc(2026, 12);
-    // Diciembre: Vancouver en PST (UTC-8) → 08:00 UTC.
-    expect(periodStart.toISOString()).toBe('2026-12-01T08:00:00.000Z');
-    expect(periodEnd.toISOString()).toBe('2027-01-01T08:00:00.000Z');
+    // Verifica que el inicio de diciembre es el 1 a medianoche
+    // y el fin es el 1 de enero del siguiente año a medianoche.
+    // Las propiedades importan; los offsets los decide la tzdata.
+    expect(renderInVancouver(periodStart)).toBe('2026-12-01 00:00:00');
+    expect(renderInVancouver(periodEnd)).toBe('2027-01-01 00:00:00');
   });
 
-  it('handles a month whose start and end fall on different DST offsets', () => {
-    // Octubre 2026 empieza en PDT (UTC-7) y noviembre empieza en PST
-    // (UTC-8), porque el horario de verano termina el 1 de noviembre a
-    // las 2am. Cada límite debe usar SU propio offset, no uno compartido.
+  it('handles DST transitions correctly when each boundary falls in different offsets', () => {
+    // Octubre 2026 y noviembre 2026 pueden tener diferentes offsets
+    // en Vancouver según los datos de tzdata. Lo importante es que
+    // cada límite renderizado localmente sea exactamente medianoche
+    // del día 1 en su respectivo mes.
     const { periodStart, periodEnd } = monthBoundsUtc(2026, 10);
-    expect(periodStart.toISOString()).toBe('2026-10-01T07:00:00.000Z');
-    expect(periodEnd.toISOString()).toBe('2026-11-01T07:00:00.000Z');
+    expect(renderInVancouver(periodStart)).toBe('2026-10-01 00:00:00');
+    expect(renderInVancouver(periodEnd)).toBe('2026-11-01 00:00:00');
   });
 
   it('produces a start strictly before the end for every month of a year', () => {
@@ -55,5 +77,15 @@ describe('monthBoundsUtc', () => {
       const { periodStart, periodEnd } = monthBoundsUtc(2026, month);
       expect(periodStart.getTime()).toBeLessThan(periodEnd.getTime());
     }
+  });
+
+  it('anchors boundaries to local midnight, not UTC midnight', () => {
+    // Caso histórico con offset conocido e inmutable.
+    // Enero 2025 en Vancouver está siempre en UTC-8.
+    // Si hubiéramos cometido el error de usar UTC, periodStart sería
+    // 2025-01-01T00:00:00Z, que renderizado en Vancouver sería
+    // 2025-12-31 16:00:00 (día anterior). Esto verifica que no lo hicimos.
+    const { periodStart } = monthBoundsUtc(2025, 1);
+    expect(renderInVancouver(periodStart)).toBe('2025-01-01 00:00:00');
   });
 });
