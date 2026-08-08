@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { prisma } from '../config/db.js';
 import { closeOwnerStatement, previewOwnerStatement } from './owner-statement.service.js';
 
@@ -390,5 +390,22 @@ describe('closeOwnerStatement', () => {
 
     const saved = await prisma.ownerStatement.findUniqueOrThrow({ where: { id: closed.statementId } });
     expect(saved.rentIncomeCents).toBe(200_000);
+  });
+
+  it('propagates an unexpected error instead of reporting a false "already closed"', async () => {
+    const { property } = await seed();
+    // Simula una falla real de BD (no una violación de unique constraint):
+    // el catch de closeOwnerStatement debe distinguirla de P2002 y dejarla
+    // propagar para que el error handler global la convierta en 500, en
+    // vez de disfrazarla como un 409 "ya cerrado".
+    const spy = vi.spyOn(prisma, '$transaction').mockRejectedValueOnce(new Error('simulated db outage'));
+
+    await expect(closeOwnerStatement({
+      tenantId: TENANT_ID, propertyId: property.id, period: '2026-08',
+      actorUserId: 'u_pm', now: AFTER_AUGUST,
+    })).rejects.toThrow('simulated db outage');
+
+    spy.mockRestore();
+    expect(await prisma.ownerStatement.count({ where: { tenantId: TENANT_ID } })).toBe(0);
   });
 });

@@ -6,6 +6,7 @@
  * mayor paralelo ni saldo acumulado en ninguna columna. ADR-005: esto no
  * mueve fondos, solo produce el documento y la instrucción de pago.
  */
+import { Prisma } from '@prisma/client';
 import { calculateOwnerStatement, monthBoundsUtc, parseStatementPeriod } from '@property-manager/core';
 import { prisma } from '../config/db.js';
 import { writeAudit } from './audit.service.js';
@@ -162,48 +163,75 @@ export async function closeOwnerStatement(input: {
     return { ok: false, status: 409, error: 'This period is already closed' };
   }
 
+  // Extraído a una const local: la narrowing de `preview.ownerId` a `string`
+  // (por el guard de arriba) no sobrevive dentro del closure de
+  // $transaction, pero sobre una const primitiva sí.
+  const ownerId = preview.ownerId;
+
   let statementId: string;
   try {
-    const statement = await prisma.ownerStatement.create({
-      data: {
-        tenantId: input.tenantId,
-        propertyId: preview.propertyId,
-        ownerId: preview.ownerId,
-        periodStart: preview.periodStart,
-        periodEnd: preview.periodEnd,
-        rentIncomeCents: preview.rentIncomeCents,
-        expensesCents: preview.expensesCents,
-        managementFeeCents: preview.managementFeeCents,
-        reserveWithheldCents: preview.reserveWithheldCents,
-        ownerPayoutCents: preview.ownerPayoutCents,
-        shortfallCents: preview.shortfallCents,
-        appliedFeePercentBps: preview.appliedFeePercentBps,
-        reserveTargetCents: preview.reserveTargetCents,
-        closedByUserId: input.actorUserId,
-      },
+    // El OwnerStatement y (si aplica) su Transaction de owner_distribution
+    // se crean en una sola transacción de BD: o quedan las dos filas o
+    // ninguna. Sin esto, un fallo del proceso entre ambos awaits dejaría
+    // el mes "cerrado" (bloqueado por la unique) pero sin instrucción de
+    // pago, y sin forma de reintentar — un hueco de integridad recuperable
+    // solo a mano en la base.
+    statementId = await prisma.$transaction(async (tx) => {
+      const statement = await tx.ownerStatement.create({
+        data: {
+          tenantId: input.tenantId,
+          propertyId: preview.propertyId,
+          ownerId,
+          periodStart: preview.periodStart,
+          periodEnd: preview.periodEnd,
+          rentIncomeCents: preview.rentIncomeCents,
+          expensesCents: preview.expensesCents,
+          managementFeeCents: preview.managementFeeCents,
+          reserveWithheldCents: preview.reserveWithheldCents,
+          ownerPayoutCents: preview.ownerPayoutCents,
+          shortfallCents: preview.shortfallCents,
+          appliedFeePercentBps: preview.appliedFeePercentBps,
+          reserveTargetCents: preview.reserveTargetCents,
+          closedByUserId: input.actorUserId,
+        },
+      });
+
+      if (preview.ownerPayoutCents > 0) {
+        await tx.transaction.create({
+          data: {
+            tenantId: input.tenantId,
+            type: 'owner_distribution',
+            source: 'manual',
+            // Negativo: es una salida desde la perspectiva de la propiedad.
+            amountCents: -preview.ownerPayoutCents,
+            reference: `owner-statement:${statement.id}`,
+            occurredAt: preview.periodEnd,
+          },
+        });
+      }
+
+      return statement.id;
     });
-    statementId = statement.id;
-  } catch {
-    // La unique (propertyId, periodStart) es la red de seguridad real
-    // contra dos cierres concurrentes: el chequeo de alreadyClosed de
-    // arriba puede perder la carrera, esto no.
-    return { ok: false, status: 409, error: 'This period is already closed' };
+  } catch (error) {
+    // Angosto a propósito: solo la violación de la unique
+    // (propertyId, periodStart) — la red de seguridad real contra dos
+    // cierres concurrentes, ya que el chequeo de alreadyClosed de arriba
+    // puede perder la carrera — se traduce a 409. Cualquier otro error
+    // (caída de BD, bug de Prisma, etc.) debe propagarse como 500 real;
+    // disfrazarlo de "ya cerrado" mandaría a quien depure por el camino
+    // equivocado.
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+      return { ok: false, status: 409, error: 'This period is already closed' };
+    }
+    throw error;
   }
 
-  if (preview.ownerPayoutCents > 0) {
-    await prisma.transaction.create({
-      data: {
-        tenantId: input.tenantId,
-        type: 'owner_distribution',
-        source: 'manual',
-        // Negativo: es una salida desde la perspectiva de la propiedad.
-        amountCents: -preview.ownerPayoutCents,
-        reference: `owner-statement:${statementId}`,
-        occurredAt: preview.periodEnd,
-      },
-    });
-  }
-
+  // writeAudit abre su propia prisma.$transaction() sobre el cliente
+  // global: si se llamara dentro del $transaction de arriba, su escritura
+  // quedaría en una transacción de BD aparte, pudiendo comitear un audit
+  // log de un cierre cuyo statement todavía no es definitivo. Se deja
+  // fuera, después de que statement + instrucción de pago ya son atómicos
+  // y están comiteados.
   await writeAudit({
     tenantId: input.tenantId,
     actorId: input.actorUserId,
