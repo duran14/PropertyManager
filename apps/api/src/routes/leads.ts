@@ -37,6 +37,29 @@ import {
 export const publicRouter = Router();
 export const leadsRouter = Router();
 
+// La columna `annualIncome` es `Int` en Prisma (rango de un int32 de
+// Postgres). El body llega como JSON sin tipado real: un decimal
+// (82000.50), un valor > 2^31, o `Infinity` (que `JSON.parse` produce de
+// `1e999`, y para el que `typeof Infinity === 'number'` sigue siendo
+// cierto) harían que Prisma lance al escribir → 500 genérico. Para
+// entonces `submitRentalApplication` ya escribió el documento de
+// identificación a disco, así que cada reintento dejaría un archivo
+// huérfano. Por eso esta validación corre ANTES de llamar al servicio.
+const MAX_ANNUAL_INCOME = 2_000_000_000;
+
+type ParsedAnnualIncome = { ok: true; value: number | null } | { ok: false; error: string };
+
+export function parseAnnualIncome(value: unknown): ParsedAnnualIncome {
+  if (value === undefined || value === null) return { ok: true, value: null };
+  if (typeof value !== 'number' || !Number.isInteger(value)) {
+    return { ok: false, error: 'annualIncome must be a whole number' };
+  }
+  if (value < 0 || value > MAX_ANNUAL_INCOME) {
+    return { ok: false, error: 'annualIncome must be between 0 and ' + MAX_ANNUAL_INCOME };
+  }
+  return { ok: true, value };
+}
+
 publicRouter.get('/shortlists/:token', async (req, res, next) => {
   try {
     const result = await getPublicShortlist(req.params.token);
@@ -166,10 +189,14 @@ publicRouter.get('/applications/:token', async (req, res, next) => {
 publicRouter.post('/applications/:token', async (req, res, next) => {
   try {
     const body = req.body ?? {};
+    const annualIncome = parseAnnualIncome(body.annualIncome);
+    if (!annualIncome.ok) {
+      return void res.status(400).json({ error: annualIncome.error });
+    }
     const result = await submitRentalApplication(
       req.params.token,
       {
-        annualIncome: typeof body.annualIncome === 'number' ? body.annualIncome : null,
+        annualIncome: annualIncome.value,
         employerName: typeof body.employerName === 'string' ? body.employerName : null,
         references: typeof body.references === 'string' ? body.references : null,
         applicantFullName: typeof body.applicantFullName === 'string' ? body.applicantFullName : '',

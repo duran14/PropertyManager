@@ -120,10 +120,21 @@ export async function completeShowingAndInvite(
     return { ok: false, status: 409, error: `Showing cannot be completed from status: ${showing.status}` };
   }
 
-  await prisma.showing.update({
-    where: { id: showing.id },
+  // `findFirst` + chequeo de status arriba no son atómicos con este update:
+  // dos requests concurrentes (dos pestañas, dos usuarios) pueden pasar
+  // ambas el guard. El `updateMany` con el mismo guard de status es la red
+  // de seguridad — solo una de las dos transiciones puede tener éxito,
+  // porque la segunda ya no encuentra una fila en 'scheduled'/'confirmed'.
+  // Sin esto, ambas llamadas seguirían a `createRentalApplication`, y como
+  // `showingId` es `@unique` en `rental_applications`, la segunda reventaría
+  // con P2002 → 500 al broker, con el showing ya completado.
+  const { count } = await prisma.showing.updateMany({
+    where: { id: showing.id, tenantId: input.tenantId, status: { in: ['scheduled', 'confirmed'] } },
     data: { status: 'completed', brokerUserId: showing.brokerUserId ?? input.actorUserId },
   });
+  if (count === 0) {
+    return { ok: false, status: 409, error: `Showing cannot be completed from status: ${showing.status}` };
+  }
 
   const { application, token } = await createRentalApplication({
     tenantId: input.tenantId,
@@ -228,8 +239,14 @@ export async function submitRentalApplication(
   const idDocumentStorageKey = stored.storageKey;
 
   const now = new Date();
-  await prisma.rentalApplication.update({
-    where: { id: application.id },
+  // El chequeo de `status === 'submitted'` de arriba evita trabajo inútil en
+  // el caso común, pero entre ese chequeo y aquí hubo un `await` que escribe
+  // ~1MB a disco (`storage.putObject`): dos POSTs concurrentes del mismo
+  // token pueden pasar ambos el chequeo temprano. Por eso el guard real de
+  // la carrera es este `updateMany` con `status: 'invited'` en el `where`:
+  // solo uno de los dos puede coincidir, y `count` nos dice cuál.
+  const { count } = await prisma.rentalApplication.updateMany({
+    where: { id: application.id, status: 'invited' },
     data: {
       status: 'submitted',
       submittedAt: now,
@@ -243,6 +260,9 @@ export async function submitRentalApplication(
       consentPoliceCheckAt: now,
     },
   });
+  if (count === 0) {
+    return { ok: false, status: 409, error: 'Application already submitted' };
+  }
 
   await notifyStaffOfApplication(application.id, application.tenantId, deps);
 
@@ -295,7 +315,17 @@ async function notifyStaffOfApplication(
         console.error(`[RentalApplication] Email a ${target.id} falló:`, error);
       }
 
-      if (target.notificationChannel && target.notificationAddress) {
+      // Se excluye 'web' porque WebChatMockAdapter es un mock permanente que
+      // reporta éxito sin entregar nada (el mismo bug que se corrigió en
+      // Fase 1B, aquí en el otro extremo del flujo), y 'email' porque ya se
+      // envía arriba por ese canal — mandarlo también por "chat" duplicaría
+      // el correo.
+      if (
+        target.notificationChannel &&
+        target.notificationAddress &&
+        target.notificationChannel !== 'web' &&
+        target.notificationChannel !== 'email'
+      ) {
         try {
           const channel = target.notificationChannel as ChatChannel;
           await deps.messaging[channel].send({ to: target.notificationAddress, body, channel });

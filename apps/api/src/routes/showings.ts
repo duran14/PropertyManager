@@ -115,8 +115,24 @@ showingsRouter.post(
 showingsRouter.get('/:id/application', requireAuth, async (req, res, next) => {
   try {
     const user = requireUser(req);
+    // `select` explícito: nunca proyectar `tokenHash` fuera de este
+    // servicio, aunque sea solo un hash y no directamente explotable.
     const application = await prisma.rentalApplication.findFirst({
       where: { showingId: req.params.id, tenantId: user.tenantId },
+      select: {
+        id: true,
+        status: true,
+        annualIncome: true,
+        employerName: true,
+        references: true,
+        applicantFullName: true,
+        idDocumentStorageKey: true,
+        consentApplicationAt: true,
+        consentCreditCheckAt: true,
+        consentPoliceCheckAt: true,
+        submittedAt: true,
+        createdAt: true,
+      },
     });
     if (!application) {
       res.status(404).json({ error: 'Application not found' });

@@ -305,6 +305,35 @@ describe('completeShowingAndInvite', () => {
 
     expect(result).toEqual({ ok: false, status: 404, error: 'Showing not found' });
   });
+
+  // Fix 2 (final review): el `findFirst` + chequeo de status y el
+  // `prisma.showing.update` no eran atómicos, y como `showingId` es
+  // `@unique` en `rental_applications`, dos peticiones concurrentes hacían
+  // que la segunda `createRentalApplication` reventara con P2002 (500 al
+  // broker) con el showing ya completado. El `updateMany` con guard de
+  // status arregla esto: la prueba dispara dos llamadas reales en paralelo
+  // contra la misma fila y verifica que solo una gana.
+  it('is atomic under two concurrent completions of the same showing (Fix 2)', async () => {
+    const { showing } = await seedShowingWithConversation('telegram');
+    const { messaging } = fakeMessaging();
+
+    const [resultA, resultB] = await Promise.all([
+      completeShowingAndInvite({ showingId: showing.id, tenantId: TENANT_ID, actorUserId: 'u_broker' }, { messaging }),
+      completeShowingAndInvite({ showingId: showing.id, tenantId: TENANT_ID, actorUserId: 'u_broker' }, { messaging }),
+    ]);
+
+    const results = [resultA, resultB];
+    const successes = results.filter((r) => r.ok);
+    const failures = results.filter((r) => !r.ok);
+    expect(successes).toHaveLength(1);
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toMatchObject({ status: 409 });
+
+    const applications = await prisma.rentalApplication.findMany({ where: { showingId: showing.id } });
+    expect(applications).toHaveLength(1);
+    const updatedShowing = await prisma.showing.findUniqueOrThrow({ where: { id: showing.id } });
+    expect(updatedShowing.status).toBe('completed');
+  });
 });
 
 function validSubmission() {
@@ -460,6 +489,140 @@ describe('submitRentalApplication', () => {
     expect(result.ok).toBe(true);
     const saved = await prisma.rentalApplication.findUniqueOrThrow({ where: { id: application.id } });
     expect(saved.status).toBe('submitted');
+
+    await prisma.user.deleteMany({ where: { tenantId: TENANT_ID } });
+  });
+
+  // Fix 1 (final review): entre el chequeo `status === 'submitted'` y el
+  // `update` final hay un `await` que escribe ~1MB a disco
+  // (`storage.putObject`). Dos POSTs concurrentes del mismo token pasaban
+  // ambos el chequeo, y el segundo `update` pisaba los datos del primero —
+  // incluidos los tres timestamps de consentimiento, un dato de
+  // cumplimiento legal. El `updateMany` con guard de status arregla esto:
+  // la prueba dispara dos envíos reales en paralelo sobre el mismo token.
+  it('is atomic under two concurrent submissions of the same token (Fix 1)', async () => {
+    const { token, application } = await seedInvitedApplication();
+    const { messaging } = fakeMessaging();
+    const first = { ...validSubmission(), employerName: 'First Co' };
+    const second = { ...validSubmission(), employerName: 'Second Co' };
+
+    const [resultA, resultB] = await Promise.all([
+      submitRentalApplication(token, first, { messaging }),
+      submitRentalApplication(token, second, { messaging }),
+    ]);
+
+    const results = [resultA, resultB];
+    const successes = results.filter((r) => r.ok);
+    const failures = results.filter((r) => !r.ok);
+    expect(successes).toHaveLength(1);
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toMatchObject({ status: 409, error: 'Application already submitted' });
+
+    // La data guardada debe coincidir exactamente con la del envío que ganó
+    // — no una mezcla de los dos, y ningún timestamp de consentimiento nulo.
+    const winningEmployerName = resultA.ok ? first.employerName : second.employerName;
+    const saved = await prisma.rentalApplication.findUniqueOrThrow({ where: { id: application.id } });
+    expect(saved.status).toBe('submitted');
+    expect(saved.employerName).toBe(winningEmployerName);
+    expect(saved.consentApplicationAt).not.toBeNull();
+    expect(saved.consentCreditCheckAt).not.toBeNull();
+    expect(saved.consentPoliceCheckAt).not.toBeNull();
+  });
+
+  // Fix 7 (final review): mismo bug que se corrigió en Fase 1B, ahora en el
+  // otro extremo del flujo. `WebChatMockAdapter` reporta éxito sin entregar
+  // nada, así que un staff con `notificationChannel = 'web'` nunca debe
+  // recibir un intento de envío por ese canal; y `notificationChannel =
+  // 'email'` no debe duplicar el correo que ya se manda por separado.
+  it('never sends the chat notification through the web channel', async () => {
+    const { token } = await seedInvitedApplication();
+    const webSent: OutboundMessage[] = [];
+    const emailSent: OutboundMessage[] = [];
+    const messaging = {
+      telegram: fakeMessaging().messaging.telegram,
+      web: {
+        channel: 'web',
+        async send(message: OutboundMessage) {
+          webSent.push(message);
+          return { messageId: 'web_1' };
+        },
+        async parseWebhook() {
+          throw new Error('not used in this test');
+        },
+      },
+      email: {
+        channel: 'email',
+        async send(message: OutboundMessage) {
+          emailSent.push(message);
+          return { messageId: 'email_1' };
+        },
+        async parseWebhook() {
+          throw new Error('not used in this test');
+        },
+      },
+    } as unknown as Record<ChatChannel, MessagingAdapter>;
+
+    await prisma.user.create({
+      data: {
+        id: 'u_pm_web_channel',
+        tenantId: TENANT_ID,
+        email: 'pm-web-channel@test.ca',
+        passwordHash: 'x',
+        firstName: 'Pat',
+        lastName: 'Manager',
+        role: 'property_manager',
+        notificationChannel: 'web',
+        notificationAddress: 'web-address',
+      },
+    });
+
+    const result = await submitRentalApplication(token, validSubmission(), { messaging });
+
+    expect(result.ok).toBe(true);
+    expect(webSent).toHaveLength(0);
+    expect(emailSent).toHaveLength(1); // solo la notificación directa por correo
+
+    await prisma.user.deleteMany({ where: { tenantId: TENANT_ID } });
+  });
+
+  it('does not duplicate the email notification through the chat path when notificationChannel is email', async () => {
+    const { token } = await seedInvitedApplication();
+    const emailSent: OutboundMessage[] = [];
+    const messaging = {
+      telegram: fakeMessaging().messaging.telegram,
+      web: fakeMessaging().messaging.web,
+      email: {
+        channel: 'email',
+        async send(message: OutboundMessage) {
+          emailSent.push(message);
+          return { messageId: `email_${emailSent.length}` };
+        },
+        async parseWebhook() {
+          throw new Error('not used in this test');
+        },
+      },
+    } as unknown as Record<ChatChannel, MessagingAdapter>;
+
+    await prisma.user.create({
+      data: {
+        id: 'u_pm_email_channel',
+        tenantId: TENANT_ID,
+        email: 'pm-email-channel@test.ca',
+        passwordHash: 'x',
+        firstName: 'Pat',
+        lastName: 'Manager',
+        role: 'property_manager',
+        notificationChannel: 'email',
+        notificationAddress: 'pm-email-channel@test.ca',
+      },
+    });
+
+    const result = await submitRentalApplication(token, validSubmission(), { messaging });
+
+    expect(result.ok).toBe(true);
+    // Un solo correo, no dos (uno de la ruta directa de email, cero de la
+    // ruta de "chat" porque 'email' queda excluida de ahí).
+    expect(emailSent).toHaveLength(1);
 
     await prisma.user.deleteMany({ where: { tenantId: TENANT_ID } });
   });
