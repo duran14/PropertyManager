@@ -49,6 +49,7 @@ model Tenant {
   webhookReceipts       WebhookReceipt[]
   shortlists            PropertyShortlist[]
   rentalApplications    RentalApplication[]
+  ownerStatements       OwnerStatement[]
 
   @@map("tenants")
 }
@@ -96,11 +97,20 @@ model Property {
   city       String
   province   String   @default("BC")
   postalCode String?
+  // Fase 3: configuración contable de la propiedad.
+  ownerId                 String?
+  // Comisión en basis points enteros (1250 = 12.5%): el schema prohíbe
+  // float para dinero, y bps mantiene el porcentaje exacto.
+  managementFeePercentBps Int      @default(1250)
+  reserveFundTargetCents  Int      @default(0)
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
-  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  units  Unit[]
+  tenant     Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  owner      Owner?           @relation(fields: [ownerId], references: [id])
+  units      Unit[]
+  statements OwnerStatement[]
+  bills      Bill[]
 
   @@unique([tenantId, address])
   @@index([tenantId])
@@ -229,7 +239,9 @@ model Owner {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant     Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  properties Property[]
+  statements OwnerStatement[]
 
   @@index([tenantId])
   @@map("owners")
@@ -292,6 +304,7 @@ model Bill {
   currency          String     @default("CAD")
   category          String // AccountCategory del core
   unitId            String?
+  propertyId        String?
   // OCR: datos de extracción
   ocrConfidence     Float?
   sourceDocRef      String? // referencia al recibo original (PDF/imagen)
@@ -305,6 +318,7 @@ model Bill {
   updatedAt         DateTime   @updatedAt
 
   tenant          Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  property        Property?        @relation(fields: [propertyId], references: [id])
   approvalRequest ApprovalRequest? @relation(fields: [approvalRequestId], references: [id])
 
   @@index([tenantId, status])
@@ -811,4 +825,43 @@ model RentalApplication {
 
   @@index([tenantId, status])
   @@map("rental_applications")
+}
+
+model OwnerStatement {
+  id         String @id @default(cuid())
+  tenantId   String
+  propertyId String
+  ownerId    String
+
+  // Intervalo semiabierto [periodStart, periodEnd): periodEnd es el primer
+  // instante del mes SIGUIENTE, calculado en America/Vancouver.
+  periodStart DateTime
+  periodEnd   DateTime
+
+  rentIncomeCents      Int
+  expensesCents        Int
+  managementFeeCents   Int
+  reserveWithheldCents Int
+  ownerPayoutCents     Int
+  shortfallCents       Int
+
+  // Copia de la configuración vigente al cerrar: si mañana cambia la
+  // comisión de la propiedad, este documento histórico no debe cambiar.
+  appliedFeePercentBps Int
+  reserveTargetCents   Int
+
+  closedByUserId String
+  closedAt       DateTime @default(now())
+  createdAt      DateTime @default(now())
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  property Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  owner    Owner    @relation(fields: [ownerId], references: [id])
+
+  // Sin campo `status`: si la fila existe, el mes está cerrado. Esta unique
+  // hace imposible cerrar dos veces el mismo mes incluso ante dos
+  // peticiones concurrentes.
+  @@unique([propertyId, periodStart])
+  @@index([tenantId, periodStart])
+  @@map("owner_statements")
 }
