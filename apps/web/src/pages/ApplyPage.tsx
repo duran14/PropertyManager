@@ -115,7 +115,7 @@ export function ApplyPage() {
       <form onSubmit={handleSubmit} className="mt-6 space-y-4">
         <label className="block">
           <span className="text-sm font-medium text-slate-700">Annual income (CAD)</span>
-          <input name="annualIncome" type="number" min="0" className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2" />
+          <input name="annualIncome" type="number" min="0" step="1" className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2" />
         </label>
 
         <label className="block">
@@ -160,7 +160,11 @@ export function ApplyPage() {
           <input name="applicantFullName" type="text" required className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2" />
         </label>
 
-        {error && <p className="text-sm text-red-600">{error}</p>}
+        {error && (
+          <p role="alert" aria-live="polite" className="text-sm text-red-600">
+            {error}
+          </p>
+        )}
 
         <button
           type="submit"

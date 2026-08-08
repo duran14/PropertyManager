@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { apiFetch } from '../lib/apiClient';
+import { apiFetch, ApiError } from '../lib/apiClient';
 import { Icon, IconBadge } from '../components/Icon';
 
 interface Showing {
@@ -13,6 +13,28 @@ interface Showing {
   showmojoUrl: string | null;
   lead: { name: string | null; phone: string | null; email: string | null };
   unit: { name: string; property: { name: string; address: string; city: string } } | null;
+}
+
+interface CompleteShowingResponse {
+  status: string;
+  applicationId: string;
+  applicationUrl: string;
+  linkDelivered: boolean;
+}
+
+interface ApplicationDetail {
+  id: string;
+  status: string;
+  annualIncome: number | null;
+  employerName: string | null;
+  references: string | null;
+  applicantFullName: string | null;
+  idDocumentStorageKey: string | null;
+  consentApplicationAt: string | null;
+  consentCreditCheckAt: string | null;
+  consentPoliceCheckAt: string | null;
+  submittedAt: string | null;
+  createdAt: string;
 }
 
 const STATUS_META: Record<string, { label: string; color: string }> = {
@@ -55,9 +77,88 @@ function groupByDay(showings: Showing[]): Array<{ date: string; label: string; s
     }));
 }
 
+function ConsentRow({ label, at }: { label: string; at: string | null }) {
+  return (
+    <div className="flex items-center justify-between">
+      <span>{label}</span>
+      <span className={at ? 'text-green-700' : 'text-slate-400'}>
+        {at ? new Date(at).toLocaleString('en-CA') : 'Not given'}
+      </span>
+    </div>
+  );
+}
+
+/**
+ * Panel de la aplicación de renta para un showing completado. Se monta como
+ * su propio componente (en vez de llamar useQuery dentro del .map de
+ * ShowingsPage) para no violar las reglas de hooks cuando la lista de
+ * showings cambia de tamaño entre renders.
+ */
+function CompletedApplicationPanel({ showingId }: { showingId: string }) {
+  const { data, isLoading, isError, error } = useQuery<{ application: ApplicationDetail }>({
+    queryKey: ['showing-application', showingId],
+    queryFn: () => apiFetch(`/showings/${showingId}/application`),
+    retry: false,
+  });
+
+  if (isLoading) {
+    return <p className="pt-2 border-t border-slate-100 text-xs text-slate-400">Loading application…</p>;
+  }
+
+  if (isError) {
+    if (error instanceof ApiError && error.status === 404) {
+      return <p className="pt-2 border-t border-slate-100 text-xs text-slate-400">Application not submitted yet.</p>;
+    }
+    return <p className="pt-2 border-t border-slate-100 text-xs text-red-600">Could not load the application.</p>;
+  }
+
+  const app = data?.application;
+  // El endpoint devuelve 200 con la fila desde que se completa el showing
+  // (se crea en estado 'invited' junto con el link), mucho antes de que el
+  // prospecto la llene. Sin este chequeo de `status`, la tarjeta mostraría
+  // "Applicant" y una lista de "Not provided" como si hubiera datos reales.
+  if (!app || app.status !== 'submitted') {
+    return <p className="pt-2 border-t border-slate-100 text-xs text-slate-400">Application not submitted yet.</p>;
+  }
+
+  return (
+    <div className="pt-2 border-t border-slate-100 text-xs text-slate-600 space-y-1.5">
+      <div className="flex items-center gap-1.5 font-medium text-slate-800">
+        <Icon name="document" size={14} />
+        {app.applicantFullName ?? 'Applicant'}
+      </div>
+      <div>Annual income: {app.annualIncome != null ? `$${app.annualIncome.toLocaleString('en-CA')}` : 'Not provided'}</div>
+      <div>Employer: {app.employerName ?? 'Not provided'}</div>
+      <div>References: {app.references ?? 'Not provided'}</div>
+      {app.idDocumentStorageKey && (
+        // Hay un documento de identificación guardado, pero no existe
+        // ninguna ruta en la app que sirva archivos de DOCUMENT_STORAGE_DIR
+        // — servir/descargar el documento queda fuera de alcance de este
+        // fix y es trabajo futuro.
+        <div className="flex items-center gap-1 text-slate-500">
+          <Icon name="approve" size={12} className="text-green-600" />
+          ID document attached
+        </div>
+      )}
+      <div className="mt-1.5 space-y-0.5 rounded-md bg-slate-50 p-2">
+        <ConsentRow label="Application consent" at={app.consentApplicationAt} />
+        <ConsentRow label="Credit check consent" at={app.consentCreditCheckAt} />
+        <ConsentRow label="Police check consent" at={app.consentPoliceCheckAt} />
+      </div>
+    </div>
+  );
+}
+
 export function ShowingsPage() {
   const queryClient = useQueryClient();
   const [filter, setFilter] = useState<string>('');
+  // Resultado (o error) de la última llamada a "Mark as completed" por
+  // showing, para mostrarlo en la tarjeta — el backend solo lo devuelve una
+  // vez, en la respuesta de esta mutación (ver GET /:id/application, que
+  // sí persiste, para el Fix 5).
+  const [completionResults, setCompletionResults] = useState<Record<string, CompleteShowingResponse>>({});
+  const [completionErrors, setCompletionErrors] = useState<Record<string, string>>({});
+  const [copiedShowingId, setCopiedShowingId] = useState<string | null>(null);
 
   const { data, isLoading } = useQuery<{ showings: Showing[] }>({
     queryKey: ['showings', filter],
@@ -75,9 +176,36 @@ export function ShowingsPage() {
   });
 
   const completeMutation = useMutation({
-    mutationFn: (id: string) => apiFetch(`/showings/${id}/complete`, { method: 'POST' }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['showings'] }),
+    mutationFn: (id: string) => apiFetch<CompleteShowingResponse>(`/showings/${id}/complete`, { method: 'POST' }),
+    onSuccess: (result, id) => {
+      setCompletionResults((prev) => ({ ...prev, [id]: result }));
+      setCompletionErrors((prev) => {
+        if (!(id in prev)) return prev;
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+      queryClient.invalidateQueries({ queryKey: ['showings'] });
+    },
+    onError: (err, id) => {
+      setCompletionErrors((prev) => ({
+        ...prev,
+        [id]: err instanceof Error ? err.message : 'Could not complete the showing',
+      }));
+    },
   });
+
+  async function handleCopyApplicationUrl(showingId: string, url: string) {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopiedShowingId(showingId);
+      window.setTimeout(() => setCopiedShowingId((current) => (current === showingId ? null : current)), 2000);
+    } catch {
+      // El acceso al portapapeles puede estar bloqueado (permisos del
+      // navegador); el link sigue visible y seleccionable a mano en la
+      // tarjeta, así que no hace falta un error visible aquí.
+    }
+  }
 
   const showings = data?.showings ?? [];
   const days = groupByDay(showings);
@@ -230,6 +358,42 @@ export function ShowingsPage() {
                             <Icon name="document" size={14} />
                             Mark as completed
                           </button>
+                          {completionErrors[showing.id] && (
+                            <p role="alert" className="mt-2 text-xs text-red-600">
+                              {completionErrors[showing.id]}
+                            </p>
+                          )}
+                        </div>
+                      )}
+                      {showing.status === 'completed' && (
+                        <div className="pt-2 border-t border-slate-100 space-y-2">
+                          {completionResults[showing.id] &&
+                            (completionResults[showing.id]!.linkDelivered ? (
+                              <div className="flex items-center gap-1.5 text-xs text-green-700">
+                                <Icon name="approve" size={14} />
+                                Application link sent to the prospect
+                              </div>
+                            ) : (
+                              <div className="rounded-md border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">
+                                <div className="flex items-center gap-1.5 font-medium">
+                                  <Icon name="warning" size={14} />
+                                  Link could not be delivered automatically — copy and send it yourself
+                                </div>
+                                <p className="mt-1 select-all break-all rounded bg-white px-1.5 py-1 text-[11px] text-slate-700">
+                                  {completionResults[showing.id]!.applicationUrl}
+                                </p>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    handleCopyApplicationUrl(showing.id, completionResults[showing.id]!.applicationUrl)
+                                  }
+                                  className="mt-1 rounded-md bg-amber-100 px-2 py-1 text-[11px] font-medium text-amber-800 hover:bg-amber-200"
+                                >
+                                  {copiedShowingId === showing.id ? 'Copied!' : 'Copy link'}
+                                </button>
+                              </div>
+                            ))}
+                          <CompletedApplicationPanel showingId={showing.id} />
                         </div>
                       )}
                     </div>
