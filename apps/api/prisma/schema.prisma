@@ -662,6 +662,11 @@ model ChatMessage {
   conversation ChatConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
 
   @@index([conversationId])
+  // Usado por message-delivery-retry.service.ts en un job periódico para
+  // encontrar mensajes pendientes de reintento. Esta migración (y su
+  // deriva anterior) lo había dejado como DROP INDEX huérfano; se declara
+  // aquí para que quede como índice vivo en vez de borrado.
+  @@index([deliveryStatus, deliveryNextAttemptAt])
   @@map("chat_messages")
 }
 
