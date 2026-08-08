@@ -1,4 +1,4 @@
-import { type FormEvent, useState } from 'react';
+import { type ChangeEvent, type FormEvent, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { apiFetch } from '../lib/apiClient';
@@ -18,6 +18,15 @@ async function fileToBase64(file: File): Promise<string> {
   return btoa(binary);
 }
 
+// Mismo tope que MAX_ID_DOCUMENT_BASE64_LENGTH en
+// apps/api/src/services/rental-application.service.ts (1_500_000
+// caracteres de base64). Base64 infla ~4/3, así que el límite real de
+// archivo es ese tope * 3/4 bytes. Validamos aquí en bytes crudos, antes
+// de convertir, para no hacer trabajar al navegador de balde.
+const MAX_ID_DOCUMENT_BASE64_LENGTH = 1_500_000;
+const MAX_ID_DOCUMENT_BYTES = Math.floor((MAX_ID_DOCUMENT_BASE64_LENGTH * 3) / 4);
+const MAX_ID_DOCUMENT_MB = (MAX_ID_DOCUMENT_BYTES / (1024 * 1024)).toFixed(1);
+
 // Export nombrado, no default: es la convención de las páginas de este
 // repo (ver ShortlistPage).
 export function ApplyPage() {
@@ -35,6 +44,20 @@ export function ApplyPage() {
     mutationFn: async (payload: Record<string, unknown>) =>
       apiFetch(`/public/applications/${token}`, { method: 'POST', body: JSON.stringify(payload) }),
   });
+
+  function handleIdFileChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0] ?? null;
+    if (file && file.size > MAX_ID_DOCUMENT_BYTES) {
+      setError(
+        `That file is too large (max ~${MAX_ID_DOCUMENT_MB} MB). Try taking the photo at a lower resolution, or upload a smaller image.`,
+      );
+      setIdFile(null);
+      event.target.value = '';
+      return;
+    }
+    setError(null);
+    setIdFile(file);
+  }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -111,7 +134,7 @@ export function ApplyPage() {
             type="file"
             required
             accept="image/*,application/pdf"
-            onChange={(event) => setIdFile(event.target.files?.[0] ?? null)}
+            onChange={handleIdFileChange}
             className="mt-1 w-full text-sm"
           />
         </label>
