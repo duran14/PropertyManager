@@ -6,3 +6,4 @@ export * from './reconciliation.js';
 export * from './showing-messages.js';
 export * from './conversation-timeline.js';
 export * from './conversation-activity.js';
+export * from './period.js';
