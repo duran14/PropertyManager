@@ -32,6 +32,27 @@ const unitSchema = z.object({
   isActive: z.boolean().optional(),
 });
 
+/**
+ * `Property.ownerId` es una FK simple a `Owner.id`: `Owner` tiene su propio
+ * `tenantId`, y no hay ningún constraint compuesto en el esquema que
+ * garantice que ambos coincidan. Sin esta validación, un usuario
+ * autenticado que conozca o adivine el `id` de un Owner de OTRO tenant
+ * podría vincular su propiedad a ese dueño ajeno, y
+ * previewOwnerStatement/closeOwnerStatement emitirían el estado de cuenta a
+ * nombre de esa persona. `raw` vacío/null/undefined siempre es válido (sin
+ * dueño asignado); un `raw` con valor solo es válido si el Owner existe Y
+ * pertenece a `tenantId`.
+ */
+export async function resolveOwnerId(
+  tenantId: string,
+  raw: string | null | undefined,
+): Promise<{ ok: true; ownerId: string | null } | { ok: false }> {
+  if (!raw) return { ok: true, ownerId: null };
+  const owner = await prisma.owner.findFirst({ where: { id: raw, tenantId } });
+  if (!owner) return { ok: false };
+  return { ok: true, ownerId: owner.id };
+}
+
 propertiesRouter.get('/', requireAuth, async (req, res, next) => {
   try {
     const user = requireUser(req);
@@ -60,6 +81,12 @@ propertiesRouter.post('/', requireAuth, async (req, res, next) => {
       return;
     }
 
+    const ownerResolution = await resolveOwnerId(user.tenantId, parsed.data.ownerId);
+    if (!ownerResolution.ok) {
+      res.status(400).json({ error: 'Owner not found' });
+      return;
+    }
+
     const property = await prisma.property.create({
       data: {
         tenantId: user.tenantId,
@@ -68,7 +95,7 @@ propertiesRouter.post('/', requireAuth, async (req, res, next) => {
         city: parsed.data.city,
         province: parsed.data.province,
         postalCode: parsed.data.postalCode || null,
-        ownerId: parsed.data.ownerId || null,
+        ownerId: ownerResolution.ownerId,
         ...(parsed.data.managementFeePercentBps === undefined
           ? {}
           : { managementFeePercentBps: parsed.data.managementFeePercentBps }),
@@ -101,11 +128,29 @@ propertiesRouter.patch('/:propertyId', requireAuth, async (req, res, next) => {
       return;
     }
 
+    // Solo valida el dueño si el cliente mandó `ownerId` explícitamente
+    // (asignar o desasignar). Si no vino en el body, `ownerId` queda fuera
+    // de `ownerIdUpdate` y `...parsed.data` tampoco trae la clave, así que
+    // el valor existente no se toca.
+    let ownerIdUpdate: { ownerId: string | null } | Record<string, never> = {};
+    if ('ownerId' in parsed.data) {
+      const ownerResolution = await resolveOwnerId(user.tenantId, parsed.data.ownerId);
+      if (!ownerResolution.ok) {
+        res.status(400).json({ error: 'Owner not found' });
+        return;
+      }
+      ownerIdUpdate = { ownerId: ownerResolution.ownerId };
+    }
+
     const property = await prisma.property.update({
       where: { id: existing.id },
       data: {
         ...parsed.data,
         postalCode: parsed.data.postalCode === '' ? null : parsed.data.postalCode,
+        // Pisa el `ownerId` crudo de `...parsed.data` (si vino) con el
+        // valor ya validado contra el tenant — nunca se escribe sin pasar
+        // por resolveOwnerId.
+        ...ownerIdUpdate,
       },
       include: { units: true },
     });
