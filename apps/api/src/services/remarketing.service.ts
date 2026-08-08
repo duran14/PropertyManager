@@ -100,17 +100,19 @@ export async function sendReengagementMessage(
   try {
     const to = getReplyAddressFromConversation(candidate.externalId);
     const result = await sendWithRetry(() => messaging.send({ to, body: content, channel: candidate.channel }));
-    await prisma.chatMessage.update({
-      where: { id: assistantMessage.id },
-      data: {
-        deliveryStatus: 'sent',
-        providerMessageIds: [result.messageId],
-      },
-    });
-    await prisma.lead.update({
-      where: { id: candidate.leadId },
-      data: { lastRemarketedAt: new Date() },
-    });
+    await prisma.$transaction([
+      prisma.chatMessage.update({
+        where: { id: assistantMessage.id },
+        data: {
+          deliveryStatus: 'sent',
+          providerMessageIds: [result.messageId],
+        },
+      }),
+      prisma.lead.update({
+        where: { id: candidate.leadId },
+        data: { lastRemarketedAt: new Date() },
+      }),
+    ]);
     return true;
   } catch (error) {
     await prisma.chatMessage.update({
