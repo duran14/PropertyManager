@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type { ChatChannel, MessagingAdapter, OutboundMessage } from '@property-manager/adapters';
 import { prisma } from '../config/db.js';
 import {
+  completeShowingAndInvite,
   createRentalApplication,
   getPublicRentalApplication,
   hashApplicationToken,
@@ -32,6 +34,13 @@ async function seedShowing(options: { showingId?: string } = {}) {
 }
 
 async function cleanup() {
+  // `ChatConversation.leadId` no tiene cascade delete (ver schema.prisma):
+  // borrar el lead solo lo pone en null y deja la fila (y su externalId
+  // único) huérfana. Como `seedShowingWithConversation` reutiliza el mismo
+  // externalId en cada test, hay que borrar las conversaciones también o el
+  // segundo test que llame a esa función choca con la constraint única
+  // (tenantId, externalId).
+  await prisma.chatConversation.deleteMany({ where: { tenantId: TENANT_ID } });
   await prisma.rentalApplication.deleteMany({ where: { tenantId: TENANT_ID } });
   await prisma.showing.deleteMany({ where: { tenantId: TENANT_ID } });
   await prisma.lead.deleteMany({ where: { tenantId: TENANT_ID } });
@@ -142,5 +151,156 @@ describe('resolveApplicationNotifyTargets', () => {
       staff: [],
       propertyManagerIds: [],
     })).toEqual([]);
+  });
+});
+
+function fakeMessaging(options: { shouldFail?: boolean } = {}) {
+  const sent: OutboundMessage[] = [];
+  const adapter: MessagingAdapter = {
+    channel: 'telegram',
+    async send(message: OutboundMessage) {
+      if (options.shouldFail) throw new Error('simulated send failure');
+      sent.push(message);
+      return { messageId: `msg_${sent.length}` };
+    },
+    async parseWebhook() {
+      throw new Error('not used in this test');
+    },
+  };
+  // `email` tiene que estar aquí aunque este test no lo use: la Task 5
+  // reutiliza este helper y su ruta de notificación llama a
+  // `messaging.email.send`. Sin él, ese acceso reventaría con TypeError
+  // dentro de un try/catch y el test pasaría por la razón equivocada.
+  return {
+    sent,
+    messaging: { telegram: adapter, web: adapter, email: adapter } as unknown as Record<ChatChannel, MessagingAdapter>,
+  };
+}
+
+async function seedShowingWithConversation(channel: 'telegram' | 'web') {
+  const { lead, showing } = await seedShowing();
+  await prisma.chatConversation.create({
+    data: {
+      tenantId: TENANT_ID,
+      externalId: `${channel}:900100`,
+      channel,
+      state: 'handoff',
+      leadId: lead.id,
+    },
+  });
+  return { lead, showing };
+}
+
+describe('completeShowingAndInvite', () => {
+  beforeEach(cleanup);
+  afterEach(cleanup);
+
+  it('marks the showing completed, creates the application, and sends the link', async () => {
+    const { showing } = await seedShowingWithConversation('telegram');
+    const { sent, messaging } = fakeMessaging();
+
+    const result = await completeShowingAndInvite(
+      { showingId: showing.id, tenantId: TENANT_ID, actorUserId: 'u_broker' },
+      { messaging },
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('expected success');
+    expect(result.linkDelivered).toBe(true);
+    expect(sent).toHaveLength(1);
+    expect(sent[0].body).toContain(result.applicationUrl);
+
+    const updated = await prisma.showing.findUniqueOrThrow({ where: { id: showing.id } });
+    expect(updated.status).toBe('completed');
+    const application = await prisma.rentalApplication.findFirst({ where: { showingId: showing.id } });
+    expect(application?.status).toBe('invited');
+  });
+
+  it('still completes the showing and creates the application when the channel is web (no outbound push)', async () => {
+    const { showing } = await seedShowingWithConversation('web');
+    const { sent, messaging } = fakeMessaging();
+
+    const result = await completeShowingAndInvite(
+      { showingId: showing.id, tenantId: TENANT_ID, actorUserId: 'u_broker' },
+      { messaging },
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('expected success');
+    expect(result.linkDelivered).toBe(false);
+    expect(sent).toHaveLength(0);
+    const application = await prisma.rentalApplication.findFirst({ where: { showingId: showing.id } });
+    expect(application).not.toBeNull();
+  });
+
+  it('still creates the application when the lead has no conversation at all', async () => {
+    const { showing } = await seedShowing();
+    const { messaging } = fakeMessaging();
+
+    const result = await completeShowingAndInvite(
+      { showingId: showing.id, tenantId: TENANT_ID, actorUserId: 'u_broker' },
+      { messaging },
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('expected success');
+    expect(result.linkDelivered).toBe(false);
+    const application = await prisma.rentalApplication.findFirst({ where: { showingId: showing.id } });
+    expect(application).not.toBeNull();
+  });
+
+  it('still completes the showing when the send throws', async () => {
+    const { showing } = await seedShowingWithConversation('telegram');
+    const { messaging } = fakeMessaging({ shouldFail: true });
+
+    const result = await completeShowingAndInvite(
+      { showingId: showing.id, tenantId: TENANT_ID, actorUserId: 'u_broker' },
+      { messaging },
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('expected success');
+    expect(result.linkDelivered).toBe(false);
+    const updated = await prisma.showing.findUniqueOrThrow({ where: { id: showing.id } });
+    expect(updated.status).toBe('completed');
+  });
+
+  it('rejects a showing that is already completed', async () => {
+    const { showing } = await seedShowingWithConversation('telegram');
+    const { messaging } = fakeMessaging();
+    await completeShowingAndInvite({ showingId: showing.id, tenantId: TENANT_ID, actorUserId: 'u_broker' }, { messaging });
+
+    const second = await completeShowingAndInvite(
+      { showingId: showing.id, tenantId: TENANT_ID, actorUserId: 'u_broker' },
+      { messaging },
+    );
+
+    expect(second).toEqual({ ok: false, status: 409, error: 'Showing cannot be completed from status: completed' });
+    expect(await prisma.rentalApplication.count({ where: { showingId: showing.id } })).toBe(1);
+  });
+
+  it('rejects a cancelled showing', async () => {
+    const { showing } = await seedShowingWithConversation('telegram');
+    await prisma.showing.update({ where: { id: showing.id }, data: { status: 'cancelled' } });
+    const { messaging } = fakeMessaging();
+
+    const result = await completeShowingAndInvite(
+      { showingId: showing.id, tenantId: TENANT_ID, actorUserId: 'u_broker' },
+      { messaging },
+    );
+
+    expect(result).toEqual({ ok: false, status: 409, error: 'Showing cannot be completed from status: cancelled' });
+  });
+
+  it('returns 404 for a showing that does not belong to the tenant', async () => {
+    const { showing } = await seedShowingWithConversation('telegram');
+    const { messaging } = fakeMessaging();
+
+    const result = await completeShowingAndInvite(
+      { showingId: showing.id, tenantId: 'tenant_someone_else', actorUserId: 'u_broker' },
+      { messaging },
+    );
+
+    expect(result).toEqual({ ok: false, status: 404, error: 'Showing not found' });
   });
 });

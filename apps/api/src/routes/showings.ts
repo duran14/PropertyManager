@@ -5,15 +5,18 @@
  *  GET  /showings/:id          - showing detail
  *  POST /showings/:id/confirm  - broker confirms the showing
  *  POST /showings/:id/cancel   - cancel a showing
+ *  POST /showings/:id/complete - broker marks the showing as done; invites the application
  */
 import { Router } from 'express';
 import { z } from 'zod';
 import { requireAuth, requireRole, requireUser } from '../auth/context.js';
+import { getAdapters } from '../config/adapters.js';
 import {
   cancelShowing,
   confirmShowing,
   listShowings,
 } from '../services/scheduling.service.js';
+import { completeShowingAndInvite } from '../services/rental-application.service.js';
 
 export const showingsRouter = Router();
 
@@ -52,6 +55,33 @@ showingsRouter.post(
       const user = requireUser(req);
       await confirmShowing(req.params.id, user.tenantId, user.userId);
       res.json({ status: 'confirmed' });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+showingsRouter.post(
+  '/:id/complete',
+  requireAuth,
+  requireRole('property_manager', 'broker'),
+  async (req, res, next) => {
+    try {
+      const user = requireUser(req);
+      const result = await completeShowingAndInvite(
+        { showingId: req.params.id, tenantId: user.tenantId, actorUserId: user.userId },
+        { messaging: getAdapters().messaging },
+      );
+      if (!result.ok) {
+        res.status(result.status).json({ error: result.error });
+        return;
+      }
+      res.json({
+        status: 'completed',
+        applicationId: result.applicationId,
+        applicationUrl: result.applicationUrl,
+        linkDelivered: result.linkDelivered,
+      });
     } catch (err) {
       next(err);
     }
