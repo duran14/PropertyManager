@@ -5,9 +5,10 @@
  * MessagingAdapter existentes por canal — sin infraestructura nueva más
  * allá de un job de BullMQ y dos campos nuevos en Lead.
  */
-import type { ChatChannel } from '@property-manager/adapters';
+import type { ChatChannel, GlmAdapter, MessagingAdapter } from '@property-manager/adapters';
 import { prisma } from '../config/db.js';
 import { withTenant } from '../config/tenant-context.js';
+import { getReplyAddressFromConversation, sendWithRetry } from './chatbot.service.js';
 
 export interface ReengagementCandidate {
   leadId: string;
@@ -61,4 +62,65 @@ export async function findReengagementCandidates(tenantId: string): Promise<Reen
     }
     return candidates;
   });
+}
+
+const DRAFT_SYSTEM_PROMPT = `Eres un asistente de bienes raíces amable y profesional. Redacta un mensaje corto (1-2 líneas) para retomar contacto con un prospecto que dejó de responder hace un tiempo. No suenes a marketing masivo ni a plantilla genérica. Si el perfil incluye área, presupuesto, o tipo de unidad, menciónalos brevemente para mostrar que recuerdas la conversación. Si el perfil está vacío, pregunta qué está buscando. Responde solo con el texto del mensaje, sin comillas ni formato adicional.`;
+
+export async function draftReengagementMessage(
+  glm: GlmAdapter,
+  slots: Record<string, string>,
+): Promise<string> {
+  const response = await glm.reason({
+    systemPrompt: DRAFT_SYSTEM_PROMPT,
+    userPrompt: JSON.stringify({ capturedProfile: slots }),
+    temperature: 0.4,
+  });
+  return response.content.trim();
+}
+
+/**
+ * Envía el mensaje de reactivación y registra el resultado. Si falla, NO
+ * marca lastRemarketedAt — el lead sigue elegible y se reintenta la
+ * siguiente corrida semanal del job, sin lógica de reintento especial.
+ */
+export async function sendReengagementMessage(
+  messaging: MessagingAdapter,
+  candidate: ReengagementCandidate,
+  content: string,
+): Promise<boolean> {
+  const assistantMessage = await prisma.chatMessage.create({
+    data: {
+      conversationId: candidate.conversationId,
+      role: 'assistant',
+      content,
+      deliveryStatus: 'pending',
+    },
+  });
+
+  try {
+    const to = getReplyAddressFromConversation(candidate.externalId);
+    const result = await sendWithRetry(() => messaging.send({ to, body: content, channel: candidate.channel }));
+    await prisma.chatMessage.update({
+      where: { id: assistantMessage.id },
+      data: {
+        deliveryStatus: 'sent',
+        providerMessageIds: [result.messageId],
+      },
+    });
+    await prisma.lead.update({
+      where: { id: candidate.leadId },
+      data: { lastRemarketedAt: new Date() },
+    });
+    return true;
+  } catch (error) {
+    await prisma.chatMessage.update({
+      where: { id: assistantMessage.id },
+      data: {
+        deliveryStatus: 'failed',
+        deliveryError: error instanceof Error ? error.message.slice(0, 1000) : 'Unknown delivery error',
+        deliveryAttempts: 1,
+      },
+    });
+    return false;
+  }
 }

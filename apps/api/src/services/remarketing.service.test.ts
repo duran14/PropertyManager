@@ -1,6 +1,8 @@
+import type { GlmAdapter, GlmReasoningRequest, MessagingAdapter, OutboundMessage } from '@property-manager/adapters';
+import { vi } from 'vitest';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { prisma } from '../config/db.js';
-import { findReengagementCandidates } from './remarketing.service.js';
+import { draftReengagementMessage, findReengagementCandidates, sendReengagementMessage } from './remarketing.service.js';
 
 const TENANT_ID = 'tenant_test_remarketing';
 
@@ -148,5 +150,81 @@ describe('findReengagementCandidates', () => {
     const candidates = await findReengagementCandidates(TENANT_ID);
 
     expect(candidates.map((c) => c.leadId)).toContain(lead.id);
+  });
+});
+
+function fakeGlm(content: string): GlmAdapter {
+  return {
+    name: 'glm',
+    reason: vi.fn(async (_request: GlmReasoningRequest) => ({ content })),
+    extractReceipt: vi.fn(),
+  } as unknown as GlmAdapter;
+}
+
+function fakeMessaging(options: { shouldFail?: boolean } = {}): MessagingAdapter & { sent: OutboundMessage[] } {
+  const sent: OutboundMessage[] = [];
+  return {
+    channel: 'web',
+    sent,
+    async send(message: OutboundMessage) {
+      if (options.shouldFail) throw new Error('simulated send failure');
+      sent.push(message);
+      return { messageId: `msg_${sent.length}` };
+    },
+    async parseWebhook() {
+      throw new Error('not used in this test');
+    },
+  };
+}
+
+describe('draftReengagementMessage', () => {
+  it('returns the trimmed content from the GLM adapter', async () => {
+    const glm = fakeGlm('  ¡Hola! ¿Sigues buscando en Surrey?  ');
+
+    const message = await draftReengagementMessage(glm, { preferred_area: 'Surrey', budget: '1800' });
+
+    expect(message).toBe('¡Hola! ¿Sigues buscando en Surrey?');
+    expect(glm.reason).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('sendReengagementMessage', () => {
+  beforeEach(async () => {
+    await cleanup();
+    await seedTenant();
+  });
+
+  afterEach(async () => {
+    await cleanup();
+  });
+
+  it('creates a ChatMessage, sends it, and marks lastRemarketedAt on success', async () => {
+    const { lead, conversation } = await seedLeadWithConversation({ phone: '+16045550010', lastMessageDaysAgo: 20 });
+    const messaging = fakeMessaging();
+    const candidate = { leadId: lead.id, conversationId: conversation.id, channel: 'web' as const, externalId: conversation.externalId };
+
+    const result = await sendReengagementMessage(messaging, candidate, 'Hola, ¿sigues buscando?');
+
+    expect(result).toBe(true);
+    expect(messaging.sent).toHaveLength(1);
+    const updatedLead = await prisma.lead.findUniqueOrThrow({ where: { id: lead.id } });
+    expect(updatedLead.lastRemarketedAt).not.toBeNull();
+    const messages = await prisma.chatMessage.findMany({ where: { conversationId: conversation.id, role: 'assistant' } });
+    expect(messages).toHaveLength(1);
+    expect(messages[0].deliveryStatus).toBe('sent');
+  });
+
+  it('does not mark lastRemarketedAt when the send fails', async () => {
+    const { lead, conversation } = await seedLeadWithConversation({ phone: '+16045550011', lastMessageDaysAgo: 20 });
+    const messaging = fakeMessaging({ shouldFail: true });
+    const candidate = { leadId: lead.id, conversationId: conversation.id, channel: 'web' as const, externalId: conversation.externalId };
+
+    const result = await sendReengagementMessage(messaging, candidate, 'Hola, ¿sigues buscando?');
+
+    expect(result).toBe(false);
+    const updatedLead = await prisma.lead.findUniqueOrThrow({ where: { id: lead.id } });
+    expect(updatedLead.lastRemarketedAt).toBeNull();
+    const messages = await prisma.chatMessage.findMany({ where: { conversationId: conversation.id, role: 'assistant' } });
+    expect(messages[0].deliveryStatus).toBe('failed');
   });
 });
