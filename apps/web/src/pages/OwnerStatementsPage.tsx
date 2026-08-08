@@ -88,6 +88,7 @@ export function OwnerStatementsPage() {
 
   const selected = properties.data?.properties.find((p) => p.id === propertyId);
   const p = preview.data?.preview;
+  const noOwner = Boolean(selected && !selected.ownerId);
 
   return (
     <div className="space-y-6">
@@ -163,10 +164,16 @@ export function OwnerStatementsPage() {
 
           <button
             onClick={() => closeMutation.mutate()}
-            disabled={p.alreadyClosed || closeMutation.isPending}
+            disabled={p.alreadyClosed || closeMutation.isPending || noOwner}
             className="mt-4 rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
           >
-            {p.alreadyClosed ? 'Period already closed' : closeMutation.isPending ? 'Closing…' : 'Close period'}
+            {p.alreadyClosed
+              ? 'Period already closed'
+              : noOwner
+                ? 'No owner assigned'
+                : closeMutation.isPending
+                  ? 'Closing…'
+                  : 'Close period'}
           </button>
         </div>
       )}
@@ -183,9 +190,17 @@ export function OwnerStatementsPage() {
                   })}
                 </span>
                 <span className="font-medium text-slate-900">
-                  {statement.shortfallCents > 0
-                    ? `− ${money(statement.shortfallCents)}`
-                    : money(statement.ownerPayoutCents)}
+                  {statement.shortfallCents > 0 ? (
+                    <>
+                      <span className="mr-1 font-normal text-slate-500">Owed by owner:</span>
+                      {money(statement.shortfallCents)}
+                    </>
+                  ) : (
+                    <>
+                      <span className="mr-1 font-normal text-slate-500">Owner payout:</span>
+                      {money(statement.ownerPayoutCents)}
+                    </>
+                  )}
                 </span>
               </li>
             ))}
