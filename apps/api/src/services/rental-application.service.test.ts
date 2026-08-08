@@ -7,6 +7,7 @@ import {
   getPublicRentalApplication,
   hashApplicationToken,
   resolveApplicationNotifyTargets,
+  submitRentalApplication,
   type NotifiableStaff,
 } from './rental-application.service.js';
 
@@ -42,6 +43,7 @@ async function cleanup() {
   // (tenantId, externalId).
   await prisma.chatConversation.deleteMany({ where: { tenantId: TENANT_ID } });
   await prisma.rentalApplication.deleteMany({ where: { tenantId: TENANT_ID } });
+  await prisma.user.deleteMany({ where: { tenantId: TENANT_ID } });
   await prisma.showing.deleteMany({ where: { tenantId: TENANT_ID } });
   await prisma.lead.deleteMany({ where: { tenantId: TENANT_ID } });
 }
@@ -302,5 +304,163 @@ describe('completeShowingAndInvite', () => {
     );
 
     expect(result).toEqual({ ok: false, status: 404, error: 'Showing not found' });
+  });
+});
+
+function validSubmission() {
+  return {
+    annualIncome: 82000,
+    employerName: 'Acme Corp',
+    references: 'Jane Doe — previous landlord — 604-555-0111',
+    applicantFullName: 'Carlos Duran',
+    consentApplication: true,
+    consentCreditCheck: true,
+    consentPoliceCheck: true,
+    idDocumentFilename: 'id.png',
+    idDocumentMimeType: 'image/png',
+    idDocumentBase64: Buffer.from('fake-image-bytes').toString('base64'),
+  };
+}
+
+async function seedInvitedApplication() {
+  const { lead, showing } = await seedShowing();
+  const { application, token } = await createRentalApplication({
+    tenantId: TENANT_ID,
+    showingId: showing.id,
+    leadId: lead.id,
+  });
+  return { lead, showing, application, token };
+}
+
+describe('submitRentalApplication', () => {
+  beforeEach(cleanup);
+  afterEach(cleanup);
+
+  it('stores every field and all three consent timestamps', async () => {
+    const { token, application } = await seedInvitedApplication();
+    const { messaging } = fakeMessaging();
+
+    const result = await submitRentalApplication(token, validSubmission(), { messaging });
+
+    expect(result).toEqual({ ok: true, applicationId: application.id });
+    const saved = await prisma.rentalApplication.findUniqueOrThrow({ where: { id: application.id } });
+    expect(saved.status).toBe('submitted');
+    expect(saved.submittedAt).not.toBeNull();
+    expect(saved.annualIncome).toBe(82000);
+    expect(saved.employerName).toBe('Acme Corp');
+    expect(saved.applicantFullName).toBe('Carlos Duran');
+    expect(saved.idDocumentStorageKey).toBeTruthy();
+    expect(saved.consentApplicationAt).not.toBeNull();
+    expect(saved.consentCreditCheckAt).not.toBeNull();
+    expect(saved.consentPoliceCheckAt).not.toBeNull();
+  });
+
+  it.each([
+    ['consentApplication'],
+    ['consentCreditCheck'],
+    ['consentPoliceCheck'],
+  ])('rejects the submission when %s is missing', async (missing) => {
+    const { token } = await seedInvitedApplication();
+    const { messaging } = fakeMessaging();
+
+    const result = await submitRentalApplication(
+      token,
+      { ...validSubmission(), [missing]: false },
+      { messaging },
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected rejection');
+    expect(result.status).toBe(400);
+    expect(result.error).toContain(missing);
+  });
+
+  it('rejects a submission without a name', async () => {
+    const { token } = await seedInvitedApplication();
+    const { messaging } = fakeMessaging();
+
+    const result = await submitRentalApplication(
+      token,
+      { ...validSubmission(), applicantFullName: '   ' },
+      { messaging },
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected rejection');
+    expect(result.status).toBe(400);
+  });
+
+  it('rejects a submission with no ID document', async () => {
+    const { token } = await seedInvitedApplication();
+    const { messaging } = fakeMessaging();
+
+    const result = await submitRentalApplication(
+      token,
+      { ...validSubmission(), idDocumentBase64: null, idDocumentFilename: null, idDocumentMimeType: null },
+      { messaging },
+    );
+
+    expect(result).toEqual({ ok: false, status: 400, error: 'A photo ID document is required' });
+  });
+
+  it('rejects an ID document above the size cap', async () => {
+    const { token } = await seedInvitedApplication();
+    const { messaging } = fakeMessaging();
+
+    const result = await submitRentalApplication(
+      token,
+      { ...validSubmission(), idDocumentBase64: 'A'.repeat(1_500_001) },
+      { messaging },
+    );
+
+    expect(result).toEqual({ ok: false, status: 400, error: 'The ID document is too large' });
+  });
+
+  it('returns 404 for an unknown token', async () => {
+    const { messaging } = fakeMessaging();
+
+    const result = await submitRentalApplication('not-a-real-token', validSubmission(), { messaging });
+
+    expect(result).toEqual({ ok: false, status: 404, error: 'Application not found or expired' });
+  });
+
+  it('rejects a second submission without overwriting the first', async () => {
+    const { token, application } = await seedInvitedApplication();
+    const { messaging } = fakeMessaging();
+    await submitRentalApplication(token, validSubmission(), { messaging });
+
+    const second = await submitRentalApplication(
+      token,
+      { ...validSubmission(), employerName: 'Somewhere Else' },
+      { messaging },
+    );
+
+    expect(second).toEqual({ ok: false, status: 409, error: 'Application already submitted' });
+    const saved = await prisma.rentalApplication.findUniqueOrThrow({ where: { id: application.id } });
+    expect(saved.employerName).toBe('Acme Corp');
+  });
+
+  it('saves the application even when every notification channel fails', async () => {
+    const { token, application } = await seedInvitedApplication();
+    await prisma.user.create({
+      data: {
+        id: 'u_pm_notify_fail',
+        tenantId: TENANT_ID,
+        email: 'pm-notify-fail@test.ca',
+        passwordHash: 'x',
+        firstName: 'Pat',
+        lastName: 'Manager',
+        role: 'property_manager',
+      },
+    });
+    const { messaging } = fakeMessaging({ shouldFail: true });
+
+    const result = await submitRentalApplication(token, validSubmission(), { messaging });
+
+    expect(result.ok).toBe(true);
+    const saved = await prisma.rentalApplication.findUniqueOrThrow({ where: { id: application.id } });
+    expect(saved.status).toBe('submitted');
+
+    await prisma.user.deleteMany({ where: { tenantId: TENANT_ID } });
   });
 });

@@ -29,6 +29,10 @@ import { createConversationEvent } from '../services/conversation-events.service
 import { buildShortlistPrefillContact, getPublicShortlist, hashShortlistToken } from '../services/shortlist.service.js';
 import { getAvailableSlots, scheduleTour } from '../services/scheduling.service.js';
 import { parseShortlistBooking } from '../services/shortlist-booking.service.js';
+import {
+  getPublicRentalApplication,
+  submitRentalApplication,
+} from '../services/rental-application.service.js';
 
 export const publicRouter = Router();
 export const leadsRouter = Router();
@@ -138,6 +142,48 @@ publicRouter.post('/shortlists/:token/schedule', async (req, res, next) => {
       body: `Your tour for ${unitLabel} at ${unitAddress} is scheduled for ${new Date(result.scheduledAt).toLocaleString('en-CA')}. I'll keep the confirmation here for you.`,
     });
     res.json({ ...result, unitLabel, unitAddress });
+  } catch (error) { next(error); }
+});
+
+publicRouter.get('/applications/:token', async (req, res, next) => {
+  try {
+    const application = await getPublicRentalApplication(req.params.token);
+    if (!application) return void res.status(404).json({ error: 'Application not found or expired' });
+    res.json({
+      status: application.status,
+      tenantName: application.tenant.name,
+      showingAt: application.showing.scheduledAt,
+      unit: application.unit
+        ? {
+          name: application.unit.name,
+          property: application.unit.property,
+        }
+        : null,
+    });
+  } catch (error) { next(error); }
+});
+
+publicRouter.post('/applications/:token', async (req, res, next) => {
+  try {
+    const body = req.body ?? {};
+    const result = await submitRentalApplication(
+      req.params.token,
+      {
+        annualIncome: typeof body.annualIncome === 'number' ? body.annualIncome : null,
+        employerName: typeof body.employerName === 'string' ? body.employerName : null,
+        references: typeof body.references === 'string' ? body.references : null,
+        applicantFullName: typeof body.applicantFullName === 'string' ? body.applicantFullName : '',
+        consentApplication: body.consentApplication === true,
+        consentCreditCheck: body.consentCreditCheck === true,
+        consentPoliceCheck: body.consentPoliceCheck === true,
+        idDocumentFilename: typeof body.idDocumentFilename === 'string' ? body.idDocumentFilename : null,
+        idDocumentMimeType: typeof body.idDocumentMimeType === 'string' ? body.idDocumentMimeType : null,
+        idDocumentBase64: typeof body.idDocumentBase64 === 'string' ? body.idDocumentBase64 : null,
+      },
+      { messaging: getAdapters().messaging },
+    );
+    if (!result.ok) return void res.status(result.status).json({ error: result.error });
+    res.json({ ok: true });
   } catch (error) { next(error); }
 });
 

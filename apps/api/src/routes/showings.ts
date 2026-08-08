@@ -11,6 +11,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { requireAuth, requireRole, requireUser } from '../auth/context.js';
 import { getAdapters } from '../config/adapters.js';
+import { prisma } from '../config/db.js';
 import {
   cancelShowing,
   confirmShowing,
@@ -110,3 +111,19 @@ showingsRouter.post(
     }
   },
 );
+
+showingsRouter.get('/:id/application', requireAuth, async (req, res, next) => {
+  try {
+    const user = requireUser(req);
+    const application = await prisma.rentalApplication.findFirst({
+      where: { showingId: req.params.id, tenantId: user.tenantId },
+    });
+    if (!application) {
+      res.status(404).json({ error: 'Application not found' });
+      return;
+    }
+    res.json({ application });
+  } catch (err) {
+    next(err);
+  }
+});

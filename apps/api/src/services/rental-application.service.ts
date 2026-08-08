@@ -6,10 +6,16 @@
  * vive su hash.
  */
 import { createHash, randomBytes } from 'node:crypto';
+import path from 'node:path';
 import type { ChatChannel, MessagingAdapter } from '@property-manager/adapters';
 import { prisma } from '../config/db.js';
 import { getEnv } from '../config/env.js';
 import { getReplyAddressFromConversation, sendWithRetry } from './chatbot.service.js';
+import {
+  buildDocumentStorageKey,
+  createLocalDocumentStorage,
+  decodeBase64Payload,
+} from './document-storage.service.js';
 
 const DAY = 24 * 60 * 60 * 1000;
 const TOKEN_TTL_MS = 14 * DAY;
@@ -153,4 +159,152 @@ export async function completeShowingAndInvite(
   }
 
   return { ok: true, applicationId: application.id, linkDelivered, applicationUrl };
+}
+
+export interface SubmitApplicationInput {
+  annualIncome?: number | null;
+  employerName?: string | null;
+  references?: string | null;
+  applicantFullName: string;
+  consentApplication: boolean;
+  consentCreditCheck: boolean;
+  consentPoliceCheck: boolean;
+  idDocumentFilename?: string | null;
+  idDocumentMimeType?: string | null;
+  idDocumentBase64?: string | null;
+}
+
+export type SubmitApplicationResult =
+  | { ok: false; status: 400 | 404 | 409; error: string }
+  | { ok: true; applicationId: string };
+
+// Mismo tope que `fileBase64` en routes/documents.ts (~1.1 MB de archivo
+// real una vez decodificado el base64).
+const MAX_ID_DOCUMENT_BASE64_LENGTH = 1_500_000;
+
+export async function submitRentalApplication(
+  token: string,
+  input: SubmitApplicationInput,
+  deps: { messaging: Record<ChatChannel, MessagingAdapter> },
+): Promise<SubmitApplicationResult> {
+  const application = await getPublicRentalApplication(token);
+  if (!application) return { ok: false, status: 404, error: 'Application not found or expired' };
+  if (application.status === 'submitted') {
+    return { ok: false, status: 409, error: 'Application already submitted' };
+  }
+
+  const missingConsents = [
+    ...(input.consentApplication ? [] : ['consentApplication']),
+    ...(input.consentCreditCheck ? [] : ['consentCreditCheck']),
+    ...(input.consentPoliceCheck ? [] : ['consentPoliceCheck']),
+  ];
+  if (missingConsents.length > 0) {
+    return { ok: false, status: 400, error: `Missing required consent: ${missingConsents.join(', ')}` };
+  }
+  if (!input.applicantFullName.trim()) {
+    return { ok: false, status: 400, error: 'applicantFullName is required' };
+  }
+  if (!input.idDocumentBase64 || !input.idDocumentFilename || !input.idDocumentMimeType) {
+    return { ok: false, status: 400, error: 'A photo ID document is required' };
+  }
+  if (input.idDocumentBase64.length > MAX_ID_DOCUMENT_BASE64_LENGTH) {
+    return { ok: false, status: 400, error: 'The ID document is too large' };
+  }
+
+  const env = getEnv();
+  const storage = createLocalDocumentStorage({
+    rootDir: path.resolve(env.DOCUMENT_STORAGE_DIR),
+    publicBaseUrl: env.DOCUMENT_STORAGE_PUBLIC_BASE_URL || undefined,
+  });
+  const stored = await storage.putObject({
+    key: buildDocumentStorageKey({
+      tenantId: application.tenantId,
+      documentId: application.id,
+      filename: input.idDocumentFilename,
+    }),
+    body: decodeBase64Payload(input.idDocumentBase64),
+    contentType: input.idDocumentMimeType,
+  });
+  const idDocumentStorageKey = stored.storageKey;
+
+  const now = new Date();
+  await prisma.rentalApplication.update({
+    where: { id: application.id },
+    data: {
+      status: 'submitted',
+      submittedAt: now,
+      annualIncome: input.annualIncome ?? null,
+      employerName: input.employerName ?? null,
+      references: input.references ?? null,
+      applicantFullName: input.applicantFullName.trim(),
+      idDocumentStorageKey,
+      consentApplicationAt: now,
+      consentCreditCheckAt: now,
+      consentPoliceCheckAt: now,
+    },
+  });
+
+  await notifyStaffOfApplication(application.id, application.tenantId, deps);
+
+  return { ok: true, applicationId: application.id };
+}
+
+/**
+ * Best-effort: la aplicación del prospecto ya quedó guardada, así que un
+ * fallo de notificación se loguea y nunca se propaga — si lo hiciera, el
+ * prospecto vería un error y reintentaría, duplicando el envío.
+ */
+async function notifyStaffOfApplication(
+  applicationId: string,
+  tenantId: string,
+  deps: { messaging: Record<ChatChannel, MessagingAdapter> },
+): Promise<void> {
+  try {
+    const application = await prisma.rentalApplication.findUniqueOrThrow({
+      where: { id: applicationId },
+      include: { showing: { select: { brokerUserId: true } }, lead: { select: { assignedUserId: true } } },
+    });
+    const staff = await prisma.user.findMany({
+      where: { tenantId, isActive: true },
+      select: { id: true, email: true, role: true, notificationChannel: true, notificationAddress: true },
+    });
+    const targets = resolveApplicationNotifyTargets({
+      brokerUserId: application.showing.brokerUserId,
+      assignedUserId: application.lead.assignedUserId,
+      staff: staff.map((member) => ({
+        id: member.id,
+        email: member.email,
+        notificationChannel: member.notificationChannel,
+        notificationAddress: member.notificationAddress,
+      })),
+      propertyManagerIds: staff.filter((member) => member.role === 'property_manager').map((member) => member.id),
+    });
+
+    const body = `New rental application received from ${application.applicantFullName ?? 'a prospect'}.`;
+
+    for (const target of targets) {
+      // Email y chat son independientes: que falle uno no debe impedir el otro.
+      try {
+        await deps.messaging.email.send({
+          to: target.email,
+          body,
+          channel: 'email',
+          subject: 'New rental application',
+        });
+      } catch (error) {
+        console.error(`[RentalApplication] Email a ${target.id} falló:`, error);
+      }
+
+      if (target.notificationChannel && target.notificationAddress) {
+        try {
+          const channel = target.notificationChannel as ChatChannel;
+          await deps.messaging[channel].send({ to: target.notificationAddress, body, channel });
+        } catch (error) {
+          console.error(`[RentalApplication] Chat a ${target.id} falló:`, error);
+        }
+      }
+    }
+  } catch (error) {
+    console.error(`[RentalApplication] No se pudo notificar la aplicación ${applicationId}:`, error);
+  }
 }
