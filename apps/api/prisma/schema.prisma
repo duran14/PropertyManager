@@ -48,6 +48,7 @@ model Tenant {
   knowledgeChunks       KnowledgeChunk[]
   webhookReceipts       WebhookReceipt[]
   shortlists            PropertyShortlist[]
+  rentalApplications    RentalApplication[]
 
   @@map("tenants")
 }
@@ -62,6 +63,10 @@ model User {
   role         UserRole // property_manager | bookkeeper | broker
   isActive     Boolean   @default(true)
   lastLoginAt  DateTime?
+  // Canal opcional para notificaciones proactivas al staff (ej. aviso de
+  // aplicación recibida). Sin esto configurado, solo se notifica por email.
+  notificationChannel ChatChannel?
+  notificationAddress String?
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
@@ -150,6 +155,7 @@ model Unit {
   chatConversations ChatConversation[]
   showings          Showing[]
   listingPhotos     ListingPhoto[]
+  rentalApplications RentalApplication[]
 
   @@unique([tenantId, slug])
   @@index([tenantId, propertyId])
@@ -474,6 +480,7 @@ model Lead {
   conversations      ChatConversation[]
   conversationEvents ConversationEvent[]
   showings           Showing[]
+  rentalApplications RentalApplication[]
 
   @@index([tenantId, status])
   @@index([tenantId, operationalStatus])
@@ -709,6 +716,7 @@ model Showing {
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   lead   Lead   @relation(fields: [leadId], references: [id], onDelete: Cascade)
   unit   Unit?  @relation(fields: [unitId], references: [id])
+  rentalApplication RentalApplication?
 
   @@index([tenantId, status])
   @@index([tenantId, scheduledAt])
@@ -764,4 +772,43 @@ enum PhotoStatus {
   processing // enviada a Autoenhance, esperando webhook
   enhanced // procesada, enhancedUrl disponible
   failed // el procesamiento falló
+}
+
+model RentalApplication {
+  id        String   @id @default(cuid())
+  tenantId  String
+  showingId String   @unique
+  leadId    String
+  unitId    String?
+
+  tokenHash String   @unique
+  expiresAt DateTime
+
+  status    String   @default("invited") // invited | submitted
+
+  // Datos capturados cuando el prospecto envía el formulario
+  annualIncome         Int?
+  employerName         String?
+  references           String?
+  idDocumentStorageKey String?
+
+  applicantFullName    String?
+  // Los tres consentimientos se guardan como timestamps individuales (no un
+  // solo boolean): para un dato de cumplimiento importa cuándo se otorgó
+  // cada autorización por separado, no solo que "aceptó".
+  consentApplicationAt DateTime?
+  consentCreditCheckAt DateTime?
+  consentPoliceCheckAt DateTime?
+
+  submittedAt DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tenant  Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  showing Showing @relation(fields: [showingId], references: [id], onDelete: Cascade)
+  lead    Lead    @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  unit    Unit?   @relation(fields: [unitId], references: [id])
+
+  @@index([tenantId, status])
+  @@map("rental_applications")
 }
