@@ -1,8 +1,9 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { requireAuth, requireUser } from '../auth/context.js';
+import { requireAuth, requireRole, requireUser } from '../auth/context.js';
 import { prisma } from '../config/db.js';
 import { parseListInput, slugifyUnit } from '../services/property-inventory.service.js';
+import { closeOwnerStatement, previewOwnerStatement } from '../services/owner-statement.service.js';
 
 export const propertiesRouter = Router();
 
@@ -12,6 +13,9 @@ const propertySchema = z.object({
   city: z.string().min(1).max(100),
   province: z.string().min(2).max(40).default('BC'),
   postalCode: z.string().max(20).optional().or(z.literal('')),
+  ownerId: z.string().optional().nullable(),
+  managementFeePercentBps: z.number().int().min(0).max(10_000).optional(),
+  reserveFundTargetCents: z.number().int().min(0).optional(),
 });
 
 const unitSchema = z.object({
@@ -64,6 +68,13 @@ propertiesRouter.post('/', requireAuth, async (req, res, next) => {
         city: parsed.data.city,
         province: parsed.data.province,
         postalCode: parsed.data.postalCode || null,
+        ownerId: parsed.data.ownerId || null,
+        ...(parsed.data.managementFeePercentBps === undefined
+          ? {}
+          : { managementFeePercentBps: parsed.data.managementFeePercentBps }),
+        ...(parsed.data.reserveFundTargetCents === undefined
+          ? {}
+          : { reserveFundTargetCents: parsed.data.reserveFundTargetCents }),
       },
       include: { units: true },
     });
@@ -204,3 +215,60 @@ function unitUpdateData(propertyName: string, data: Partial<z.infer<typeof unitS
   if (data.isActive !== undefined) update.isActive = data.isActive;
   return update;
 }
+
+propertiesRouter.get('/:propertyId/statement-preview', requireAuth, async (req, res, next) => {
+  try {
+    const user = requireUser(req);
+    const period = typeof req.query.period === 'string' ? req.query.period : '';
+    const result = await previewOwnerStatement({
+      tenantId: user.tenantId,
+      propertyId: req.params.propertyId,
+      period,
+    });
+    if (!result.ok) {
+      res.status(result.status).json({ error: result.error });
+      return;
+    }
+    res.json({ preview: result.preview });
+  } catch (err) {
+    next(err);
+  }
+});
+
+propertiesRouter.post(
+  '/:propertyId/statements',
+  requireAuth,
+  requireRole('property_manager'),
+  async (req, res, next) => {
+    try {
+      const user = requireUser(req);
+      const period = typeof req.body?.period === 'string' ? req.body.period : '';
+      const result = await closeOwnerStatement({
+        tenantId: user.tenantId,
+        propertyId: req.params.propertyId,
+        period,
+        actorUserId: user.userId,
+      });
+      if (!result.ok) {
+        res.status(result.status).json({ error: result.error });
+        return;
+      }
+      res.status(201).json({ statementId: result.statementId });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+propertiesRouter.get('/:propertyId/statements', requireAuth, async (req, res, next) => {
+  try {
+    const user = requireUser(req);
+    const statements = await prisma.ownerStatement.findMany({
+      where: { propertyId: req.params.propertyId, tenantId: user.tenantId },
+      orderBy: { periodStart: 'desc' },
+    });
+    res.json({ statements });
+  } catch (err) {
+    next(err);
+  }
+});
