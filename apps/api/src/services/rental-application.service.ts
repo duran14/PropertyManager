@@ -45,3 +45,36 @@ export async function getPublicRentalApplication(token: string) {
     },
   });
 }
+
+export interface NotifiableStaff {
+  id: string;
+  email: string;
+  notificationChannel: string | null;
+  notificationAddress: string | null;
+}
+
+/**
+ * A quién avisarle que llegó una aplicación, en orden de cercanía al
+ * showing: el broker que lo atendió, si no el dueño del lead, y si no
+ * todos los property managers del tenant. Un id que ya no corresponde a
+ * ningún usuario (staff dado de baja) cae al siguiente nivel en vez de
+ * dejar la notificación sin destinatario.
+ */
+export function resolveApplicationNotifyTargets(input: {
+  brokerUserId: string | null;
+  assignedUserId: string | null;
+  staff: NotifiableStaff[];
+  propertyManagerIds: string[];
+}): NotifiableStaff[] {
+  const byId = new Map(input.staff.map((member) => [member.id, member]));
+
+  const broker = input.brokerUserId ? byId.get(input.brokerUserId) : undefined;
+  if (broker) return [broker];
+
+  const assignee = input.assignedUserId ? byId.get(input.assignedUserId) : undefined;
+  if (assignee) return [assignee];
+
+  return input.propertyManagerIds
+    .map((id) => byId.get(id))
+    .filter((member): member is NotifiableStaff => member !== undefined);
+}
