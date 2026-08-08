@@ -22,6 +22,7 @@ import { unitsRouter } from './routes/units.js';
 import { chatRouter } from './routes/chat.js';
 import { showingsRouter } from './routes/showings.js';
 import { propertiesRouter } from './routes/properties.js';
+import { ownersRouter } from './routes/owners.js';
 import { onboardingRouter } from './routes/onboarding.js';
 import { documentsRouter } from './routes/documents.js';
 import { knowledgeBaseRouter } from './routes/knowledge-base.js';
@@ -62,6 +63,7 @@ export function createApp(): express.Application {
   app.use('/leases', leasesRouter);
   app.use('/units', unitsRouter);
   app.use('/properties', propertiesRouter);
+  app.use('/owners', ownersRouter);
   app.use('/onboarding', onboardingRouter);
   app.use('/documents', documentsRouter);
   app.use('/knowledge-base', knowledgeBaseRouter);

@@ -1024,6 +1024,50 @@ async function main() {
     ],
   });
 
+  // Fase 3: vincula cada propiedad a su dueño. Sin esto, Owner Statements
+  // muestra "sin dueño asignado" en todas y el botón de cerrar queda
+  // permanentemente deshabilitado — la función completa no se puede
+  // ejercitar en la demo. Se reparten las 8 propiedades entre los dos
+  // dueños, y a un par se les da comisión/meta de reserva distintas del
+  // default para que la demo muestre configuración real, no solo valores
+  // por defecto.
+  await prisma.property.update({
+    where: { id: cedarCourt.id },
+    data: { ownerId: 'owner_patterson' },
+  });
+  await prisma.property.update({
+    where: { id: harbourView.id },
+    data: { ownerId: 'owner_patterson' },
+  });
+  await prisma.property.update({
+    where: { id: kitsPoint.id },
+    // Comisión reducida (10% en vez del 12.5% default) y una meta de
+    // reserva real de $5,000: esta es la propiedad que mejor demuestra
+    // el cálculo del estado de cuenta con configuración no-default.
+    data: { ownerId: 'owner_patterson', managementFeePercentBps: 1000, reserveFundTargetCents: 500_000 },
+  });
+  await prisma.property.update({
+    where: { id: richmondGardens.id },
+    data: { ownerId: 'owner_patterson' },
+  });
+  await prisma.property.update({
+    where: { id: burnabyHeights.id },
+    data: { ownerId: 'owner_nguyen' },
+  });
+  await prisma.property.update({
+    where: { id: surreyCrossing.id },
+    // Comisión más alta (15%) y una meta de reserva más chica ($1,500).
+    data: { ownerId: 'owner_nguyen', managementFeePercentBps: 1500, reserveFundTargetCents: 150_000 },
+  });
+  await prisma.property.update({
+    where: { id: northVanBluffs.id },
+    data: { ownerId: 'owner_nguyen' },
+  });
+  await prisma.property.update({
+    where: { id: kelownaVista.id },
+    data: { ownerId: 'owner_nguyen' },
+  });
+
   // ============================================================
   // Leads (11) — spread across the full funnel and channels.
   // ============================================================

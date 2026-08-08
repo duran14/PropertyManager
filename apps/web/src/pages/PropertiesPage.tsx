@@ -5,6 +5,7 @@ import type {
   KnowledgeDocument,
   KnowledgeSearchResult,
   ObsidianExportFile,
+  Owner,
   PropertyRecord,
   TenantOnboardingProfile,
 } from '../lib/types';
@@ -29,6 +30,15 @@ const emptyProperty = {
   city: '',
   province: 'BC',
   postalCode: '',
+  // Fase 3: configuración contable. `ownerId` vacío significa "sin
+  // asignar". La comisión se captura como porcentaje legible (ej. "12.5")
+  // y la meta de reserva en dólares (ej. "5000") — la API los espera en
+  // basis points enteros y en centavos respectivamente; la conversión
+  // ocurre solo en la frontera de la mutación (ver createProperty) y al
+  // cargar un registro existente (ver startEditProperty).
+  ownerId: '',
+  managementFeePercent: '',
+  reserveFundTarget: '',
 };
 
 const emptyUnit = {
@@ -78,6 +88,10 @@ export function PropertiesPage() {
     queryKey: ['properties'],
     queryFn: () => apiFetch('/properties'),
   });
+  const { data: ownersData } = useQuery<{ owners: Owner[] }>({
+    queryKey: ['owners'],
+    queryFn: () => apiFetch('/owners'),
+  });
   const { data: documentsData } = useQuery<{ documents: KnowledgeDocument[] }>({
     queryKey: ['documents'],
     queryFn: () => apiFetch('/documents'),
@@ -94,6 +108,7 @@ export function PropertiesPage() {
   const profile = onboardingData?.profile;
   const properties = propertiesData?.properties ?? [];
   const documents = documentsData?.documents ?? [];
+  const owners = ownersData?.owners ?? [];
 
   const saveOnboarding = useMutation({
     mutationFn: () => apiFetch('/onboarding', {
@@ -107,7 +122,23 @@ export function PropertiesPage() {
     mutationFn: () =>
       apiFetch(editingPropertyId ? `/properties/${editingPropertyId}` : '/properties', {
         method: editingPropertyId ? 'PATCH' : 'POST',
-        body: JSON.stringify(property),
+        body: JSON.stringify({
+          name: property.name,
+          address: property.address,
+          city: property.city,
+          province: property.province,
+          postalCode: property.postalCode,
+          ownerId: property.ownerId || null,
+          // bps enteros: 1250 = 12.5%. El usuario captura un porcentaje
+          // legible, así que se convierte solo aquí, en la frontera.
+          managementFeePercentBps: property.managementFeePercent === ''
+            ? undefined
+            : Math.round(Number(property.managementFeePercent) * 100),
+          // La API espera centavos; el usuario captura dólares.
+          reserveFundTargetCents: property.reserveFundTarget === ''
+            ? undefined
+            : Math.round(Number(property.reserveFundTarget) * 100),
+        }),
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['properties'] });
@@ -230,6 +261,11 @@ export function PropertiesPage() {
       city: propertyRecord.city,
       province: propertyRecord.province,
       postalCode: propertyRecord.postalCode ?? '',
+      ownerId: propertyRecord.ownerId ?? '',
+      // bps enteros -> porcentaje legible (1250 -> "12.5").
+      managementFeePercent: String(propertyRecord.managementFeePercentBps / 100),
+      // centavos -> dólares legibles.
+      reserveFundTarget: String(propertyRecord.reserveFundTargetCents / 100),
     });
   }
 
@@ -303,6 +339,33 @@ export function PropertiesPage() {
             <TextField label="Address" value={property.address} onChange={(value) => setProperty({ ...property, address: value })} className="md:col-span-2" required />
             <TextField label="Province" value={property.province} onChange={(value) => setProperty({ ...property, province: value })} />
             <TextField label="Postal code" value={property.postalCode} onChange={(value) => setProperty({ ...property, postalCode: value })} />
+            <label>
+              <span className="mb-1 block text-xs font-medium text-slate-500">Owner</span>
+              <select
+                value={property.ownerId}
+                onChange={(event) => setProperty({ ...property, ownerId: event.target.value })}
+                className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+              >
+                <option value="">Unassigned</option>
+                {owners.map((owner) => (
+                  <option key={owner.id} value={owner.id}>{owner.firstName} {owner.lastName}</option>
+                ))}
+              </select>
+            </label>
+            <TextField
+              label="Management fee (%)"
+              value={property.managementFeePercent}
+              onChange={(value) => setProperty({ ...property, managementFeePercent: value })}
+              type="number"
+              placeholder="12.5"
+            />
+            <TextField
+              label="Reserve fund target (CAD)"
+              value={property.reserveFundTarget}
+              onChange={(value) => setProperty({ ...property, reserveFundTarget: value })}
+              type="number"
+              placeholder="5000"
+            />
             <div className="md:col-span-2">
               <button disabled={createProperty.isPending} className="rounded-md bg-brand-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">
                 {editingPropertyId ? 'Save property' : 'Create property'}
@@ -548,6 +611,10 @@ export function PropertiesPage() {
                 <div>
                   <h3 className="font-medium text-slate-900">{propertyRecord.name}</h3>
                   <p className="text-sm text-slate-500">{propertyRecord.address}, {propertyRecord.city}, {propertyRecord.province}</p>
+                  <p className="mt-1 text-xs text-slate-400">
+                    Owner: {ownerName(owners, propertyRecord.ownerId)} · Fee {(propertyRecord.managementFeePercentBps / 100).toFixed(2)}%
+                    {' '}· Reserve target ${(propertyRecord.reserveFundTargetCents / 100).toLocaleString('en-CA')}
+                  </p>
                 </div>
                 <div className="flex items-center gap-2">
                   <button
@@ -662,6 +729,12 @@ function fileToBase64(file: File): Promise<string> {
     };
     reader.readAsDataURL(file);
   });
+}
+
+function ownerName(owners: Owner[], ownerId: string | null): string {
+  if (!ownerId) return 'Unassigned';
+  const owner = owners.find((candidate) => candidate.id === ownerId);
+  return owner ? `${owner.firstName} ${owner.lastName}` : 'Unassigned';
 }
 
 function getExtractionStatusClass(status: KnowledgeDocument['extractionStatus']): string {

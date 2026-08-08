@@ -217,7 +217,19 @@ export interface PropertyRecord {
   city: string;
   province: string;
   postalCode: string | null;
+  // Fase 3: configuración contable de la propiedad.
+  ownerId: string | null;
+  managementFeePercentBps: number;
+  reserveFundTargetCents: number;
   units: PropertyUnit[];
+}
+
+export interface Owner {
+  id: string;
+  firstName: string;
+  lastName: string;
+  email: string | null;
+  phone: string | null;
 }
 
 export interface Lease {
