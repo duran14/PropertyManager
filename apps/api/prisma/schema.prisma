@@ -855,7 +855,10 @@ model OwnerStatement {
   createdAt      DateTime @default(now())
 
   tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  property Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  // Un estado de cuenta es un documento financiero con timestamp de cierre y
+  // montos ya liquidados: no debe desaparecer si se borra la propiedad.
+  // RESTRICT fuerza a no permitir borrar una propiedad con historial contable.
+  property Property @relation(fields: [propertyId], references: [id], onDelete: Restrict)
   owner    Owner    @relation(fields: [ownerId], references: [id])
 
   // Sin campo `status`: si la fila existe, el mes está cerrado. Esta unique
