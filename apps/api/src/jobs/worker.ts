@@ -56,16 +56,31 @@ export function startWorkers(): void {
       const tenants = await prisma.tenant.findMany({ select: { id: true } });
       let totalSent = 0;
       let totalSkipped = 0;
+      let failedTenants = 0;
       for (const tenant of tenants) {
-        const result = await runWeeklyReengagement(tenant.id, {
-          glm: adapters.glm,
-          messaging: adapters.messaging,
-        });
-        totalSent += result.sent;
-        totalSkipped += result.skipped;
+        // Fix 7: un tenant con un problema de datos específico no debe
+        // tumbar la corrida completa — sin este try/catch, un throw aquí
+        // propaga hasta BullMQ, que reintenta el JOB ENTERO hasta 3 veces
+        // (defaultJobOptions.attempts en queues.ts), y si el tenant que
+        // falla siempre falla, los tenants que vienen después de él en el
+        // orden de iteración nunca se procesan en ninguno de los 3 intentos.
+        try {
+          const result = await runWeeklyReengagement(tenant.id, {
+            glm: adapters.glm,
+            messaging: adapters.messaging,
+            isMockGlm: adapters.mockModes.glm,
+          });
+          totalSent += result.sent;
+          totalSkipped += result.skipped;
+        } catch (error) {
+          failedTenants++;
+          console.error(`[Remarketing] Tenant ${tenant.id} falló, se continúa con el resto:`, error);
+        }
       }
-      console.log(`[Remarketing] Corrida semanal: ${totalSent} enviados, ${totalSkipped} omitidos, ${tenants.length} tenants`);
-      return { totalSent, totalSkipped };
+      console.log(
+        `[Remarketing] Corrida semanal: ${totalSent} enviados, ${totalSkipped} omitidos, ${tenants.length} tenants, ${failedTenants} tenants fallidos`,
+      );
+      return { totalSent, totalSkipped, failedTenants };
     },
     { connection: redis, concurrency: 1 },
   );
@@ -80,5 +95,5 @@ export function startWorkers(): void {
     console.error(`[Remarketing] Job falló (${job?.id}):`, err.message);
   });
 
-  console.log('  ⚙️  Workers del Financial Sentinel arrancados (reconciliación + e-Transfer)');
+  console.log('  ⚙️  Workers arrancados (Financial Sentinel: reconciliación + e-Transfer; Remarketing: reactivación semanal)');
 }
