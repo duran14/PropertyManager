@@ -33,7 +33,7 @@ CREATE UNIQUE INDEX "rental_applications_tokenHash_key" ON "rental_applications"
 CREATE INDEX "rental_applications_tenantId_status_idx" ON "rental_applications"("tenantId", "status");
 
 -- AlterTable users
-ALTER TABLE "users" ADD COLUMN "notificationChannel" TEXT, ADD COLUMN "notificationAddress" TEXT;
+ALTER TABLE "users" ADD COLUMN "notificationChannel" "ChatChannel", ADD COLUMN "notificationAddress" TEXT;
 
 -- AddForeignKey
 ALTER TABLE "rental_applications" ADD CONSTRAINT "rental_applications_tenantId_fkey" FOREIGN KEY ("tenantId") REFERENCES "tenants"("id") ON DELETE CASCADE ON UPDATE CASCADE;
