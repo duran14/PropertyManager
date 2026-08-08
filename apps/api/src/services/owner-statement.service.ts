@@ -8,6 +8,7 @@
  */
 import { calculateOwnerStatement, monthBoundsUtc, parseStatementPeriod } from '@property-manager/core';
 import { prisma } from '../config/db.js';
+import { writeAudit } from './audit.service.js';
 
 /** Un gasto solo cuenta si ya pasó por su compuerta de revisión humana. */
 const COUNTABLE_BILL_STATUSES = ['approved', 'synced_to_qbo'] as const;
@@ -120,4 +121,103 @@ export async function previewOwnerStatement(input: {
       alreadyClosed: existing !== null,
     },
   };
+}
+
+export type CloseStatementResult =
+  | { ok: false; status: 400 | 404 | 409; error: string }
+  | { ok: true; statementId: string };
+
+/**
+ * Cierra el mes: persiste la foto inmutable del cálculo y registra la
+ * instrucción de pago.
+ *
+ * ADR-005: el Transaction de tipo `owner_distribution` es un REGISTRO de
+ * lo que se debe pagar, no una transferencia. Ningún endpoint de este
+ * sistema mueve fondos; el pago lo ejecuta un humano por fuera.
+ */
+export async function closeOwnerStatement(input: {
+  tenantId: string;
+  propertyId: string;
+  period: string;
+  actorUserId: string;
+  now?: Date;
+}): Promise<CloseStatementResult> {
+  const previewResult = await previewOwnerStatement({
+    tenantId: input.tenantId,
+    propertyId: input.propertyId,
+    period: input.period,
+  });
+  if (!previewResult.ok) return previewResult;
+
+  const { preview } = previewResult;
+  const now = input.now ?? new Date();
+
+  if (now < preview.periodEnd) {
+    return { ok: false, status: 409, error: 'Cannot close a period that has not ended yet' };
+  }
+  if (!preview.ownerId) {
+    return { ok: false, status: 409, error: 'Property has no owner assigned' };
+  }
+  if (preview.alreadyClosed) {
+    return { ok: false, status: 409, error: 'This period is already closed' };
+  }
+
+  let statementId: string;
+  try {
+    const statement = await prisma.ownerStatement.create({
+      data: {
+        tenantId: input.tenantId,
+        propertyId: preview.propertyId,
+        ownerId: preview.ownerId,
+        periodStart: preview.periodStart,
+        periodEnd: preview.periodEnd,
+        rentIncomeCents: preview.rentIncomeCents,
+        expensesCents: preview.expensesCents,
+        managementFeeCents: preview.managementFeeCents,
+        reserveWithheldCents: preview.reserveWithheldCents,
+        ownerPayoutCents: preview.ownerPayoutCents,
+        shortfallCents: preview.shortfallCents,
+        appliedFeePercentBps: preview.appliedFeePercentBps,
+        reserveTargetCents: preview.reserveTargetCents,
+        closedByUserId: input.actorUserId,
+      },
+    });
+    statementId = statement.id;
+  } catch {
+    // La unique (propertyId, periodStart) es la red de seguridad real
+    // contra dos cierres concurrentes: el chequeo de alreadyClosed de
+    // arriba puede perder la carrera, esto no.
+    return { ok: false, status: 409, error: 'This period is already closed' };
+  }
+
+  if (preview.ownerPayoutCents > 0) {
+    await prisma.transaction.create({
+      data: {
+        tenantId: input.tenantId,
+        type: 'owner_distribution',
+        source: 'manual',
+        // Negativo: es una salida desde la perspectiva de la propiedad.
+        amountCents: -preview.ownerPayoutCents,
+        reference: `owner-statement:${statementId}`,
+        occurredAt: preview.periodEnd,
+      },
+    });
+  }
+
+  await writeAudit({
+    tenantId: input.tenantId,
+    actorId: input.actorUserId,
+    actorType: 'user',
+    action: 'owner_statement.closed',
+    entityType: 'owner_statement',
+    entityId: statementId,
+    payload: {
+      period: input.period,
+      propertyId: preview.propertyId,
+      ownerPayoutCents: preview.ownerPayoutCents,
+      shortfallCents: preview.shortfallCents,
+    },
+  });
+
+  return { ok: true, statementId };
 }

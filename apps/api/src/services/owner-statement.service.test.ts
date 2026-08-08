@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { prisma } from '../config/db.js';
-import { previewOwnerStatement } from './owner-statement.service.js';
+import { closeOwnerStatement, previewOwnerStatement } from './owner-statement.service.js';
 
 const TENANT_ID = 'tenant_test_owner_statement';
 
@@ -247,5 +247,148 @@ describe('previewOwnerStatement', () => {
     });
 
     expect(result).toEqual({ ok: false, status: 404, error: 'Property not found' });
+  });
+});
+
+const AFTER_AUGUST = new Date('2026-09-05T12:00:00Z');
+
+describe('closeOwnerStatement', () => {
+  beforeEach(cleanup);
+  afterEach(cleanup);
+
+  it('persists an immutable statement and an owner_distribution record', async () => {
+    const { property, unit } = await seed();
+    await addRent(unit.id, 200_000, new Date('2026-08-10T12:00:00Z'), 'rent-aug');
+    await addBill({ totalCents: 30_000, billDate: new Date('2026-08-15T12:00:00Z'), unitId: unit.id });
+
+    const result = await closeOwnerStatement({
+      tenantId: TENANT_ID, propertyId: property.id, period: '2026-08',
+      actorUserId: 'u_pm', now: AFTER_AUGUST,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('expected success');
+
+    const saved = await prisma.ownerStatement.findUniqueOrThrow({ where: { id: result.statementId } });
+    expect(saved.rentIncomeCents).toBe(200_000);
+    expect(saved.expensesCents).toBe(30_000);
+    expect(saved.managementFeeCents).toBe(25_000);
+    expect(saved.ownerPayoutCents).toBe(145_000);
+    expect(saved.appliedFeePercentBps).toBe(1250);
+    expect(saved.closedByUserId).toBe('u_pm');
+
+    const distribution = await prisma.transaction.findFirst({
+      where: { tenantId: TENANT_ID, type: 'owner_distribution' },
+    });
+    expect(distribution?.amountCents).toBe(-145_000);
+  });
+
+  it('refuses to close a month that has not ended yet', async () => {
+    const { property } = await seed();
+
+    const result = await closeOwnerStatement({
+      tenantId: TENANT_ID, propertyId: property.id, period: '2026-08',
+      actorUserId: 'u_pm', now: new Date('2026-08-15T12:00:00Z'),
+    });
+
+    expect(result).toEqual({ ok: false, status: 409, error: 'Cannot close a period that has not ended yet' });
+    expect(await prisma.ownerStatement.count({ where: { tenantId: TENANT_ID } })).toBe(0);
+  });
+
+  it('refuses to close a property with no owner assigned', async () => {
+    const { property } = await seed({ withOwner: false });
+
+    const result = await closeOwnerStatement({
+      tenantId: TENANT_ID, propertyId: property.id, period: '2026-08',
+      actorUserId: 'u_pm', now: AFTER_AUGUST,
+    });
+
+    expect(result).toEqual({ ok: false, status: 409, error: 'Property has no owner assigned' });
+  });
+
+  it('refuses to close the same month twice', async () => {
+    const { property } = await seed();
+    await closeOwnerStatement({
+      tenantId: TENANT_ID, propertyId: property.id, period: '2026-08',
+      actorUserId: 'u_pm', now: AFTER_AUGUST,
+    });
+
+    const second = await closeOwnerStatement({
+      tenantId: TENANT_ID, propertyId: property.id, period: '2026-08',
+      actorUserId: 'u_pm', now: AFTER_AUGUST,
+    });
+
+    expect(second).toEqual({ ok: false, status: 409, error: 'This period is already closed' });
+    expect(await prisma.ownerStatement.count({ where: { tenantId: TENANT_ID } })).toBe(1);
+  });
+
+  it('survives two concurrent close attempts, creating exactly one statement', async () => {
+    const { property, unit } = await seed();
+    await addRent(unit.id, 200_000, new Date('2026-08-10T12:00:00Z'), 'rent-aug');
+
+    const [first, second] = await Promise.all([
+      closeOwnerStatement({
+        tenantId: TENANT_ID, propertyId: property.id, period: '2026-08',
+        actorUserId: 'u_pm', now: AFTER_AUGUST,
+      }),
+      closeOwnerStatement({
+        tenantId: TENANT_ID, propertyId: property.id, period: '2026-08',
+        actorUserId: 'u_pm', now: AFTER_AUGUST,
+      }),
+    ]);
+
+    const succeeded = [first, second].filter((r) => r.ok);
+    const failed = [first, second].filter((r) => !r.ok);
+    expect(succeeded).toHaveLength(1);
+    expect(failed).toHaveLength(1);
+    expect(await prisma.ownerStatement.count({ where: { tenantId: TENANT_ID } })).toBe(1);
+  });
+
+  it('closes a month with no activity at all', async () => {
+    const { property } = await seed();
+
+    const result = await closeOwnerStatement({
+      tenantId: TENANT_ID, propertyId: property.id, period: '2026-08',
+      actorUserId: 'u_pm', now: AFTER_AUGUST,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('expected success');
+    const saved = await prisma.ownerStatement.findUniqueOrThrow({ where: { id: result.statementId } });
+    expect(saved.rentIncomeCents).toBe(0);
+    expect(saved.ownerPayoutCents).toBe(0);
+  });
+
+  it('records no distribution transaction when the month closed in the red', async () => {
+    const { property, unit } = await seed();
+    await addBill({ totalCents: 90_000, billDate: new Date('2026-08-15T12:00:00Z'), unitId: unit.id });
+
+    const result = await closeOwnerStatement({
+      tenantId: TENANT_ID, propertyId: property.id, period: '2026-08',
+      actorUserId: 'u_pm', now: AFTER_AUGUST,
+    });
+
+    if (!result.ok) throw new Error('expected success');
+    const saved = await prisma.ownerStatement.findUniqueOrThrow({ where: { id: result.statementId } });
+    expect(saved.ownerPayoutCents).toBe(0);
+    expect(saved.shortfallCents).toBe(90_000);
+    expect(await prisma.transaction.count({
+      where: { tenantId: TENANT_ID, type: 'owner_distribution' },
+    })).toBe(0);
+  });
+
+  it('does not change a closed statement when later movements are edited', async () => {
+    const { property, unit } = await seed();
+    await addRent(unit.id, 200_000, new Date('2026-08-10T12:00:00Z'), 'rent-aug');
+    const closed = await closeOwnerStatement({
+      tenantId: TENANT_ID, propertyId: property.id, period: '2026-08',
+      actorUserId: 'u_pm', now: AFTER_AUGUST,
+    });
+    if (!closed.ok) throw new Error('expected success');
+
+    await addRent(unit.id, 500_000, new Date('2026-08-20T12:00:00Z'), 'rent-aug-extra');
+
+    const saved = await prisma.ownerStatement.findUniqueOrThrow({ where: { id: closed.statementId } });
+    expect(saved.rentIncomeCents).toBe(200_000);
   });
 });
