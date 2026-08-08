@@ -74,6 +74,11 @@ export function ShowingsPage() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['showings'] }),
   });
 
+  const completeMutation = useMutation({
+    mutationFn: (id: string) => apiFetch(`/showings/${id}/complete`, { method: 'POST' }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['showings'] }),
+  });
+
   const showings = data?.showings ?? [];
   const days = groupByDay(showings);
   const pendingCount = showings.filter((s) => s.status === 'scheduled').length;
@@ -216,6 +221,14 @@ export function ShowingsPage() {
                           >
                             <Icon name="reject" size={14} />
                             Cancel
+                          </button>
+                          <button
+                            onClick={() => completeMutation.mutate(showing.id)}
+                            disabled={completeMutation.isPending}
+                            className="inline-flex items-center justify-center gap-1 rounded-md bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-100"
+                          >
+                            <Icon name="document" size={14} />
+                            Mark as completed
                           </button>
                         </div>
                       )}

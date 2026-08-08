@@ -20,6 +20,7 @@ import { apiFetch } from './lib/apiClient';
 import type { Lease } from './lib/types';
 import { PublicListingPage } from './pages/PublicListingPage';
 import { ShortlistPage } from './pages/ShortlistPage';
+import { ApplyPage } from './pages/ApplyPage';
 
 interface Unit {
   id: string;
@@ -82,6 +83,7 @@ export default function App() {
           <Route path="/login" element={<LoginPage />} />
           <Route path="/listings/:slug" element={<PublicListingPage />} />
           <Route path="/shortlist/:token" element={<ShortlistPage />} />
+          <Route path="/apply/:token" element={<ApplyPage />} />
           <Route path="/*" element={<ProtectedRoutes />} />
         </Routes>
       </AuthProvider>
