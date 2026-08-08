@@ -15,6 +15,7 @@ import { redis } from '../config/redis.js';
 export const QUEUE_NAMES = {
   reconciliation: 'reconciliation',
   bankNotification: 'bank-notification',
+  remarketing: 'remarketing',
 } as const;
 
 /** Job de reconciliación diaria para un tenant. */
@@ -65,6 +66,40 @@ export async function scheduleDailyReconciliation(tenantId: string): Promise<voi
       // Cada día a las 06:00 AM (horario de Vancouver).
       repeat: { pattern: '0 6 * * *', tz: 'America/Vancouver' },
       jobId: `daily-${tenantId}`,
+    },
+  );
+}
+
+/** Job semanal de reactivación de leads (Fase 1B) — sin datos por tenant, corre para todos. */
+export interface RemarketingJobData {
+  triggeredBy: 'cron' | 'manual';
+}
+
+export const remarketingQueue = new Queue<RemarketingJobData, unknown, string>(QUEUE_NAMES.remarketing, {
+  connection: redis,
+  defaultJobOptions: {
+    attempts: 3,
+    backoff: { type: 'exponential', delay: 5000 },
+    removeOnComplete: { count: 20 },
+    removeOnFail: { count: 20 },
+  },
+});
+
+/**
+ * Schedulea el job recurrente de reactivación semanal. A diferencia de
+ * `scheduleDailyReconciliation`, no recibe tenantId: el worker itera todos
+ * los tenants en cada corrida, así que basta con programarlo una sola vez
+ * al arrancar el servidor (BullMQ reemplaza el repeatable job existente
+ * si ya estaba programado, gracias al jobId fijo).
+ */
+export async function scheduleWeeklyRemarketing(): Promise<void> {
+  await remarketingQueue.add(
+    'weekly-remarketing',
+    { triggeredBy: 'cron' },
+    {
+      // Cada lunes a las 09:00 AM (horario de Vancouver).
+      repeat: { pattern: '0 9 * * 1', tz: 'America/Vancouver' },
+      jobId: 'weekly-remarketing',
     },
   );
 }

@@ -6,10 +6,12 @@
  */
 import { Worker } from 'bullmq';
 import { redis } from '../config/redis.js';
-import { QUEUE_NAMES, type BankNotificationJobData, type ReconciliationJobData } from './queues.js';
+import { QUEUE_NAMES, type BankNotificationJobData, type ReconciliationJobData, type RemarketingJobData } from './queues.js';
 import { runReconciliation } from '../services/reconciliation.service.js';
 import { processBankNotification } from '../services/sentinel.service.js';
 import { getAdapters } from '../config/adapters.js';
+import { prisma } from '../config/db.js';
+import { runWeeklyReengagement } from '../services/remarketing.service.js';
 
 export function startWorkers(): void {
   // Worker de reconciliación diaria.
@@ -46,11 +48,36 @@ export function startWorkers(): void {
     { connection: redis, concurrency: 4 },
   );
 
+  // Worker de reactivación semanal de leads (Fase 1B).
+  const remarketingWorker = new Worker<RemarketingJobData>(
+    QUEUE_NAMES.remarketing,
+    async () => {
+      const adapters = getAdapters();
+      const tenants = await prisma.tenant.findMany({ select: { id: true } });
+      let totalSent = 0;
+      let totalSkipped = 0;
+      for (const tenant of tenants) {
+        const result = await runWeeklyReengagement(tenant.id, {
+          glm: adapters.glm,
+          messaging: adapters.messaging,
+        });
+        totalSent += result.sent;
+        totalSkipped += result.skipped;
+      }
+      console.log(`[Remarketing] Corrida semanal: ${totalSent} enviados, ${totalSkipped} omitidos, ${tenants.length} tenants`);
+      return { totalSent, totalSkipped };
+    },
+    { connection: redis, concurrency: 1 },
+  );
+
   reconciliationWorker.on('failed', (job, err) => {
     console.error(`[Sentinel] Job reconciliación falló (${job?.id}):`, err.message);
   });
   bankWorker.on('failed', (job, err) => {
     console.error(`[Sentinel] Job bancario falló (${job?.id}):`, err.message);
+  });
+  remarketingWorker.on('failed', (job, err) => {
+    console.error(`[Remarketing] Job falló (${job?.id}):`, err.message);
   });
 
   console.log('  ⚙️  Workers del Financial Sentinel arrancados (reconciliación + e-Transfer)');

@@ -4,6 +4,7 @@
 import { createApp } from './app.js';
 import { getEnv } from './config/env.js';
 import { startWorkers } from './jobs/worker.js';
+import { scheduleWeeklyRemarketing } from './jobs/queues.js';
 import { startTelegramPoller } from './jobs/telegram-poller.js';
 import { startShortlistReminderWorker } from './jobs/shortlist-reminders.js';
 import { startMessageDeliveryRetryWorker } from './services/message-delivery-retry.service.js';
@@ -18,6 +19,10 @@ app.listen(env.API_PORT, () => {
 
   // Arranca los workers del Financial Sentinel (BullMQ).
   startWorkers();
+
+  void scheduleWeeklyRemarketing().catch((err) => {
+    console.error('No se pudo programar el job de remarketing:', err);
+  });
 
   // Arranca el poller de Telegram (si hay token configurado).
   startTelegramPoller();
