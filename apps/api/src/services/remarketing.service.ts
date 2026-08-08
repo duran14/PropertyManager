@@ -126,3 +126,43 @@ export async function sendReengagementMessage(
     return false;
   }
 }
+
+/**
+ * Orquesta un ciclo completo de reactivación para un tenant: busca
+ * candidatos, redacta y envía un mensaje a cada uno secuencialmente (no
+ * en paralelo, para no ráfaguear al proveedor de mensajería).
+ */
+export async function runWeeklyReengagement(
+  tenantId: string,
+  deps: { glm: GlmAdapter; messaging: Record<ChatChannel, MessagingAdapter> },
+): Promise<{ sent: number; skipped: number }> {
+  const candidates = await findReengagementCandidates(tenantId);
+  let sent = 0;
+  let skipped = 0;
+
+  for (const candidate of candidates) {
+    const messaging = deps.messaging[candidate.channel];
+    if (!messaging) {
+      skipped++;
+      continue;
+    }
+    // Un candidato que falla (ej. GLM caído) no debe tumbar la corrida
+    // completa — se salta y se reintenta la próxima semana, igual que un
+    // fallo de envío (ver sendReengagementMessage).
+    try {
+      const slots = await prisma.conversationSlot.findMany({
+        where: { conversationId: candidate.conversationId },
+      });
+      const slotMap = Object.fromEntries(slots.map((slot) => [slot.key, slot.value]));
+      const content = await draftReengagementMessage(deps.glm, slotMap);
+      const wasSent = await sendReengagementMessage(messaging, candidate, content);
+      if (wasSent) sent++;
+      else skipped++;
+    } catch (error) {
+      console.error(`[Remarketing] Candidato ${candidate.leadId} falló, se reintenta la próxima corrida:`, error);
+      skipped++;
+    }
+  }
+
+  return { sent, skipped };
+}

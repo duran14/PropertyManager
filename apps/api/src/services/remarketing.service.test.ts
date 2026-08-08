@@ -2,7 +2,7 @@ import type { GlmAdapter, GlmReasoningRequest, MessagingAdapter, OutboundMessage
 import { vi } from 'vitest';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { prisma } from '../config/db.js';
-import { draftReengagementMessage, findReengagementCandidates, sendReengagementMessage } from './remarketing.service.js';
+import { draftReengagementMessage, findReengagementCandidates, runWeeklyReengagement, sendReengagementMessage } from './remarketing.service.js';
 
 const TENANT_ID = 'tenant_test_remarketing';
 
@@ -226,5 +226,66 @@ describe('sendReengagementMessage', () => {
     expect(updatedLead.lastRemarketedAt).toBeNull();
     const messages = await prisma.chatMessage.findMany({ where: { conversationId: conversation.id, role: 'assistant' } });
     expect(messages[0].deliveryStatus).toBe('failed');
+  });
+});
+
+describe('runWeeklyReengagement', () => {
+  beforeEach(async () => {
+    await cleanup();
+    await seedTenant();
+  });
+
+  afterEach(async () => {
+    await cleanup();
+  });
+
+  it('sends to the eligible lead only, skipping one with a showing, one already remarketed, and one opted out', async () => {
+    const { lead: eligible } = await seedLeadWithConversation({ phone: '+16045550020', lastMessageDaysAgo: 20 });
+    await seedLeadWithConversation({ phone: '+16045550021', lastMessageDaysAgo: 20, withShowing: true });
+    await seedLeadWithConversation({ phone: '+16045550022', lastMessageDaysAgo: 20, lastRemarketedAt: new Date() });
+    await seedLeadWithConversation({ phone: '+16045550023', lastMessageDaysAgo: 20, optedOutAt: new Date() });
+
+    const glm = fakeGlm('¡Hola de nuevo! ¿Sigues buscando?');
+    const messaging = fakeMessaging();
+
+    const result = await runWeeklyReengagement(TENANT_ID, {
+      glm,
+      messaging: { web: messaging } as never,
+    });
+
+    expect(result).toEqual({ sent: 1, skipped: 0 });
+    expect(messaging.sent).toHaveLength(1);
+    const updatedEligible = await prisma.lead.findUniqueOrThrow({ where: { id: eligible.id } });
+    expect(updatedEligible.lastRemarketedAt).not.toBeNull();
+  });
+
+  it('counts a candidate as skipped when there is no adapter for its channel', async () => {
+    await seedLeadWithConversation({ phone: '+16045550024', lastMessageDaysAgo: 20 });
+    const glm = fakeGlm('¡Hola de nuevo!');
+
+    const result = await runWeeklyReengagement(TENANT_ID, { glm, messaging: {} as never });
+
+    expect(result).toEqual({ sent: 0, skipped: 1 });
+  });
+
+  it('skips a candidate whose draft fails (GLM outage) without blocking the rest of the run', async () => {
+    const { lead: broken } = await seedLeadWithConversation({ phone: '+16045550025', lastMessageDaysAgo: 20 });
+    const { lead: healthy } = await seedLeadWithConversation({ phone: '+16045550026', lastMessageDaysAgo: 20 });
+    const throwingGlm = {
+      name: 'glm',
+      reason: vi.fn()
+        .mockRejectedValueOnce(new Error('simulated GLM outage'))
+        .mockResolvedValueOnce({ content: '¡Hola de nuevo!' }),
+      extractReceipt: vi.fn(),
+    } as unknown as GlmAdapter;
+    const messaging = fakeMessaging();
+
+    const result = await runWeeklyReengagement(TENANT_ID, { glm: throwingGlm, messaging: { web: messaging } as never });
+
+    expect(result).toEqual({ sent: 1, skipped: 1 });
+    const brokenLead = await prisma.lead.findUniqueOrThrow({ where: { id: broken.id } });
+    expect(brokenLead.lastRemarketedAt).toBeNull();
+    const healthyLead = await prisma.lead.findUniqueOrThrow({ where: { id: healthy.id } });
+    expect(healthyLead.lastRemarketedAt).not.toBeNull();
   });
 });
