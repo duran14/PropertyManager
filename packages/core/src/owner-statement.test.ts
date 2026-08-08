@@ -52,7 +52,12 @@ describe('calculateOwnerStatement', () => {
     expect(result.ownerPayoutCents).toBe(175_000);
   });
 
-  it('tops the reserve back up after it was partially spent', () => {
+  // Nota: esta función pura no sabe (ni le importa) si `reserveAlreadyWithheldCents`
+  // bajó porque se gastó la reserva o simplemente porque es un valor de
+  // prueba menor al target. En producción ese valor es SUM(reserveWithheldCents)
+  // de los cierres previos, que solo crece — así que nunca baja y este caso
+  // no representa una "reposición" real. Ver docs/superpowers/specs/2026-08-08-fase-3-owner-statements-design.md.
+  it('withholds only the gap remaining between what was already withheld and the target', () => {
     const result = calculateOwnerStatement(input({
       rentIncomeCents: 200_000,
       reserveFundTargetCents: 50_000,

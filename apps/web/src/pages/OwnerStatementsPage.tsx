@@ -41,15 +41,20 @@ function money(cents: number): string {
   return (cents / 100).toLocaleString('en-CA', { style: 'currency', currency: 'CAD' });
 }
 
-function currentPeriod(): string {
+// El mes actual nunca se puede cerrar (closeOwnerStatement exige que el
+// periodo ya haya terminado): arrancar ahí le muestra a todo usuario un
+// botón que parece habilitado y devuelve 409 en su primer intento.
+// Arranca en el mes anterior, que casi siempre sí es cerrable.
+function defaultPeriod(): string {
   const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const previousMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  return `${previousMonth.getFullYear()}-${String(previousMonth.getMonth() + 1).padStart(2, '0')}`;
 }
 
 export function OwnerStatementsPage() {
   const queryClient = useQueryClient();
   const [propertyId, setPropertyId] = useState<string>('');
-  const [period, setPeriod] = useState<string>(currentPeriod());
+  const [period, setPeriod] = useState<string>(defaultPeriod());
   const [error, setError] = useState<string | null>(null);
 
   const properties = useQuery<{ properties: Property[] }>({

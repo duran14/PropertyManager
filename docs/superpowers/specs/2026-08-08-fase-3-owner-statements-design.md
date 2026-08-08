@@ -47,8 +47,12 @@ cuenta del dueño".
 - **Cierre manual por el PM**, no job automático: emitir un estado de
   cuenta es un acto contable con consecuencias, y el patrón HITL ya es la
   regla del proyecto (los Bills también requieren aprobación humana).
-- **Fondo de reserva acumulativo**: se retiene hasta alcanzar la meta,
-  luego se deja de retener; si se gasta, se repone.
+- **Fondo de reserva acumulativo**: se retiene hasta alcanzar la meta, y
+  luego se deja de retener. Es una retención única acumulativa, no un
+  saldo que se repone si se gasta (ver "El cálculo" más abajo — corregido
+  el 2026-08-08 tras el hallazgo de revisión final: la descripción
+  original decía "si se gasta, se repone", pero eso es inalcanzable con
+  el diseño elegido).
 - **Gastos a nivel propiedad**: se agrega `Bill.propertyId` para poder
   registrar gastos de edificio (techo, jardinería, seguro) que no
   pertenecen a una unidad.
@@ -96,10 +100,26 @@ Faltante         = max(0, −Neto)
 distinta y merece su propio campo. En cualquier mes, exactamente uno de los
 dos es cero.
 
-`reservaAcumulada` es la suma de `reserveWithheldCents` de todos los
-`OwnerStatement` ya cerrados de esa propiedad. No se guarda como columna:
-así, si un mes se gasta de la reserva, vuelve a retenerse hasta reponerla,
-sin mantener un "saldo de reserva" que sería custodia contable.
+`reservaAcumulada` es la suma de `reserveWithheldCents` de TODOS los
+`OwnerStatement` ya cerrados de esa propiedad (sin importar el orden en
+que se cerraron los meses — no hay filtro por periodo, porque nada obliga
+a cerrar los meses en secuencia). No se guarda como columna propia: se
+deriva con un `SUM` en cada cálculo.
+
+**Es una retención única acumulativa, no un fondo que se repone.** Una
+vez que `reservaAcumulada` alcanza `reserveFundTargetCents`, el cálculo
+dejará de retener para siempre, sin importar cuántos meses pasen después
+ni si ese dinero se gastó del banco real. La versión anterior de este
+spec decía "si se gasta, se repone" — eso describe un saldo de reserva
+con estado (sube cuando se retiene, baja cuando se gasta), y este sistema
+deliberadamente no tiene esa columna: `reservaAcumulada` se deriva de
+`SUM(reserveWithheldCents)` sobre cierres inmutables, un valor que por
+construcción solo puede crecer. Implementar la reposición real exigiría
+rastrear un saldo de reserva gastable — el saldo persistido que ADR-005
+evita — así que el usuario decidió corregir esta descripción en vez de
+construir esa reposición. Si el negocio la necesita, queda como trabajo
+futuro explícito y tendría que resolver primero cómo registrar "gasto de
+la reserva" sin abrir una subcuenta con saldo propio.
 
 ### Qué fechas definen el periodo
 
@@ -262,8 +282,11 @@ cualquier `throw` en 500, así que lanzar haría imposibles los 409/404.
 
 **Motor de cálculo (función pura, sin base de datos):**
 - Comisión con montos que caen en medio centavo.
-- Reserva en sus tres estados: acumulando, ya alcanzada, reponiéndose tras
-  gastarse.
+- Reserva en sus estados: acumulando, ya alcanzada, y el caso general de
+  retener solo el faltante hasta la meta dado un `reserveAlreadyWithheldCents`
+  parcial (la función pura no distingue por qué ese valor es parcial —
+  en producción solo puede serlo porque la meta aún no se alcanzó, nunca
+  porque la reserva se gastó y hay que reponerla).
 - Mes negativo, mes en cero.
 - **La invariante central**: las partes siempre suman exacto al ingreso, en
   todos los casos anteriores.
