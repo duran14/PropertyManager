@@ -618,7 +618,7 @@ export function alignInterpretedSlotsWithExpectedField(
 // frase de confirmación de ubicación que añadimos aquí debe adivinar el
 // idioma a partir de esa misma respuesta para no mezclar inglés fijo con
 // una respuesta en español.
-function looksLikeSpanish(text: string | undefined): boolean {
+export function looksLikeSpanish(text: string | undefined): boolean {
   if (!text) return false;
   if (/[ñ¿¡]/.test(text)) return true;
   if (/[áéíóúÁÉÍÓÚ]/.test(text)) return true;
@@ -650,8 +650,18 @@ const OPT_OUT_PATTERNS = [
   /(?<!don't )(?<!do not )\bstop messaging me\b/i,
 ];
 
+// iOS/Android autocorrect produce comillas tipográficas ('/'/") en vez del
+// apóstrofo ASCII que asumen los lookbehinds `(?<!don't )`/`(?<!do not )` de
+// arriba. Sin esta normalización, "please don’t unsubscribe me" (comilla
+// curva U+2019) hace match con el patrón de opt-out a pesar de la negación,
+// porque el lookbehind literal no reconoce U+2019 como equivalente a `'`.
+function normalizeSmartQuotes(message: string): string {
+  return message.replace(/[‘’`]/g, "'");
+}
+
 export function detectOptOutPhrase(message: string): boolean {
-  return OPT_OUT_PATTERNS.some((pattern) => pattern.test(message));
+  const normalized = normalizeSmartQuotes(message);
+  return OPT_OUT_PATTERNS.some((pattern) => pattern.test(normalized));
 }
 
 function areaConfirmationQuestion(area: string, province: string, spanish: boolean): string {
@@ -783,6 +793,21 @@ async function handleInboundMessageUnlocked(
       mediaUrls: input.mediaUrls ?? [],
     },
   });
+
+  // Fix 8: el opt-out se aplica lo antes posible tras persistir el mensaje
+  // entrante, ANTES de la lógica de state machine/GLM (JSON.parse de slots,
+  // llamadas a GLM, etc. pueden lanzar). Si eso ocurriera después de este
+  // punto, la señal de opt-out ya quedó grabada y no se pierde. No dependemos
+  // de que ensureLead ya haya corrido — updateMany vía la relación
+  // conversations funciona igual si el lead todavía no existe (no-op), que
+  // es una limitación aceptable: el primer mensaje de una conversación
+  // difícilmente es ya un opt-out.
+  if (detectOptOutPhrase(input.body)) {
+    await prisma.lead.updateMany({
+      where: { tenantId: input.tenantId, conversations: { some: { id: conversation.id } }, optedOutAt: null },
+      data: { optedOutAt: new Date() },
+    });
+  }
 
   // /start (Telegram) significa "empezar de cero": resetear estado y slots
   // para que el bot vuelva a saludar y calificar desde el principio, sin
@@ -1334,18 +1359,12 @@ async function handleInboundMessageUnlocked(
   });
 
   const leadCreated = await ensureLead(input.tenantId, conversation.id, input.from, input.body, input.channel, presentedUnit?.id);
-  if (detectOptOutPhrase(input.body)) {
-    const linkedConversation = await prisma.chatConversation.findUnique({
-      where: { id: conversation.id },
-      select: { leadId: true },
-    });
-    if (linkedConversation?.leadId) {
-      await prisma.lead.update({
-        where: { id: linkedConversation.leadId },
-        data: { optedOutAt: new Date() },
-      });
-    }
-  }
+  // El opt-out ya se aplicó arriba, justo tras persistir el mensaje entrante
+  // (Fix 8), antes de que cualquier lógica de state machine/GLM pudiera
+  // lanzar. Si en ese momento no existía lead todavía (primer mensaje del
+  // prospecto), el updateMany fue un no-op — limitación aceptada a propósito
+  // (ver comentario arriba): un primer mensaje que ya sea opt-out es
+  // extremadamente improbable, y no hay lead que marcar en ese instante.
   if (effectiveSlots.prospect_name) {
     await prisma.lead.updateMany({
       where: { tenantId: input.tenantId, conversations: { some: { id: conversation.id } } },

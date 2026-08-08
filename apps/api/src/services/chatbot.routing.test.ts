@@ -264,4 +264,24 @@ describe('chatbot routing integration (handleInboundMessage)', () => {
     const lead = await prisma.lead.findFirst({ where: { tenantId: TENANT_ID, phone: '+16045550198' } });
     expect(lead?.optedOutAt).toBeNull();
   });
+
+  it('does not false-positive on a curly-quote "don\'t" negation (Fix 8)', async () => {
+    const { glm } = glmReturning('{"reply":"Claro.","intent":"other","slots":{},"profile":{"set":{},"clear":[]},"confidence":"low"}');
+
+    await handleInboundMessage(
+      { tenantId: TENANT_ID, from: '+16045550197', body: 'Hi, I’m looking for a 2 bedroom', channel: 'web' },
+      { glm, messaging, showmojo },
+    );
+    // Curly/smart apostrophe (U+2019), what iOS/Android autocorrect actually
+    // produces — the negative lookbehind in OPT_OUT_PATTERNS only matches
+    // the ASCII apostrophe, so without normalizing smart quotes first this
+    // would false-positive as an opt-out despite the "don't" negation.
+    await handleInboundMessage(
+      { tenantId: TENANT_ID, from: '+16045550197', body: 'please don’t unsubscribe me, I love this', channel: 'web' },
+      { glm, messaging, showmojo },
+    );
+
+    const lead = await prisma.lead.findFirst({ where: { tenantId: TENANT_ID, phone: '+16045550197' } });
+    expect(lead?.optedOutAt).toBeNull();
+  });
 });
