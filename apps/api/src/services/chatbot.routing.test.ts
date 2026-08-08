@@ -236,4 +236,32 @@ describe('chatbot routing integration (handleInboundMessage)', () => {
     expect(lead?.source).toBe('messenger');
     expect(lead?.preferredChannel).toBe('messenger');
   });
+
+  it('marks Lead.optedOutAt when an inbound message contains an explicit opt-out phrase', async () => {
+    const { glm } = glmReturning('{"reply":"Entendido.","intent":"other","slots":{},"profile":{"set":{},"clear":[]},"confidence":"low"}');
+
+    await handleInboundMessage(
+      { tenantId: TENANT_ID, from: '+16045550199', body: 'Hola, busco depa de 2 recámaras', channel: 'web' },
+      { glm, messaging, showmojo },
+    );
+    await handleInboundMessage(
+      { tenantId: TENANT_ID, from: '+16045550199', body: 'ya no me manden mensajes por favor', channel: 'web' },
+      { glm, messaging, showmojo },
+    );
+
+    const lead = await prisma.lead.findFirst({ where: { tenantId: TENANT_ID, phone: '+16045550199' } });
+    expect(lead?.optedOutAt).not.toBeNull();
+  });
+
+  it('does not mark Lead.optedOutAt for an ordinary message', async () => {
+    const { glm } = glmReturning('{"reply":"Claro, cuéntame más.","intent":"other","slots":{},"profile":{"set":{},"clear":[]},"confidence":"low"}');
+
+    await handleInboundMessage(
+      { tenantId: TENANT_ID, from: '+16045550198', body: 'Hola, busco depa de 2 recámaras', channel: 'web' },
+      { glm, messaging, showmojo },
+    );
+
+    const lead = await prisma.lead.findFirst({ where: { tenantId: TENANT_ID, phone: '+16045550198' } });
+    expect(lead?.optedOutAt).toBeNull();
+  });
 });

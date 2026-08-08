@@ -52,6 +52,7 @@ import {
   resolveOwnershipTurnToInterpreted,
   classifyProfileSlotKey,
   shouldSkipContextualSlotHeuristics,
+  detectOptOutPhrase,
 } from './chatbot.service.js';
 import type { AvailableUnit, ConversationState, InterpretedTurn } from './chatbot.service.js';
 import type { ConversationTurn } from './rental-conversation.types.js';
@@ -2299,5 +2300,29 @@ describe('shouldSkipContextualSlotHeuristics (Finding 2: never mutate the profil
 
     expect(mergedSlots).not.toHaveProperty('bedrooms_min');
     expect(mergedSlots).not.toHaveProperty('bedrooms_max');
+  });
+
+  it.each([
+    'no me contacten más por favor',
+    'no me escriban más',
+    'dejen de escribirme',
+    'quítenme de la lista',
+    'ya no me manden mensajes',
+    'unsubscribe',
+    'please unsubscribe me',
+    'stop contacting me',
+    'stop messaging me',
+  ])('detects an explicit opt-out phrase: %s', (message) => {
+    expect(detectOptOutPhrase(message)).toBe(true);
+  });
+
+  it.each([
+    'no me interesa este depa',
+    'no gracias',
+    'no tengo mascotas',
+    'estoy buscando algo con más espacio',
+    'hola, quiero rentar un depa',
+  ])('does not flag an ordinary message as opt-out: %s', (message) => {
+    expect(detectOptOutPhrase(message)).toBe(false);
   });
 });

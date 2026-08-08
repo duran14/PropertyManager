@@ -625,6 +625,26 @@ function looksLikeSpanish(text: string | undefined): boolean {
   return /\b(hola|s[ií]|gracias|quiero|necesito|busco|cu[aá]nt[ao]s?|d[oó]nde|correcto|perfecto|entonces|recamaras?|recámaras?|habitaciones|presupuesto|mudanza|renta)\b/i.test(text);
 }
 
+// Frases de alta precisión únicamente — "no me interesa" o "no gracias"
+// son negaciones normales de conversación y NO deben disparar opt-out.
+// Un falso positivo (excluir a alguien que sigue interesado) es peor que
+// un falso negativo (alguien que de verdad no quiere más mensajes tiene
+// que escribirlo de forma más explícita una vez).
+const OPT_OUT_PATTERNS = [
+  /no me contact/i,
+  /no me escriban? m[aá]s/i,
+  /dejen? de escribirme/i,
+  /qu[ií]tenme de la lista/i,
+  /ya no me manden mensajes/i,
+  /\bunsubscribe\b/i,
+  /\bstop contacting me\b/i,
+  /\bstop messaging me\b/i,
+];
+
+export function detectOptOutPhrase(message: string): boolean {
+  return OPT_OUT_PATTERNS.some((pattern) => pattern.test(message));
+}
+
 function areaConfirmationQuestion(area: string, province: string, spanish: boolean): string {
   return spanish
     ? `Solo para confirmar, ¿te refieres a ${area}, ${province}?`
@@ -1305,6 +1325,18 @@ async function handleInboundMessageUnlocked(
   });
 
   const leadCreated = await ensureLead(input.tenantId, conversation.id, input.from, input.body, input.channel, presentedUnit?.id);
+  if (detectOptOutPhrase(input.body)) {
+    const linkedConversation = await prisma.chatConversation.findUnique({
+      where: { id: conversation.id },
+      select: { leadId: true },
+    });
+    if (linkedConversation?.leadId) {
+      await prisma.lead.update({
+        where: { id: linkedConversation.leadId },
+        data: { optedOutAt: new Date() },
+      });
+    }
+  }
   if (effectiveSlots.prospect_name) {
     await prisma.lead.updateMany({
       where: { tenantId: input.tenantId, conversations: { some: { id: conversation.id } } },
