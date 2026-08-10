@@ -50,30 +50,33 @@ model Tenant {
   shortlists            PropertyShortlist[]
   rentalApplications    RentalApplication[]
   ownerStatements       OwnerStatement[]
+  calendarConnections   CalendarConnection[]
+  schedulingConfig      SchedulingConfig?
 
   @@map("tenants")
 }
 
 model User {
-  id           String    @id @default(cuid())
-  tenantId     String
-  email        String    @unique
-  passwordHash String
-  firstName    String
-  lastName     String
-  role         UserRole // property_manager | bookkeeper | broker
-  isActive     Boolean   @default(true)
-  lastLoginAt  DateTime?
+  id                  String       @id @default(cuid())
+  tenantId            String
+  email               String       @unique
+  passwordHash        String
+  firstName           String
+  lastName            String
+  role                UserRole // property_manager | bookkeeper | broker
+  isActive            Boolean      @default(true)
+  lastLoginAt         DateTime?
   // Canal opcional para notificaciones proactivas al staff (ej. aviso de
   // aplicación recibida). Sin esto configurado, solo se notifica por email.
   notificationChannel ChatChannel?
   notificationAddress String?
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
 
-  tenant             Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  conversationEvents ConversationEvent[]
-  assignedLeads      Lead[]              @relation("LeadAssignedUser")
+  tenant              Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  conversationEvents  ConversationEvent[]
+  assignedLeads       Lead[]               @relation("LeadAssignedUser")
+  calendarConnections CalendarConnection[]
 
   @@index([tenantId])
   @@map("users")
@@ -90,21 +93,21 @@ enum UserRole {
 // =============================================================================
 
 model Property {
-  id         String   @id @default(cuid())
-  tenantId   String
-  name       String
-  address    String
-  city       String
-  province   String   @default("BC")
-  postalCode String?
+  id                      String   @id @default(cuid())
+  tenantId                String
+  name                    String
+  address                 String
+  city                    String
+  province                String   @default("BC")
+  postalCode              String?
   // Fase 3: configuración contable de la propiedad.
   ownerId                 String?
   // Comisión en basis points enteros (1250 = 12.5%): el schema prohíbe
   // float para dinero, y bps mantiene el porcentaje exacto.
   managementFeePercentBps Int      @default(1250)
   reserveFundTargetCents  Int      @default(0)
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
 
   tenant     Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   owner      Owner?           @relation(fields: [ownerId], references: [id])
@@ -159,12 +162,12 @@ model Unit {
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
-  property          Property           @relation(fields: [propertyId], references: [id], onDelete: Cascade)
-  leases            Lease[]
-  leads             Lead[]
-  chatConversations ChatConversation[]
-  showings          Showing[]
-  listingPhotos     ListingPhoto[]
+  property           Property            @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  leases             Lease[]
+  leads              Lead[]
+  chatConversations  ChatConversation[]
+  showings           Showing[]
+  listingPhotos      ListingPhoto[]
   rentalApplications RentalApplication[]
 
   @@unique([tenantId, slug])
@@ -597,22 +600,22 @@ model ChatConversation {
 }
 
 model PropertyShortlist {
-  id               String   @id @default(cuid())
-  tokenHash        String   @unique
+  id               String    @id @default(cuid())
+  tokenHash        String    @unique
   tenantId         String
   conversationId   String
   unitIds          String[]
   selectedUnitId   String?
-  status           String   @default("awaiting_preference")
+  status           String    @default("awaiting_preference")
   expiresAt        DateTime
   viewedAt         DateTime?
   scheduledAt      DateTime?
-  reminderCount    Int      @default(0)
+  reminderCount    Int       @default(0)
   nextReminderAt   DateTime?
   lastReminderAt   DateTime?
-  remindersStopped Boolean  @default(false)
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  remindersStopped Boolean   @default(false)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 
   tenant       Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   conversation ChatConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
@@ -646,18 +649,18 @@ model ConversationSlot {
 }
 
 model ChatMessage {
-  id             String   @id @default(cuid())
-  conversationId String
-  role           String // user | assistant | system
-  content        String
+  id                    String    @id @default(cuid())
+  conversationId        String
+  role                  String // user | assistant | system
+  content               String
   // URLs de imágenes/media si el mensaje las incluye (MMS, WhatsApp media, etc.)
-  mediaUrls      String[]
-  deliveryStatus String   @default("sent") // pending | sent | failed
-  deliveryError  String?
-  deliveryAttempts Int @default(0)
+  mediaUrls             String[]
+  deliveryStatus        String    @default("sent") // pending | sent | failed
+  deliveryError         String?
+  deliveryAttempts      Int       @default(0)
   deliveryNextAttemptAt DateTime?
-  providerMessageIds String[] @default([])
-  createdAt      DateTime @default(now())
+  providerMessageIds    String[]  @default([])
+  createdAt             DateTime  @default(now())
 
   conversation ChatConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
 
@@ -712,35 +715,44 @@ model ConversationEvent {
 
 // Modelo para visitas agendadas (ShowMojo o manual)
 model Showing {
-  id              String        @id @default(cuid())
-  tenantId        String
-  leadId          String
-  unitId          String?
+  id                    String        @id @default(cuid())
+  tenantId              String
+  leadId                String
+  unitId                String?
   // Referencia externa en ShowMojo
-  showmojoId      String?
-  scheduledAt     DateTime
-  durationMinutes Int           @default(30)
+  showmojoId            String?
+  scheduledAt           DateTime
+  durationMinutes       Int           @default(30)
   // Broker/PM asignado a la visita
-  brokerUserId    String?
-  status          ShowingStatus @default(scheduled)
+  brokerUserId          String?
+  status                ShowingStatus @default(scheduled)
   // URL de la visita en ShowMojo (si aplica)
-  showmojoUrl     String?
+  showmojoUrl           String?
   // Prevents two active tours for one prospect at the exact same time.
-  activeSlotKey   String?
+  activeSlotKey         String?
   // Uses a normalized email or phone so duplicate leads cannot reserve the same time.
   activeProspectSlotKey String?
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
+  // Evento en Google Calendar que bloquea este horario. Nulo cuando el
+  // showing existe pero no quedó bloqueado en ningún calendario: la
+  // pantalla de Showings lo marca con advertencia.
+  googleEventId         String?
+  googleCalendarId      String?
+  // Red de concurrencia: "<ownerKey>:<startAt ISO>". Se limpia al cancelar
+  // para que el hueco vuelva a ofrecerse.
+  calendarSlotKey       String?
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
 
-  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  lead   Lead   @relation(fields: [leadId], references: [id], onDelete: Cascade)
-  unit   Unit?  @relation(fields: [unitId], references: [id])
+  tenant            Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  lead              Lead               @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  unit              Unit?              @relation(fields: [unitId], references: [id])
   rentalApplication RentalApplication?
 
-  @@index([tenantId, status])
-  @@index([tenantId, scheduledAt])
   @@unique([tenantId, activeSlotKey])
   @@unique([tenantId, activeProspectSlotKey])
+  @@unique([tenantId, calendarSlotKey])
+  @@index([tenantId, status])
+  @@index([tenantId, scheduledAt])
   @@map("showings")
 }
 
@@ -750,6 +762,74 @@ enum ShowingStatus {
   completed
   cancelled
   no_show
+}
+
+// =============================================================================
+// Fase 1.3 — Calendario de la agencia (Google) y configuración de agenda
+// =============================================================================
+
+model CalendarConnection {
+  id                   String                   @id @default(cuid())
+  tenantId             String
+  provider             CalendarProvider         @default(google)
+  // Dueño de la conexión. Hoy siempre null (nivel agencia). La fase
+  // por-broker lo llena sin migrar la tabla.
+  userId               String?
+  // Derivado en la misma escritura: "tenant" cuando userId es null,
+  // "user:<id>" cuando no. Existe porque en Postgres dos NULL se consideran
+  // distintos entre sí: una unique sobre userId nulo NO impediría dos
+  // conexiones de agencia para el mismo tenant.
+  ownerKey             String
+  // Solo para mostrar en la UI de quién es la cuenta conectada.
+  accountEmail         String
+  // Calendario secundario que crea la app; ahí viven los showings.
+  showingsCalendarId   String
+  // Cifrados con apps/api/src/config/crypto.ts (AES-256-GCM).
+  refreshTokenEnc      String
+  accessTokenEnc       String?
+  accessTokenExpiresAt DateTime?
+  status               CalendarConnectionStatus @default(active)
+  lastError            String?
+  lastErrorAt          DateTime?
+  createdAt            DateTime                 @default(now())
+  updatedAt            DateTime                 @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   User?  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, ownerKey])
+  @@index([tenantId, status])
+  @@map("calendar_connections")
+}
+
+enum CalendarProvider {
+  google
+}
+
+enum CalendarConnectionStatus {
+  active
+  revoked
+}
+
+model SchedulingConfig {
+  id                     String   @id @default(cuid())
+  tenantId               String   @unique
+  // Formato en packages/core/src/availability.ts (WeeklyHoursSchema).
+  // Sin @default a propósito: el valor por defecto lo escribe el servicio
+  // desde DEFAULT_WEEKLY_HOURS, para que exista una sola definición.
+  weeklyHours            Json
+  timeZone               String   @default("America/Vancouver")
+  showingDurationMinutes Int      @default(30)
+  bufferMinutes          Int      @default(30)
+  minNoticeHours         Int      @default(4)
+  maxAdvanceDays         Int      @default(14)
+  slotGranularityMinutes Int      @default(30)
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("scheduling_configs")
 }
 
 // Fotos de unidades para listings (originales + mejoradas con IA)
@@ -794,16 +874,16 @@ enum PhotoStatus {
 }
 
 model RentalApplication {
-  id        String   @id @default(cuid())
+  id        String  @id @default(cuid())
   tenantId  String
-  showingId String   @unique
+  showingId String  @unique
   leadId    String
   unitId    String?
 
   tokenHash String   @unique
   expiresAt DateTime
 
-  status    String   @default("invited") // invited | submitted
+  status String @default("invited") // invited | submitted
 
   // Datos capturados cuando el prospecto envía el formulario
   annualIncome         Int?
@@ -820,8 +900,8 @@ model RentalApplication {
   consentPoliceCheckAt DateTime?
 
   submittedAt DateTime?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
   tenant  Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   showing Showing @relation(fields: [showingId], references: [id], onDelete: Cascade)
