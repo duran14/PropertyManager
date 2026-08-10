@@ -116,6 +116,15 @@ const envSchema = z.object({
   RESEND_API_KEY: z.string().optional().default(''),
   RESEND_FROM_EMAIL: z.string().optional().default(''),
 
+  // --- Google Calendar (Fase 1.3). Sin client id/secret → mock. ---
+  GOOGLE_CLIENT_ID: z.string().optional().default(''),
+  GOOGLE_CLIENT_SECRET: z.string().optional().default(''),
+  // Si queda vacía se arma como `${API_URL}/integrations/google-calendar/callback`.
+  // Debe coincidir CARÁCTER POR CARÁCTER con la registrada en Google Cloud.
+  GOOGLE_OAUTH_REDIRECT_URI: z
+    .union([z.string().url(), z.literal('')])
+    .default(''),
+
   // --- Umbral HITL por defecto ---
   DEFAULT_CONFIDENCE_THRESHOLD: z.coerce.number().min(0).max(1).default(0.85),
 });
@@ -134,7 +143,8 @@ export type IntegrationKey =
   | 'docusign'
   | 'telegram'
   | 'messenger'
-  | 'email';
+  | 'email'
+  | 'google_calendar';
 
 /**
  * Carga y valida process.env contra el schema. Lanza (fail-fast) si algo
@@ -181,5 +191,7 @@ export function isIntegrationConfigured(env: Env, key: IntegrationKey): boolean 
       return Boolean(env.MESSENGER_PAGE_ACCESS_TOKEN && env.MESSENGER_APP_SECRET);
     case 'email':
       return Boolean(env.RESEND_API_KEY && env.RESEND_FROM_EMAIL);
+    case 'google_calendar':
+      return Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET);
   }
 }

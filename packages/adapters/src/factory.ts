@@ -12,6 +12,7 @@ import {
 } from '@property-manager/config';
 import type {
   BuildiumAdapter,
+  CalendarAdapter,
   ChatChannel,
   GlmAdapter,
   InboundMessage,
@@ -25,6 +26,7 @@ import type {
   TwilioAdapter,
 } from './contracts.js';
 import { BuildiumMockAdapter } from './mocks/buildium.mock.js';
+import { CalendarMockAdapter } from './mocks/calendar.mock.js';
 import { GlmMockAdapter } from './mocks/glm.mock.js';
 import { PhotoEnhancementMockAdapter } from './mocks/photo-enhancement.mock.js';
 import { PlaidMockAdapter } from './mocks/plaid.mock.js';
@@ -51,6 +53,7 @@ export interface Adapters {
   stripe: StripeAdapter;
   photoEnhancement: PhotoEnhancementAdapter;
   showmojo: ShowMojoAdapter;
+  calendar: CalendarAdapter;
   /** Adapters de mensajería por canal (para el chatbot omnicanal). */
   messaging: Record<ChatChannel, MessagingAdapter>;
   /** Lista de integraciones que están en modo mock (para logs/UI). */
@@ -84,7 +87,12 @@ export function createAdapters(env: Env): Adapters {
     telegram: !isIntegrationConfigured(env, 'telegram'),
     messenger: !isIntegrationConfigured(env, 'messenger'),
     email: !isIntegrationConfigured(env, 'email'),
+    google_calendar: !isIntegrationConfigured(env, 'google_calendar'),
   };
+
+  // El adapter real llega en la tarea siguiente; hasta entonces el mock
+  // cubre ambos casos y el flag solo alimenta mockModes.
+  const calendar: CalendarAdapter = new CalendarMockAdapter();
 
   return {
     buildium: new BuildiumMockAdapter(),
@@ -102,6 +110,7 @@ export function createAdapters(env: Env): Adapters {
     stripe: new StripeMockAdapter(),
     photoEnhancement: new PhotoEnhancementMockAdapter(),
     showmojo: new ShowMojoMockAdapter(),
+    calendar,
     messaging: {
       whatsapp: new TwilioMessagingWrapper(
         twilioAdapter,

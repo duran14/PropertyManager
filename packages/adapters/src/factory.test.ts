@@ -55,6 +55,9 @@ const baseEnv: Env = {
   MESSENGER_DEFAULT_TENANT_ID: 'tenant_demo_pm',
   RESEND_API_KEY: '',
   RESEND_FROM_EMAIL: '',
+  GOOGLE_CLIENT_ID: '',
+  GOOGLE_CLIENT_SECRET: '',
+  GOOGLE_OAUTH_REDIRECT_URI: '',
   DEFAULT_CONFIDENCE_THRESHOLD: 0.85,
 };
 
@@ -134,5 +137,11 @@ describe('createAdapters', () => {
 
     expect(adapters.messaging.messenger).toBeInstanceOf(MessengerRealAdapter);
     expect(adapters.mockModes.messenger).toBe(false);
+  });
+
+  it('cae al mock de calendario sin credenciales de Google', () => {
+    const adapters = createAdapters(baseEnv);
+    expect(adapters.calendar.name).toBe('calendar_mock');
+    expect(adapters.mockModes.google_calendar).toBe(true);
   });
 });

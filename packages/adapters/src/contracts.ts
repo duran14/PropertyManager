@@ -381,3 +381,75 @@ export interface ShowMojoAdapter {
   /** Parsea los webhooks entrantes de ShowMojo. */
   parseWebhook(headers: Record<string, string>, body: unknown): Promise<ShowMojoWebhookEvent>;
 }
+
+// -----------------------------------------------------------------------------
+// Calendario — disponibilidad y eventos de showings
+//
+// El adapter NO sabe de la base de datos: recibe un access token ya válido y
+// hace la llamada. Quien guarda, descifra y refresca tokens es el servicio.
+// -----------------------------------------------------------------------------
+
+export interface CalendarBusyInterval {
+  startAt: IsoDate;
+  endAt: IsoDate;
+}
+
+export interface CalendarEventInput {
+  calendarId: string;
+  summary: string;
+  description?: string;
+  location?: string;
+  startAt: IsoDate;
+  endAt: IsoDate;
+  timeZone: string;
+  /** Si viene vacío o ausente, el evento se crea sin invitados. */
+  attendeeEmails?: string[];
+}
+
+export type CalendarRefreshResult =
+  | { ok: true; accessToken: string; expiresInSeconds: number }
+  | { ok: false; reason: 'revoked' | 'provider_error'; detail: string };
+
+export interface CalendarAdapter {
+  readonly name: 'google_calendar' | 'calendar_mock';
+
+  /** Construye la URL de consentimiento. `state` va tal cual. */
+  buildAuthorizeUrl(input: { redirectUri: string; state: string }): string;
+
+  exchangeAuthorizationCode(input: { code: string; redirectUri: string }): Promise<{
+    refreshToken: string;
+    accessToken: string;
+    expiresInSeconds: number;
+    accountEmail: string;
+  }>;
+
+  /**
+   * Discriminado a propósito: distinguir "el manager revocó el acceso" de
+   * "Google está caído" cambia lo que hace el sistema — lo primero apaga la
+   * conexión, lo segundo es transitorio.
+   */
+  refreshAccessToken(input: { refreshToken: string }): Promise<CalendarRefreshResult>;
+
+  /** Crea el calendario "Property Showings" si no existe. Idempotente. */
+  ensureShowingsCalendar(input: {
+    accessToken: string;
+    timeZone: string;
+  }): Promise<{ calendarId: string }>;
+
+  getBusy(input: {
+    accessToken: string;
+    calendarIds: string[];
+    from: IsoDate;
+    to: IsoDate;
+  }): Promise<CalendarBusyInterval[]>;
+
+  createEvent(
+    input: { accessToken: string } & CalendarEventInput,
+  ): Promise<{ eventId: string; htmlLink?: string }>;
+
+  deleteEvent(input: {
+    accessToken: string;
+    calendarId: string;
+    eventId: string;
+  }): Promise<void>;
+}
