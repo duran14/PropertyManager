@@ -68,13 +68,19 @@
   - Pausar respuestas automáticas del bot.
   - Disparar una notificación instantánea al manager (Telegram Bot Webhook / Push / WhatsApp API) con el enlace directo al chat.
 
-### 1.3 Asignación de Showings y Sync de Calendario
+### 1.3 Asignación de Showings y Sync de Calendario ✅ Entregado
 
 - **Integración:** Google Calendar API (OAuth 2.0 per User/Manager).
 - **Lógica:**
   - Leer eventos existentes para identificar huecos disponibles según el horario configurado del manager (ej. L-V 9:00-17:00).
   - Ocultar razones personales del calendario (mostrar únicamente slots como `Disponible` / `Ocupado`).
   - Generar la cita en Google Calendar y crear el registro en la tabla `showings`.
+
+> Ver [`docs/GOOGLE_CALENDAR_SETUP.md`](./GOOGLE_CALENDAR_SETUP.md) para
+> conectar el calendario. Quedó fuera de esta entrega: un calendario por
+> broker (hoy la conexión es una sola por tenant) y sync de dos vías (hoy
+> solo se lee free/busy y se escriben los eventos que crea el asistente;
+> cambios hechos directamente en Google no se reflejan de vuelta en la app).
 
 ---
 

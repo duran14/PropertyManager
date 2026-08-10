@@ -1,7 +1,10 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiFetch, ApiError } from '../lib/apiClient';
+import { useAuth } from '../auth/AuthContext';
 import { Icon, IconBadge } from '../components/Icon';
+import { CalendarSettingsCard } from '../components/CalendarSettingsCard';
 
 interface Showing {
   id: string;
@@ -11,6 +14,9 @@ interface Showing {
   brokerUserId: string | null;
   status: 'scheduled' | 'confirmed' | 'completed' | 'cancelled' | 'no_show';
   showmojoUrl: string | null;
+  // Fase 1.3: si sigue nulo en 'scheduled', el auto-booking no logró crear
+  // el evento en Google Calendar (o el showing es previo a la conexión).
+  googleEventId?: string | null;
   lead: { name: string | null; phone: string | null; email: string | null };
   unit: { name: string; property: { name: string; address: string; city: string } } | null;
 }
@@ -151,6 +157,8 @@ function CompletedApplicationPanel({ showingId }: { showingId: string }) {
 
 export function ShowingsPage() {
   const queryClient = useQueryClient();
+  const { user } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [filter, setFilter] = useState<string>('');
   // Resultado (o error) de la última llamada a "Mark as completed" por
   // showing, para mostrarlo en la tarjeta — el backend solo lo devuelve una
@@ -159,6 +167,23 @@ export function ShowingsPage() {
   const [completionResults, setCompletionResults] = useState<Record<string, CompleteShowingResponse>>({});
   const [completionErrors, setCompletionErrors] = useState<Record<string, string>>({});
   const [copiedShowingId, setCopiedShowingId] = useState<string | null>(null);
+
+  // El callback de OAuth de Google redirige aquí con ?calendar=connected|error
+  // (ver apps/api/src/routes/integrations.google-calendar.ts). Se captura una
+  // sola vez al montar y se limpia el parámetro para que no reaparezca al
+  // recargar la página.
+  const [calendarNotice, setCalendarNotice] = useState<{ status: 'connected' | 'error'; reason: string | null } | null>(null);
+  useEffect(() => {
+    const status = searchParams.get('calendar');
+    if (status === 'connected' || status === 'error') {
+      setCalendarNotice({ status, reason: searchParams.get('reason') });
+      const next = new URLSearchParams(searchParams);
+      next.delete('calendar');
+      next.delete('reason');
+      setSearchParams(next, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const { data, isLoading } = useQuery<{ showings: Showing[] }>({
     queryKey: ['showings', filter],
@@ -235,6 +260,25 @@ export function ShowingsPage() {
         </div>
       </div>
 
+      {calendarNotice && (
+        <div
+          role="alert"
+          className={`mb-4 rounded-md border p-3 text-sm ${
+            calendarNotice.status === 'connected'
+              ? 'border-green-200 bg-green-50 text-green-800'
+              : 'border-red-200 bg-red-50 text-red-700'
+          }`}
+        >
+          {calendarNotice.status === 'connected'
+            ? 'Google Calendar quedó conectado.'
+            : `No se pudo conectar Google Calendar${calendarNotice.reason ? ` (${calendarNotice.reason})` : ''}.`}
+        </div>
+      )}
+
+      <div className="mb-6">
+        <CalendarSettingsCard canManage={user?.role === 'property_manager'} />
+      </div>
+
       <div className="mb-6 flex gap-2 text-sm">
         {['', 'scheduled', 'confirmed', 'completed', 'cancelled'].map((f) => (
           <button
@@ -288,6 +332,16 @@ export function ShowingsPage() {
                           {meta.label}
                         </span>
                       </div>
+
+                      {showing.status === 'scheduled' && !showing.googleEventId && (
+                        // El auto-booking no logró crear el evento en Google Calendar (o el
+                        // showing es previo a conectar el calendario): nadie lo va a ver como
+                        // ocupado hasta que alguien lo bloquee a mano.
+                        <div className="mb-2 inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-800">
+                          <Icon name="warning" size={12} />
+                          sin bloquear en calendario
+                        </div>
+                      )}
 
                       <div className="mb-2">
                         <div className="font-medium text-slate-900">

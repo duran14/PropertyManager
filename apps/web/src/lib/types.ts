@@ -292,3 +292,24 @@ export interface ChainVerification {
   totalEntries: number;
   intact: boolean;
 }
+
+// Fase 1.3: conexión con Google Calendar y horario de agendamiento.
+export interface SchedulingConfig {
+  weeklyHours: Record<'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun',
+    Array<{ from: string; to: string }>>;
+  timeZone: string;
+  showingDurationMinutes: number;
+  bufferMinutes: number;
+  minNoticeHours: number;
+  maxAdvanceDays: number;
+  slotGranularityMinutes: number;
+}
+
+export interface CalendarConnectionStatus {
+  connected: boolean;
+  accountEmail?: string;
+  status?: 'active' | 'revoked';
+  lastError?: string | null;
+  lastErrorAt?: string | null;
+  config: SchedulingConfig;
+}
