@@ -457,14 +457,21 @@ Se agregan a `packages/config/src/env.ts`, todas opcionales:
 GOOGLE_CLIENT_ID              default ''
 GOOGLE_CLIENT_SECRET          default ''
 GOOGLE_OAUTH_REDIRECT_URI     default ''  → si vacío se usa
-                              `${API_URL}/api/integrations/google-calendar/callback`
+                              `${API_URL}/integrations/google-calendar/callback`
 ```
 
 ### 3.4 Rutas
 
 Nuevo router `apps/api/src/routes/integrations.google-calendar.ts`, montado
-en `/api/integrations/google-calendar`. Todas requieren sesión; conectar y
+en `/integrations/google-calendar`. Todas requieren sesión; conectar y
 desconectar exigen rol `property_manager`.
+
+**Cuidado con el prefijo:** la API monta sus routers en la raíz
+(`/leads`, `/properties`, …). El `/api` que se ve en el navegador lo agrega
+el proxy de Vite en desarrollo. La URI de redirección que se registra en
+Google Cloud es la de la **API**, sin `/api`, y debe coincidir carácter por
+carácter con la que se manda en la petición de autorización o Google
+rechaza el canje.
 
 | Método | Ruta | Qué hace |
 |---|---|---|
