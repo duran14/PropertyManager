@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { monthBoundsUtc, parseStatementPeriod } from './period.js';
+import { monthBoundsUtc, parseStatementPeriod, zonedDateTimeToUtc } from './period.js';
 
 /** Renderiza una fecha UTC como local time en Vancouver: YYYY-MM-DD HH:mm:ss */
 function renderInVancouver(date: Date): string {
@@ -87,5 +87,44 @@ describe('monthBoundsUtc', () => {
     // 2025-12-31 16:00:00 (día anterior). Esto verifica que no lo hicimos.
     const { periodStart } = monthBoundsUtc(2025, 1);
     expect(renderInVancouver(periodStart)).toBe('2025-01-01 00:00:00');
+  });
+});
+
+describe('zonedDateTimeToUtc', () => {
+  // Se afirma la PROPIEDAD (cómo se renderiza en esa zona), no una
+  // constante UTC: los datos IANA de Vancouver cambian con los años.
+  function renderInZone(date: Date, timeZone: string): string {
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone,
+      hour12: false,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    }).format(date);
+  }
+
+  it('devuelve el instante que se ve como esa hora local en enero', () => {
+    const utc = zonedDateTimeToUtc(2026, 1, 15, 9, 0, 'America/Vancouver');
+    expect(renderInZone(utc, 'America/Vancouver')).toContain('09:00');
+    expect(renderInZone(utc, 'America/Vancouver')).toContain('2026-01-15');
+  });
+
+  it('devuelve el instante que se ve como esa hora local en julio', () => {
+    const utc = zonedDateTimeToUtc(2026, 7, 15, 9, 0, 'America/Vancouver');
+    expect(renderInZone(utc, 'America/Vancouver')).toContain('09:00');
+    expect(renderInZone(utc, 'America/Vancouver')).toContain('2026-07-15');
+  });
+
+  it('funciona igual en una zona con offset positivo', () => {
+    const utc = zonedDateTimeToUtc(2026, 3, 20, 14, 30, 'Europe/Madrid');
+    expect(renderInZone(utc, 'Europe/Madrid')).toContain('14:30');
+  });
+
+  it('monthBoundsUtc sigue dando la medianoche local del día 1', () => {
+    const { periodStart } = monthBoundsUtc(2026, 3, 'America/Vancouver');
+    expect(renderInZone(periodStart, 'America/Vancouver')).toContain('00:00');
+    expect(renderInZone(periodStart, 'America/Vancouver')).toContain('2026-03-01');
   });
 });

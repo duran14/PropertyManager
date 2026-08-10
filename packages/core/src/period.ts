@@ -35,17 +35,29 @@ export function monthBoundsUtc(
   const nextYear = month === 12 ? year + 1 : year;
   const nextMonth = month === 12 ? 1 : month + 1;
   return {
-    periodStart: zonedMonthStart(year, month, timeZone),
-    periodEnd: zonedMonthStart(nextYear, nextMonth, timeZone),
+    periodStart: zonedDateTimeToUtc(year, month, 1, 0, 0, timeZone),
+    periodEnd: zonedDateTimeToUtc(nextYear, nextMonth, 1, 0, 0, timeZone),
   };
 }
 
-/** Instante UTC que corresponde a la medianoche del día 1 en esa zona. */
-function zonedMonthStart(year: number, month: number, timeZone: string): Date {
-  // Se parte de la medianoche UTC y se corrige por el offset vigente EN
-  // ESE instante, así cada límite usa su propio offset de horario de
-  // verano en vez de uno compartido para todo el mes.
-  const guess = Date.UTC(year, month - 1, 1, 0, 0, 0, 0);
+/**
+ * Instante UTC que corresponde a esa fecha y hora LOCALES en la zona dada.
+ *
+ * Se parte del mismo reloj interpretado como UTC y se corrige por el offset
+ * vigente EN ESE instante, así cada fecha usa su propio offset de horario de
+ * verano en vez de uno compartido para todo el rango.
+ *
+ * `month` es 1-12.
+ */
+export function zonedDateTimeToUtc(
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+  timeZone: string,
+): Date {
+  const guess = Date.UTC(year, month - 1, day, hour, minute, 0, 0);
   const offsetMs = timeZoneOffsetMs(new Date(guess), timeZone);
   return new Date(guess + offsetMs);
 }
