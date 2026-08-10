@@ -130,6 +130,11 @@ export function CalendarSettingsCard({ canManage }: Props) {
           >
             {authorize.isPending ? 'Connecting…' : 'Connect Google Calendar'}
           </button>
+          {authorize.isError && (
+            <p role="alert" className="mt-2 text-sm text-red-600">
+              Could not start the Google Calendar connection. Please try again.
+            </p>
+          )}
         </div>
       )}
 
@@ -147,6 +152,11 @@ export function CalendarSettingsCard({ canManage }: Props) {
               Disconnect
             </button>
           </div>
+          {disconnect.isError && (
+            <p role="alert" className="text-sm text-red-600">
+              Could not disconnect Google Calendar. Please try again.
+            </p>
+          )}
 
           {data.status === 'revoked' && (
             <div role="alert" className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
@@ -158,6 +168,11 @@ export function CalendarSettingsCard({ canManage }: Props) {
               >
                 {authorize.isPending ? 'Reconnecting…' : 'Reconnect'}
               </button>
+              {authorize.isError && (
+                <p role="alert" className="mt-2 text-xs text-red-700">
+                  Could not reconnect. Please try again.
+                </p>
+              )}
             </div>
           )}
 

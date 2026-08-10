@@ -121,13 +121,16 @@ function CatalogModal({
   onClose: () => void;
   onScheduled: (unit: CatalogUnit) => void;
 }) {
-  const [slots, setSlots] = useState<Array<{ index: number; label: string }>>([]);
-  const [selectedSlot, setSelectedSlot] = useState<number | undefined>();
+  const [slots, setSlots] = useState<Array<{ index: number; startAt: string; label: string }>>([]);
+  // Guarda el startAt exacto elegido, no un índice: un índice reindexado
+  // contra disponibilidad recién recalculada en el servidor puede apuntar a
+  // un hueco distinto del que el prospecto vio y clickeó.
+  const [selectedSlot, setSelectedSlot] = useState<string | undefined>();
   const [formContact, setFormContact] = useState(contact);
 
   const slotsQuery = useQuery({
     queryKey: ['catalog-slots', unit.slug],
-    queryFn: () => apiFetch<{ slots: Array<{ index: number; label: string }> }>(`/public/units/${unit.slug}/slots`, {}, tenantId),
+    queryFn: () => apiFetch<{ slots: Array<{ index: number; startAt: string; label: string }> }>(`/public/units/${unit.slug}/slots`, {}, tenantId),
     enabled: !!unit.slug,
   });
 
@@ -139,7 +142,7 @@ function CatalogModal({
     mutationFn: () =>
       apiFetch(`/public/units/${unit.slug}/schedule`, {
         method: 'POST',
-        body: JSON.stringify({ slotIndex: selectedSlot, ...formContact }),
+        body: JSON.stringify({ startAt: selectedSlot, ...formContact }),
       }, tenantId),
     onSuccess: () => onScheduled(unit),
   });
@@ -175,6 +178,12 @@ function CatalogModal({
 
           {slotsQuery.isLoading && <p className="mt-5 text-slate-500">Loading tour times…</p>}
 
+          {slotsQuery.isError && (
+            <div role="alert" className="mt-5 rounded-xl border border-amber-200 bg-amber-50 p-4 text-amber-800">
+              Online booking isn't available right now — we'll follow up to confirm a time.
+            </div>
+          )}
+
           {slots.length > 0 && (
             <form
               onSubmit={(e) => { e.preventDefault(); if (selectedSlot !== undefined) scheduleMutation.mutate(); }}
@@ -185,11 +194,11 @@ function CatalogModal({
                 {slots.map((slot) => (
                   <button
                     type="button"
-                    key={slot.index}
-                    onClick={() => setSelectedSlot(slot.index)}
-                    className={`rounded-xl border p-3 text-left text-sm ${selectedSlot === slot.index ? 'border-emerald-500 bg-emerald-50 ring-2 ring-emerald-200' : 'border-slate-300 hover:border-emerald-500'}`}
+                    key={slot.startAt}
+                    onClick={() => setSelectedSlot(slot.startAt)}
+                    className={`rounded-xl border p-3 text-left text-sm ${selectedSlot === slot.startAt ? 'border-emerald-500 bg-emerald-50 ring-2 ring-emerald-200' : 'border-slate-300 hover:border-emerald-500'}`}
                   >
-                    {selectedSlot === slot.index ? '✓ ' : ''}{slot.label}
+                    {selectedSlot === slot.startAt ? '✓ ' : ''}{slot.label}
                   </button>
                 ))}
               </div>
@@ -215,8 +224,10 @@ function CatalogModal({
 export function ShortlistPage() {
   const { token = '' } = useParams();
   const [selected, setSelected] = useState<string>();
-  const [slots, setSlots] = useState<Array<{ index: number; label: string }>>([]);
-  const [selectedSlot, setSelectedSlot] = useState<number>();
+  // Guarda el startAt exacto del hueco elegido, no un índice: reindexar
+  // contra disponibilidad recalculada en el servidor puede apuntar a un
+  // hueco distinto del que el prospecto vio y clickeó (Finding 1).
+  const [selectedSlot, setSelectedSlot] = useState<string>();
   const [confirmed, setConfirmed] = useState('');
   const [confirmedUnit, setConfirmedUnit] = useState('');
   const [confirmedAddress, setConfirmedAddress] = useState('');
@@ -234,7 +245,6 @@ export function ShortlistPage() {
 
   useEffect(() => {
     setSelected(undefined);
-    setSlots([]);
     setSelectedSlot(undefined);
     setConfirmed('');
     setConfirmedUnit('');
@@ -248,25 +258,35 @@ export function ShortlistPage() {
     setContact((current) => ({ ...current, ...data.contact }));
   }, [data]);
 
-  const choose = useMutation({
-    mutationFn: async (unitId: string) => {
-      await apiFetch(`/public/shortlists/${token}/select`, {
+  // Solo registra la selección del lado del servidor; NO depende de que la
+  // disponibilidad de horarios también funcione. Antes ambos pasos vivían en
+  // un mismo mutationFn, así que si el GET de horarios fallaba (503, sin
+  // calendario conectado — el estado normal el día uno de este feature),
+  // onSuccess nunca corría y el prospecto que clickeaba "Choose this
+  // property" no veía ni el check de selección ni ningún mensaje (Finding 3).
+  const selectMutation = useMutation({
+    mutationFn: (unitId: string) =>
+      apiFetch(`/public/shortlists/${token}/select`, {
         method: 'POST',
         body: JSON.stringify({ unitId }),
-      });
-      return apiFetch<{ slots: Array<{ index: number; label: string }> }>(
-        `/public/shortlists/${token}/slots`,
-      );
-    },
-    onSuccess: (result, unitId) => {
+      }),
+    onSuccess: (_result, unitId) => {
       setSelected(unitId);
       setSelectedSlot(undefined);
-      setSlots(result.slots);
       requestAnimationFrame(() =>
         bookingRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
       );
     },
   });
+
+  const slotsQuery = useQuery({
+    queryKey: ['shortlist-slots', token, selected],
+    queryFn: () => apiFetch<{ slots: Array<{ index: number; startAt: string; label: string }> }>(
+      `/public/shortlists/${token}/slots`,
+    ),
+    enabled: !!selected,
+  });
+  const slots = slotsQuery.data?.slots ?? [];
 
   const schedule = useMutation({
     mutationFn: () =>
@@ -274,7 +294,7 @@ export function ShortlistPage() {
         `/public/shortlists/${token}/schedule`,
         {
           method: 'POST',
-          body: JSON.stringify({ slotIndex: selectedSlot, ...contact }),
+          body: JSON.stringify({ startAt: selectedSlot, ...contact }),
         },
       ),
     onSuccess: (result) => {
@@ -321,7 +341,7 @@ export function ShortlistPage() {
 
   const selectedUnit = data.units.find((unit) => unit.id === selected);
   const selectedOption = data.units.findIndex((unit) => unit.id === selected) + 1;
-  const selectedSlotLabel = slots.find((slot) => slot.index === selectedSlot)?.label;
+  const selectedSlotLabel = slots.find((slot) => slot.startAt === selectedSlot)?.label;
 
   return (
     <main className="min-h-screen bg-slate-50 px-5 py-10">
@@ -361,8 +381,8 @@ export function ShortlistPage() {
                   <li>{unit.petPolicy ?? 'Ask about pets'}</li>
                 </ul>
                 <button
-                  disabled={choose.isPending}
-                  onClick={() => choose.mutate(unit.id)}
+                  disabled={selectMutation.isPending}
+                  onClick={() => selectMutation.mutate(unit.id)}
                   className={`mt-5 w-full rounded-xl px-4 py-3 font-semibold text-white disabled:opacity-60 ${selected === unit.id ? 'bg-emerald-600' : 'bg-slate-900'}`}
                 >
                   {selected === unit.id ? '✓ Selected — view tour times' : 'Choose this property'}
@@ -373,7 +393,7 @@ export function ShortlistPage() {
         </div>
 
         {/* Sección de booking para opciones preseleccionadas */}
-        {selectedUnit && slots.length > 0 && !confirmed && (
+        {selectedUnit && !confirmed && (
           <section ref={bookingRef} className="mt-10 scroll-mt-6 rounded-2xl bg-white p-6 shadow-sm">
             <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-5">
               <p className="text-sm font-semibold uppercase tracking-wide text-emerald-700">You're scheduling a tour for</p>
@@ -383,45 +403,60 @@ export function ShortlistPage() {
               </p>
             </div>
 
-            <h3 className="mt-7 text-2xl font-bold">1. Choose a tour time</h3>
-            <div className="mt-4 grid gap-3 sm:grid-cols-2">
-              {slots.map((slot) => (
-                <button
-                  type="button"
-                  key={slot.index}
-                  onClick={() => setSelectedSlot(slot.index)}
-                  className={`rounded-xl border p-4 text-left ${selectedSlot === slot.index ? 'border-emerald-500 bg-emerald-50 ring-2 ring-emerald-200' : 'border-slate-300 hover:border-emerald-500'}`}
-                >
-                  {selectedSlot === slot.index ? '✓ ' : ''}{slot.label}
-                </button>
-              ))}
-            </div>
+            {slotsQuery.isLoading && <p className="mt-6 text-slate-500">Loading tour times…</p>}
 
-            <form onSubmit={submitBooking} className="mt-8 border-t border-slate-200 pt-7">
-              <h3 className="text-2xl font-bold">2. Confirm your contact details</h3>
-              <div className="mt-5 grid gap-5 sm:grid-cols-2">
-                <label className="font-medium text-slate-800">
-                  Name
-                  <input required value={contact.name} onChange={(event) => setContact({ ...contact, name: event.target.value })} autoComplete="name" className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 font-normal" />
-                </label>
-                <label className="font-medium text-slate-800">
-                  Phone
-                  <input required type="tel" value={contact.phone} onChange={(event) => setContact({ ...contact, phone: event.target.value })} autoComplete="tel" placeholder="+1 604 555 0123" className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 font-normal" />
-                </label>
-                <label className="font-medium text-slate-800 sm:col-span-2">
-                  Email
-                  <input required type="email" value={contact.email} onChange={(event) => setContact({ ...contact, email: event.target.value })} autoComplete="email" placeholder="you@example.com" className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 font-normal" />
-                </label>
+            {/* No es un caso raro: es el estado por defecto de cualquier
+                tenant hasta que un PM conecta su calendario, así que el
+                prospecto necesita una explicación honesta, no silencio. */}
+            {slotsQuery.isError && (
+              <div role="alert" className="mt-6 rounded-xl border border-amber-200 bg-amber-50 p-4 text-amber-800">
+                Online booking isn't available right now — we'll follow up to confirm a time.
               </div>
+            )}
 
-              {selectedSlotLabel && (
-                <p className="mt-5 rounded-xl bg-slate-100 p-4 text-slate-800"><strong>Selected time:</strong> {selectedSlotLabel}</p>
-              )}
-              <button disabled={selectedSlot === undefined || schedule.isPending} className="mt-5 w-full rounded-xl bg-emerald-600 px-5 py-4 text-lg font-bold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50">
-                {schedule.isPending ? 'Scheduling your tour…' : 'Confirm tour'}
-              </button>
-              {schedule.isError && <p className="mt-4 text-red-700">We couldn't schedule that time. Please review your details or choose another option.</p>}
-            </form>
+            {slots.length > 0 && (
+              <>
+                <h3 className="mt-7 text-2xl font-bold">1. Choose a tour time</h3>
+                <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                  {slots.map((slot) => (
+                    <button
+                      type="button"
+                      key={slot.startAt}
+                      onClick={() => setSelectedSlot(slot.startAt)}
+                      className={`rounded-xl border p-4 text-left ${selectedSlot === slot.startAt ? 'border-emerald-500 bg-emerald-50 ring-2 ring-emerald-200' : 'border-slate-300 hover:border-emerald-500'}`}
+                    >
+                      {selectedSlot === slot.startAt ? '✓ ' : ''}{slot.label}
+                    </button>
+                  ))}
+                </div>
+
+                <form onSubmit={submitBooking} className="mt-8 border-t border-slate-200 pt-7">
+                  <h3 className="text-2xl font-bold">2. Confirm your contact details</h3>
+                  <div className="mt-5 grid gap-5 sm:grid-cols-2">
+                    <label className="font-medium text-slate-800">
+                      Name
+                      <input required value={contact.name} onChange={(event) => setContact({ ...contact, name: event.target.value })} autoComplete="name" className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 font-normal" />
+                    </label>
+                    <label className="font-medium text-slate-800">
+                      Phone
+                      <input required type="tel" value={contact.phone} onChange={(event) => setContact({ ...contact, phone: event.target.value })} autoComplete="tel" placeholder="+1 604 555 0123" className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 font-normal" />
+                    </label>
+                    <label className="font-medium text-slate-800 sm:col-span-2">
+                      Email
+                      <input required type="email" value={contact.email} onChange={(event) => setContact({ ...contact, email: event.target.value })} autoComplete="email" placeholder="you@example.com" className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 font-normal" />
+                    </label>
+                  </div>
+
+                  {selectedSlotLabel && (
+                    <p className="mt-5 rounded-xl bg-slate-100 p-4 text-slate-800"><strong>Selected time:</strong> {selectedSlotLabel}</p>
+                  )}
+                  <button disabled={selectedSlot === undefined || schedule.isPending} className="mt-5 w-full rounded-xl bg-emerald-600 px-5 py-4 text-lg font-bold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50">
+                    {schedule.isPending ? 'Scheduling your tour…' : 'Confirm tour'}
+                  </button>
+                  {schedule.isError && <p className="mt-4 text-red-700">We couldn't schedule that time. Please review your details or choose another option.</p>}
+                </form>
+              </>
+            )}
           </section>
         )}
 

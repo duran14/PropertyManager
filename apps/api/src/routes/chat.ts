@@ -227,6 +227,15 @@ chatRouter.post('/conversations/:id/showing', requireAuth, async (req, res, next
         res.status(400).json({ error: err.message });
         return;
       }
+      // `calendarSlotKey` es único por tenant: un showing manual a un
+      // instante que otro lead (cualquier unidad) ya tiene tomado choca esa
+      // unique, igual que puede chocar la de activeSlotKey/
+      // activeProspectSlotKey si es el mismo prospecto. Sin este mapeo el
+      // throw de scheduling.service caería al handler genérico → 500.
+      if (err.message === 'slot_taken' || err.message === 'prospect_double_booked') {
+        res.status(409).json({ error: err.message });
+        return;
+      }
     }
     next(err);
   }

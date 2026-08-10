@@ -140,19 +140,20 @@ publicRouter.post('/shortlists/:token/schedule', async (req, res, next) => {
         ...(booking.notes ? { message: booking.notes } : {}),
       },
     });
-    const availability = await getSchedulingAvailability(shortlist.tenantId, shortlist.selectedUnitId);
-    if (!availability.ok) {
-      const status = availability.reason === 'unit_not_found' ? 404 : 503;
-      res.status(status).json({ error: availability.reason });
-      return;
-    }
-    const chosen = availability.slots[booking.slotIndex];
-    if (!chosen) return void res.status(409).json({ error: 'slot_no_longer_offered' });
+    // Se resuelve por el startAt exacto que el prospecto vio, NO por índice
+    // contra una disponibilidad recién recalculada: `getSchedulingAvailability`
+    // corre `from = now + minNoticeHours`, así que si pasaron minutos entre el
+    // GET de horarios y este POST, la cabeza de la lista pudo caerse y todos
+    // los índices siguientes correrse uno hacia abajo. Reindexar aquí
+    // reservaría silenciosamente el hueco equivocado. `bookShowingFromCalendar`
+    // ya hace este mismo match por startAt contra disponibilidad fresca
+    // internamente y devuelve `slot_no_longer_offered` si ya no está — no hace
+    // falta duplicar esa validación aquí.
     const booked = await bookShowingFromCalendar({
       tenantId: shortlist.tenantId,
       unitId: shortlist.selectedUnitId,
       leadId: lead.id,
-      startAt: new Date(chosen.startAt),
+      startAt: new Date(booking.startAt),
       prospectName: booking.name,
       prospectPhone: booking.phone,
       prospectEmail: booking.email,
@@ -442,7 +443,10 @@ publicRouter.get('/units/:slug/slots', async (req, res, next) => {
 });
 
 const publicScheduleSchema = z.object({
-  slotIndex: z.number().int().min(0),
+  // ISO exacto del hueco elegido, no un índice — ver el comentario en la
+  // ruta de shortlists más arriba para el porqué (drift de `slotIndex`
+  // contra una disponibilidad recalculada).
+  startAt: z.string().datetime(),
   name: z.string().min(1),
   phone: z.string().min(1),
   email: z.string().email(),
@@ -474,19 +478,15 @@ publicRouter.post('/units/:slug/schedule', async (req, res, next) => {
       });
     }
 
-    const availability = await getSchedulingAvailability(tenantId, unit.id);
-    if (!availability.ok) {
-      const status = availability.reason === 'unit_not_found' ? 404 : 503;
-      res.status(status).json({ error: availability.reason });
-      return;
-    }
-    const chosen = availability.slots[parsed.data.slotIndex];
-    if (!chosen) return void res.status(409).json({ error: 'slot_no_longer_offered' });
+    // Igual que en la ruta de shortlists: se resuelve por el startAt exacto,
+    // no reindexando contra disponibilidad recién recalculada.
+    // `bookShowingFromCalendar` revalida ese startAt contra disponibilidad
+    // fresca y devuelve `slot_no_longer_offered` si ya no está.
     const booked = await bookShowingFromCalendar({
       tenantId,
       unitId: unit.id,
       leadId: lead.id,
-      startAt: new Date(chosen.startAt),
+      startAt: new Date(parsed.data.startAt),
       prospectName: parsed.data.name,
       prospectPhone: parsed.data.phone,
       prospectEmail: parsed.data.email,

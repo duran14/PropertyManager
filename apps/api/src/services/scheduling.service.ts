@@ -402,43 +402,66 @@ export async function createManualShowingFromConversation(input: {
   // de conexión hoy es siempre a nivel agencia (ownerKey null), igual que en
   // getUsableAccessToken.
   const calendarSlotKey = `${tenantOwnerKey(null)}:${input.scheduledAt.toISOString()}`;
-  const showing = await prisma.$transaction(async (tx) => {
-    const dbShowing = await tx.showing.create({
-      data: {
-        tenantId: input.tenantId,
-        leadId,
-        unitId,
-        scheduledAt: input.scheduledAt,
-        durationMinutes,
-        status: 'scheduled',
-        calendarSlotKey,
-        activeSlotKey: showingSlotKey(leadId, input.scheduledAt),
-        activeProspectSlotKey: buildProspectSlotKey({
-          leadId,
-          email: lead.email,
-          phone: lead.phone,
-        }, input.scheduledAt),
-      },
-      include: {
-        lead: { select: { name: true, phone: true, email: true } },
-        unit: {
-          select: { name: true, property: { select: { name: true, address: true, city: true } } },
-        },
-      },
-    });
+  // IIFE en vez de `let showing` + try/catch envolviendo la asignación: así
+  // TS sigue infiriendo el tipo de retorno de la transacción en vez de
+  // ensanchar `showing` a `any` por falta de anotación.
+  const showing = await (async () => {
+    try {
+      return await prisma.$transaction(async (tx) => {
+        const dbShowing = await tx.showing.create({
+          data: {
+            tenantId: input.tenantId,
+            leadId,
+            unitId,
+            scheduledAt: input.scheduledAt,
+            durationMinutes,
+            status: 'scheduled',
+            calendarSlotKey,
+            activeSlotKey: showingSlotKey(leadId, input.scheduledAt),
+            activeProspectSlotKey: buildProspectSlotKey({
+              leadId,
+              email: lead.email,
+              phone: lead.phone,
+            }, input.scheduledAt),
+          },
+          include: {
+            lead: { select: { name: true, phone: true, email: true } },
+            unit: {
+              select: { name: true, property: { select: { name: true, address: true, city: true } } },
+            },
+          },
+        });
 
-    await tx.lead.update({
-      where: { id: leadId },
-      data: { status: 'tour_scheduled' },
-    });
+        await tx.lead.update({
+          where: { id: leadId },
+          data: { status: 'tour_scheduled' },
+        });
 
-    await tx.chatConversation.update({
-      where: { id: conversation.id },
-      data: { state: 'scheduling' },
-    });
+        await tx.chatConversation.update({
+          where: { id: conversation.id },
+          data: { state: 'scheduling' },
+        });
 
-    return dbShowing;
-  });
+        return dbShowing;
+      });
+    } catch (error) {
+      // `calendarSlotKey` es único POR TENANT, no por lead: un PM agendando a
+      // mano a un instante que ya tiene CUALQUIER OTRO lead (en cualquier
+      // unidad) choca esta unique. Sin este catch, el P2002 sube sin marcar
+      // hasta el error handler global → 500 opaco, y en la UI el PM ve que no
+      // pasó nada al hacer clic (Finding 2 de la revisión final). Se sigue la
+      // misma convención de throw-tipado-que-la-ruta-mapea que ya usa esta
+      // función para "Conversation not found" y compañía, en vez de inventar
+      // un valor de retorno nuevo solo para este caso.
+      if (isUniqueViolation(error, 'calendarSlotKey')) {
+        throw new Error('slot_taken');
+      }
+      if (isUniqueViolation(error, 'activeProspectSlotKey') || isUniqueViolation(error, 'activeSlotKey')) {
+        throw new Error('prospect_double_booked');
+      }
+      throw error;
+    }
+  })();
 
   await writeAudit({
     tenantId: input.tenantId,

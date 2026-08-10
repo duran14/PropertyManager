@@ -103,6 +103,9 @@ beforeEach(async () => {
 
 afterEach(async () => {
   vi.restoreAllMocks();
+  // Ninguna prueba de este archivo debería dejar el reloj congelado para la
+  // siguiente — restoreAllMocks no cubre useFakeTimers/setSystemTime.
+  vi.useRealTimers();
   await cleanup();
 });
 
@@ -282,6 +285,68 @@ describe('bookShowingFromCalendar', () => {
   });
 });
 
+describe('bookShowingFromCalendar — drift entre el GET de horarios y el POST de reserva (Finding 1)', () => {
+  it('rechaza un startAt que se cayó de la ventana de min-notice tras avanzar el reloj, en vez de reservar otro hueco', async () => {
+    const { unitId, leadId } = await seed();
+    await connectCalendar();
+
+    // Reloj fijo y horario laboral cómodo (lejos de medianoche) para que el
+    // resultado no dependa de a qué hora real corre la prueba: 2026-01-05 es
+    // lunes, 10:00 America/Vancouver (UTC-8 en enero, sin DST) = 18:00 UTC.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-05T18:00:00.000Z'));
+
+    // Aviso mínimo y granularidad chicos para poder empujar el primer hueco
+    // fuera de la ventana con un salto de reloj pequeño y determinista.
+    await prisma.schedulingConfig.upsert({
+      where: { tenantId: TENANT_ID },
+      update: { minNoticeHours: 1, slotGranularityMinutes: 15, showingDurationMinutes: 15, bufferMinutes: 0 },
+      create: {
+        tenantId: TENANT_ID,
+        weeklyHours: { mon: [{ from: '09:00', to: '17:00' }], tue: [], wed: [], thu: [], fri: [], sat: [], sun: [] },
+        minNoticeHours: 1,
+        slotGranularityMinutes: 15,
+        showingDurationMinutes: 15,
+        bufferMinutes: 0,
+      },
+    });
+
+    // Esto simula el GET .../slots que el prospecto ve: captura el startAt
+    // exacto del primer hueco (11:00 Vancouver: 10:00 + 1h de aviso).
+    const seen = await getSchedulingAvailability(TENANT_ID, unitId);
+    if (!seen.ok) throw new Error('se esperaban huecos');
+    const staleStartAt = seen.slots[0]!.startAt;
+
+    // El prospecto tarda en llenar el formulario: el reloj avanza más que la
+    // granularidad. El "ahora" que ve el servidor en el POST ya no es el
+    // mismo que cuando se ofrecieron los horarios.
+    vi.setSystemTime(new Date('2026-01-05T18:20:00.000Z'));
+
+    const driftedAvailability = await getSchedulingAvailability(TENANT_ID, unitId);
+    if (!driftedAvailability.ok) throw new Error('se esperaban huecos tras el drift');
+    // Confirma que el drift realmente movió la lista — si no, la prueba no
+    // estaría probando nada.
+    expect(driftedAvailability.slots.map((slot) => slot.startAt)).not.toContain(staleStartAt);
+
+    // El bug del Finding 1 era que la RUTA reindexaba `slots[booking.slotIndex]`
+    // contra esta disponibilidad ya corrida, reservando silenciosamente el
+    // hueco que ahora ocupa ese índice — no el que el prospecto vio. Con el
+    // fix, la ruta ya no reindexa: pasa el startAt tal cual, y
+    // bookShowingFromCalendar debe rechazarlo porque ya no está en la lista
+    // fresca, en vez de reservar el hueco que quedó en su lugar.
+    const result = await bookShowingFromCalendar({
+      tenantId: TENANT_ID,
+      unitId,
+      leadId,
+      startAt: new Date(staleStartAt),
+      prospectName: 'Ana Prospect',
+    });
+
+    expect(result).toEqual({ ok: false, status: 409, error: 'slot_no_longer_offered' });
+    expect(await prisma.showing.count({ where: { tenantId: TENANT_ID } })).toBe(0);
+  });
+});
+
 describe('cancelShowing', () => {
   it('borra el evento de Google y libera el hueco', async () => {
     const { unitId, leadId, userId } = await seed();
@@ -356,6 +421,37 @@ describe('createManualShowingFromConversation', () => {
     });
 
     expect(result).toEqual({ ok: false, status: 409, error: 'slot_taken' });
+    expect(await prisma.showing.count({ where: { tenantId: TENANT_ID } })).toBe(1);
+  });
+
+  it('dos reservas manuales al mismo instante crean exactamente un showing; la segunda falla con un resultado discriminado, no una excepción sin marcar (Finding 2)', async () => {
+    const { unitId, leadId, secondLeadId, userId } = await seed();
+    await connectCalendar();
+    const available = await getSchedulingAvailability(TENANT_ID, unitId);
+    if (!available.ok) throw new Error('se esperaban huecos');
+    const startAt = new Date(available.slots[0]!.startAt);
+
+    const conversationA = await prisma.chatConversation.create({
+      data: { tenantId: TENANT_ID, externalId: `manual-a-${TENANT_ID}`, channel: 'web', leadId, unitId },
+    });
+    const conversationB = await prisma.chatConversation.create({
+      data: { tenantId: TENANT_ID, externalId: `manual-b-${TENANT_ID}`, channel: 'web', leadId: secondLeadId, unitId },
+    });
+
+    const first = await createManualShowingFromConversation({
+      tenantId: TENANT_ID, conversationId: conversationA.id, scheduledAt: startAt, actorId: userId,
+    });
+    expect(first.calendarSlotKey).toContain('tenant:');
+
+    // `calendarSlotKey` es único por tenant, no por lead: un segundo PM (o el
+    // mismo) agendando a mano el MISMO instante para OTRO lead choca esa
+    // unique. Antes del fix esto lanzaba un P2002 sin marcar que el error
+    // handler global convertía en un 500 opaco — el PM veía que no pasaba
+    // nada al hacer clic.
+    await expect(createManualShowingFromConversation({
+      tenantId: TENANT_ID, conversationId: conversationB.id, scheduledAt: startAt, actorId: userId,
+    })).rejects.toThrow('slot_taken');
+
     expect(await prisma.showing.count({ where: { tenantId: TENANT_ID } })).toBe(1);
   });
 });

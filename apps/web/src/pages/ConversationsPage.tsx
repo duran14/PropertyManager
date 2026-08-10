@@ -15,7 +15,7 @@ import {
   buildShowingSuggestedReply,
   stageSuggestedReply,
 } from '@property-manager/core/showing-messages';
-import { apiFetch } from '../lib/apiClient';
+import { apiFetch, ApiError } from '../lib/apiClient';
 import { Icon } from '../components/Icon';
 import type { LeadStatus } from '../lib/types';
 
@@ -919,6 +919,14 @@ export function ConversationsPage() {
                 {(!selected.lead || !selected.unit) && (
                   <p className="mt-2 text-xs text-slate-400">
                     A linked lead and recommended unit are required.
+                  </p>
+                )}
+                {scheduleShowingMutation.isError && (
+                  <p role="alert" className="mt-2 text-xs text-red-600">
+                    {scheduleShowingMutation.error instanceof ApiError
+                      && scheduleShowingMutation.error.message === 'slot_taken'
+                      ? 'That time is already booked for another lead. Choose a different time.'
+                      : 'Could not create the showing. Please try again.'}
                   </p>
                 )}
                 {(selected.showings ?? []).length > 0 && (
