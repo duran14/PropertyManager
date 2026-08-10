@@ -58,8 +58,17 @@ export function zonedDateTimeToUtc(
   timeZone: string,
 ): Date {
   const guess = Date.UTC(year, month - 1, day, hour, minute, 0, 0);
-  const offsetMs = timeZoneOffsetMs(new Date(guess), timeZone);
-  return new Date(guess + offsetMs);
+  const firstPassOffsetMs = timeZoneOffsetMs(new Date(guess), timeZone);
+  const candidate = guess + firstPassOffsetMs;
+  // Segunda pasada: si la hora local pedida cae justo después de un cambio
+  // de horario (mismo día calendario que el "spring forward"), el offset
+  // vigente en el instante candidato ya no es el mismo que en el instante
+  // de la adivinanza inicial. Sin esta corrección, una hora local de las
+  // 09:00 podría resolverse como si aún fuera el offset previo a la
+  // transición, entregando un instante que en realidad se ve como las
+  // 10:00 en la zona.
+  const secondPassOffsetMs = timeZoneOffsetMs(new Date(candidate), timeZone);
+  return new Date(guess + secondPassOffsetMs);
 }
 
 /** Cuántos ms va UTC por delante de la zona en ese instante. */
