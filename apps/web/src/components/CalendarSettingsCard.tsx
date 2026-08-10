@@ -11,13 +11,13 @@ interface Props {
 type WeekdayKey = keyof SchedulingConfig['weeklyHours'];
 
 const WEEKDAYS: Array<{ key: WeekdayKey; label: string }> = [
-  { key: 'mon', label: 'Lunes' },
-  { key: 'tue', label: 'Martes' },
-  { key: 'wed', label: 'Miércoles' },
-  { key: 'thu', label: 'Jueves' },
-  { key: 'fri', label: 'Viernes' },
-  { key: 'sat', label: 'Sábado' },
-  { key: 'sun', label: 'Domingo' },
+  { key: 'mon', label: 'Mon' },
+  { key: 'tue', label: 'Tue' },
+  { key: 'wed', label: 'Wed' },
+  { key: 'thu', label: 'Thu' },
+  { key: 'fri', label: 'Fri' },
+  { key: 'sat', label: 'Sat' },
+  { key: 'sun', label: 'Sun' },
 ];
 
 const DURATION_OPTIONS = [15, 30, 45, 60];
@@ -58,7 +58,7 @@ export function CalendarSettingsCard({ canManage }: Props) {
     },
     // El 400 del servidor trae el detalle de qué regla se rompió: se muestra
     // tal cual en vez de un "algo salió mal".
-    onError: (error) => setSaveError(error instanceof Error ? error.message : 'No se pudo guardar'),
+    onError: (error) => setSaveError(error instanceof Error ? error.message : 'Could not save'),
   });
 
   const config = draft ?? connection.data?.config ?? null;
@@ -91,7 +91,7 @@ export function CalendarSettingsCard({ canManage }: Props) {
   function handleDisconnect(): void {
     // Cortar la conexión detiene el auto-booking de inmediato; confirmar
     // antes evita un clic accidental que rompa el agendamiento en curso.
-    if (window.confirm('¿Desconectar Google Calendar? El asistente dejará de agendar showings automáticamente.')) {
+    if (window.confirm('Disconnect Google Calendar? The assistant will stop booking showings automatically.')) {
       disconnect.mutate();
     }
   }
@@ -99,7 +99,7 @@ export function CalendarSettingsCard({ canManage }: Props) {
   if (connection.isLoading) {
     return (
       <div className="rounded-lg border border-slate-200 bg-white p-5">
-        <p className="text-sm text-slate-400">Cargando configuración de calendario…</p>
+        <p className="text-sm text-slate-400">Loading calendar settings…</p>
       </div>
     );
   }
@@ -107,7 +107,7 @@ export function CalendarSettingsCard({ canManage }: Props) {
   if (connection.isError || !connection.data) {
     return (
       <div role="alert" className="rounded-lg border border-red-200 bg-red-50 p-5 text-sm text-red-700">
-        No se pudo cargar el estado de la conexión con Google Calendar.
+        Could not load the Google Calendar connection status.
       </div>
     );
   }
@@ -116,19 +116,19 @@ export function CalendarSettingsCard({ canManage }: Props) {
 
   return (
     <div className="rounded-lg border border-slate-200 bg-white p-5">
-      <h2 className="text-lg font-medium text-slate-900">Agenda y calendario</h2>
+      <h2 className="text-lg font-medium text-slate-900">Scheduling & Calendar</h2>
 
       {!data.connected && (
         <div className="mt-2">
           <p className="text-sm text-slate-600">
-            Sin un calendario conectado, el asistente no puede agendar showings por su cuenta.
+            Without a connected calendar, the assistant can't book showings on its own.
           </p>
           <button
             onClick={() => authorize.mutate()}
             disabled={!canManage || authorize.isPending}
             className="mt-3 rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
           >
-            {authorize.isPending ? 'Conectando…' : 'Conectar Google Calendar'}
+            {authorize.isPending ? 'Connecting…' : 'Connect Google Calendar'}
           </button>
         </div>
       )}
@@ -137,26 +137,26 @@ export function CalendarSettingsCard({ canManage }: Props) {
         <div className="mt-2 space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <p className="text-sm text-slate-600">
-              Conectado como <span className="font-medium text-slate-900">{data.accountEmail}</span>.
+              Connected as <span className="font-medium text-slate-900">{data.accountEmail}</span>.
             </p>
             <button
               onClick={handleDisconnect}
               disabled={!canManage || disconnect.isPending}
               className="rounded-md bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-100 disabled:opacity-50"
             >
-              Desconectar
+              Disconnect
             </button>
           </div>
 
           {data.status === 'revoked' && (
             <div role="alert" className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
-              <p>{data.lastError ?? 'Google revocó el acceso a este calendario.'}</p>
+              <p>{data.lastError ?? 'Google revoked access to this calendar.'}</p>
               <button
                 onClick={() => authorize.mutate()}
                 disabled={!canManage || authorize.isPending}
                 className="mt-2 rounded-md bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-50"
               >
-                {authorize.isPending ? 'Reconectando…' : 'Reconectar'}
+                {authorize.isPending ? 'Reconnecting…' : 'Reconnect'}
               </button>
             </div>
           )}
@@ -169,7 +169,7 @@ export function CalendarSettingsCard({ canManage }: Props) {
                     <span className="w-20 pt-1.5 text-sm text-slate-600">{label}</span>
                     <div className="flex-1 flex flex-wrap items-center gap-2">
                       {config.weeklyHours[key].length === 0 && (
-                        <span className="text-xs text-slate-400">Sin horario</span>
+                        <span className="text-xs text-slate-400">No hours set</span>
                       )}
                       {config.weeklyHours[key].map((range, index) => (
                         <div key={index} className="flex items-center gap-1.5">
@@ -194,7 +194,7 @@ export function CalendarSettingsCard({ canManage }: Props) {
                             disabled={!canManage}
                             className="text-xs text-red-600 hover:underline disabled:opacity-50"
                           >
-                            Quitar
+                            Remove
                           </button>
                         </div>
                       ))}
@@ -204,7 +204,7 @@ export function CalendarSettingsCard({ canManage }: Props) {
                         disabled={!canManage}
                         className="text-xs text-slate-600 hover:underline disabled:opacity-50"
                       >
-                        + Agregar rango
+                        + Add range
                       </button>
                     </div>
                   </div>
@@ -213,7 +213,7 @@ export function CalendarSettingsCard({ canManage }: Props) {
 
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
                 <label className="text-xs text-slate-600">
-                  Duración del showing
+                  Showing duration
                   <select
                     value={config.showingDurationMinutes}
                     disabled={!canManage}
@@ -226,7 +226,7 @@ export function CalendarSettingsCard({ canManage }: Props) {
                   </select>
                 </label>
                 <label className="text-xs text-slate-600">
-                  Colchón entre citas (min)
+                  Buffer between showings (min)
                   <input
                     type="number"
                     min={0}
@@ -238,7 +238,7 @@ export function CalendarSettingsCard({ canManage }: Props) {
                   />
                 </label>
                 <label className="text-xs text-slate-600">
-                  Aviso mínimo (horas)
+                  Minimum notice (hours)
                   <input
                     type="number"
                     min={0}
@@ -250,7 +250,7 @@ export function CalendarSettingsCard({ canManage }: Props) {
                   />
                 </label>
                 <label className="text-xs text-slate-600">
-                  Ventana máxima (días)
+                  Maximum booking window (days)
                   <input
                     type="number"
                     min={1}
@@ -262,7 +262,7 @@ export function CalendarSettingsCard({ canManage }: Props) {
                   />
                 </label>
                 <label className="text-xs text-slate-600">
-                  Granularidad de slots
+                  Slot granularity
                   <select
                     value={config.slotGranularityMinutes}
                     disabled={!canManage}
@@ -286,7 +286,7 @@ export function CalendarSettingsCard({ canManage }: Props) {
                   disabled={!canManage || !draft || saveConfig.isPending}
                   className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
                 >
-                  {saveConfig.isPending ? 'Guardando…' : 'Guardar'}
+                  {saveConfig.isPending ? 'Saving…' : 'Save'}
                 </button>
                 {draft && (
                   <button
@@ -295,7 +295,7 @@ export function CalendarSettingsCard({ canManage }: Props) {
                     disabled={!canManage}
                     className="text-sm text-slate-500 hover:underline disabled:opacity-50"
                   >
-                    Descartar cambios
+                    Discard changes
                   </button>
                 )}
               </div>

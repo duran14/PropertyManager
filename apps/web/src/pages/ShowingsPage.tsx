@@ -270,8 +270,8 @@ export function ShowingsPage() {
           }`}
         >
           {calendarNotice.status === 'connected'
-            ? 'Google Calendar quedó conectado.'
-            : `No se pudo conectar Google Calendar${calendarNotice.reason ? ` (${calendarNotice.reason})` : ''}.`}
+            ? 'Google Calendar connected.'
+            : `Could not connect Google Calendar${calendarNotice.reason ? ` (${calendarNotice.reason})` : ''}.`}
         </div>
       )}
 
@@ -339,7 +339,7 @@ export function ShowingsPage() {
                         // ocupado hasta que alguien lo bloquee a mano.
                         <div className="mb-2 inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-800">
                           <Icon name="warning" size={12} />
-                          sin bloquear en calendario
+                          not blocked on calendar
                         </div>
                       )}
 

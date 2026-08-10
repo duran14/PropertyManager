@@ -26,11 +26,10 @@ En **APIs y servicios → Pantalla de consentimiento de OAuth**:
 1. Tipo de usuario: **Externo** (a menos que tengas Google Workspace y
    quieras restringirlo a tu organización).
 2. Completa el nombre de la app y el correo de soporte.
-3. En **Scopes**, agrega exactamente estos tres:
+3. En **Scopes**, agrega exactamente estos:
    - `https://www.googleapis.com/auth/calendar.freebusy`
    - `https://www.googleapis.com/auth/calendar.app.created`
-   - `openid`
-   - `email`
+   - `openid email` (la app los pide juntos, como un solo segmento `scope`)
 
 ## 4. Crear credenciales OAuth de tipo Aplicación web
 
