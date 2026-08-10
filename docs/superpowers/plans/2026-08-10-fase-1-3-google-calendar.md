@@ -1130,19 +1130,9 @@ it('cae al mock de calendario sin credenciales de Google', () => {
   expect(adapters.calendar.name).toBe('calendar_mock');
   expect(adapters.mockModes.google_calendar).toBe(true);
 });
-
-it('usa el adapter real cuando hay client id y secret', () => {
-  const adapters = createAdapters({
-    ...baseEnv,
-    GOOGLE_CLIENT_ID: 'client-123',
-    GOOGLE_CLIENT_SECRET: 'secret-456',
-  });
-  expect(adapters.calendar.name).toBe('google_calendar');
-  expect(adapters.mockModes.google_calendar).toBe(false);
-});
 ```
 
-La segunda prueba **falla hasta la Tarea 5**, cuando exista el adapter real. Escribirla ahora igual, y en esta tarea marcarla con `it.skip` con el comentario `// se habilita en la Tarea 5, cuando exista GoogleCalendarRealAdapter`; la Tarea 5 le quita el `.skip`.
+El caso de "usa el adapter real cuando hay credenciales" **no** se escribe aquí: el adapter real no existe todavía y una prueba saltada es una prueba muerta. Lo agrega la Tarea 5, junto con el adapter.
 
 - [ ] **Step 6: Escribir la prueba del mock**
 
@@ -1753,7 +1743,19 @@ En `packages/adapters/src/factory.ts`, importar `GoogleCalendarRealAdapter` y re
     : new CalendarMockAdapter();
 ```
 
-Y quitar el `.skip` de la prueba `'usa el adapter real cuando hay client id y secret'` que la Tarea 4 dejó pendiente en `factory.test.ts`.
+Y agregar a `packages/adapters/src/factory.test.ts` el caso que la Tarea 4 no podía escribir todavía:
+
+```ts
+it('usa el adapter real cuando hay client id y secret', () => {
+  const adapters = createAdapters({
+    ...baseEnv,
+    GOOGLE_CLIENT_ID: 'client-123',
+    GOOGLE_CLIENT_SECRET: 'secret-456',
+  });
+  expect(adapters.calendar.name).toBe('google_calendar');
+  expect(adapters.mockModes.google_calendar).toBe(false);
+});
+```
 
 - [ ] **Step 5: Correr las pruebas**
 
@@ -3970,7 +3972,7 @@ git commit -m "feat: pantalla de conexión de calendario y guía de setup"
 
 ## Notas para quien ejecute el plan
 
-- **Las Tareas 8 y 9 son una unidad de compilación.** La 8 borra funciones que la 9 reemplaza en sus llamadores; entre las dos el repo no compila. No commitear al terminar la 8.
+- **Las Tareas 8 y 9 son una unidad de compilación y se ejecutan como UNA sola tarea.** La 8 borra funciones que la 9 reemplaza en sus llamadores; entre las dos el repo no compila, así que la 8 no puede commitear ni ser revisada por separado. Quien ejecute el plan despacha ambas juntas a un mismo implementador y las revisa como un solo bloque.
 - **El adapter de calendario se obtiene con `await import('../config/adapters.js')`** dentro de la función, no con un import estático arriba del archivo. Es el patrón que ya usan `confirmShowing` y `cancelShowing`, y es lo que permite que las pruebas espíen el adapter con `vi.spyOn`.
 - **Cualquier prueba existente que se rompa hay que arreglarla, no borrarla**, salvo las que solo existían para ejercitar `scheduleTour` / `getAvailableSlots` contra el mock de ShowMojo, que se van con esas funciones.
 - **`getAdapters()` cachea un único set de adapters por proceso.** Eso es lo que permite espiarlos con `vi.spyOn`, y también lo que obliga a llamar `reset()` en el mock de calendario en cada `beforeEach`: si no, los eventos de una prueba se reportan como ocupados en la siguiente.
