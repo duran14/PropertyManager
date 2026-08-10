@@ -28,6 +28,7 @@ import { documentsRouter } from './routes/documents.js';
 import { knowledgeBaseRouter } from './routes/knowledge-base.js';
 import { usersRouter } from './routes/users.js';
 import { webhookConfigRouter } from './routes/webhook-config.js';
+import { googleCalendarRouter } from './routes/integrations.google-calendar.js';
 
 export function createApp(): express.Application {
   const env = getEnv();
@@ -72,6 +73,7 @@ export function createApp(): express.Application {
   app.use('/photos', photosRouter);
   app.use('/chat', chatRouter);
   app.use('/showings', showingsRouter);
+  app.use('/integrations/google-calendar', googleCalendarRouter);
   app.use('/public', publicRouter);
 
   app.use((_req, res) => {
