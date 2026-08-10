@@ -8,6 +8,7 @@ export type ConversationEventType =
   | 'showing.scheduled'
   | 'showing.confirmed'
   | 'showing.cancelled'
+  | 'showing.availability_unavailable'
   | 'staff.reply_sent'
   | 'handoff.requested'
   | 'note.internal_added';
@@ -93,6 +94,12 @@ export function buildConversationEventPresentation(
       return {
         label: 'Tour cancelled',
         detail: formatDateTime(payload.scheduledAt) ?? 'Staff cancelled the showing',
+        tone: 'attention',
+      };
+    case 'showing.availability_unavailable':
+      return {
+        label: 'No tour times offered',
+        detail: formatText(payload.reason) ?? 'The calendar had no availability to offer',
         tone: 'attention',
       };
     case 'staff.reply_sent':

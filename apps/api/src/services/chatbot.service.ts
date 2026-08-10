@@ -2,14 +2,16 @@
  * Omnichannel chatbot with a conversation state machine.
  *
  * The bot uses structured GLM output, keeps conversation history, collects
- * prospect slots, proposes units, and hands scheduling off to ShowMojo.
+ * prospect slots, proposes units, and hands scheduling off against the
+ * agency's real Google Calendar.
  */
-import type { ChatChannel, GlmAdapter, MessagingAdapter, ShowMojoAdapter } from '@property-manager/adapters';
+import type { ChatChannel, GlmAdapter, MessagingAdapter } from '@property-manager/adapters';
 import type { LeadSource } from '@prisma/client';
 import { prisma } from '../config/db.js';
 import { writeAudit } from './audit.service.js';
 import { formatKnowledgeContext, rankKnowledgeChunks } from './knowledge-retrieval.service.js';
-import { getAvailableSlots, scheduleTour } from './scheduling.service.js';
+import { bookShowingFromCalendar, getSchedulingAvailability } from './scheduling.service.js';
+import { createConversationEvent } from './conversation-events.service.js';
 import { createShortlist, rotateShortlistToken } from './shortlist.service.js';
 import { nextDeliveryRetryAt } from './message-delivery-retry.service.js';
 import { buildOwnershipConversationTurn } from './ownership-conversation.service.js';
@@ -752,7 +754,7 @@ export async function serializeConversationTask<T>(key: string, task: () => Prom
 
 export async function handleInboundMessage(
   input: InboundChatMessage,
-  deps: { glm: GlmAdapter; messaging: MessagingAdapter; showmojo: ShowMojoAdapter },
+  deps: { glm: GlmAdapter; messaging: MessagingAdapter },
 ): Promise<BotReply> {
   const key = `${input.tenantId}:${getConversationExternalId(input)}`;
   return serializeConversationTask(key, () => handleInboundMessageUnlocked(input, deps));
@@ -760,7 +762,7 @@ export async function handleInboundMessage(
 
 async function handleInboundMessageUnlocked(
   input: InboundChatMessage,
-  deps: { glm: GlmAdapter; messaging: MessagingAdapter; showmojo: ShowMojoAdapter },
+  deps: { glm: GlmAdapter; messaging: MessagingAdapter },
 ): Promise<BotReply> {
   const externalId = getConversationExternalId(input);
   const conversation = await prisma.chatConversation.upsert({
@@ -1248,12 +1250,12 @@ async function handleInboundMessageUnlocked(
       ?? recommendedUnit?.id
       ?? (await inferUnitFromSlots(input.tenantId, effectiveSlots));
     if (unitId) {
-      const slotsResult = await getAvailableSlots(input.tenantId, unitId, deps.showmojo);
-      if (slotsResult.slots.length > 0) {
+      const availability = await getSchedulingAvailability(input.tenantId, unitId);
+      if (availability.ok) {
         await prisma.conversationSlot.upsert({
           where: { conversationId_key: { conversationId: conversation.id, key: 'pending_slots' } },
-          update: { value: JSON.stringify(slotsResult.slots) },
-          create: { conversationId: conversation.id, key: 'pending_slots', value: JSON.stringify(slotsResult.slots) },
+          update: { value: JSON.stringify(availability.slots) },
+          create: { conversationId: conversation.id, key: 'pending_slots', value: JSON.stringify(availability.slots) },
         });
         await prisma.conversationSlot.upsert({
           where: { conversationId_key: { conversationId: conversation.id, key: 'scheduling_unit_id' } },
@@ -1261,11 +1263,14 @@ async function handleInboundMessageUnlocked(
           create: { conversationId: conversation.id, key: 'scheduling_unit_id', value: unitId },
         });
 
-        const slotsText = slotsResult.slots.map((slot) => `${slot.index + 1}. ${slot.label}`).join('\n');
+        const slotsText = availability.slots.map((slot) => `${slot.index + 1}. ${slot.label}`).join('\n');
         finalReply =
           `Perfect. These are the available tour times:\n\n` +
           `${slotsText}\n\n` +
-          `Reply with the number of the option you prefer (1-${slotsResult.slots.length}).`;
+          `Reply with the number of the option you prefer (1-${availability.slots.length}).`;
+      } else {
+        finalReply = await handOffScheduling(input.tenantId, conversation.id, conversation.leadId, availability.reason);
+        newState = 'handoff';
       }
     }
   } else if (currentState === 'scheduling') {
@@ -1278,7 +1283,7 @@ async function handleInboundMessageUnlocked(
         index: number;
         startAt: string;
         endAt: string;
-        brokerName?: string;
+        label: string;
       }>;
       const chosen = pendingSlots.find((slot) => slot.index === slotChoice - 1);
       if (chosen) {
@@ -1289,25 +1294,25 @@ async function handleInboundMessageUnlocked(
           },
         });
         if (lead) {
-          try {
-            const result = await scheduleTour({
-              tenantId: input.tenantId,
-              unitId: schedulingUnitId,
-              leadId: lead.id,
-              slotIndex: chosen.index,
-              prospectName: lead.name ?? lead.phone ?? 'Prospect',
-              prospectPhone: lead.phone ?? undefined,
-              prospectEmail: lead.email ?? undefined,
-              conversationId: conversation.id,
-              adapter: deps.showmojo,
-            });
+          const booked = await bookShowingFromCalendar({
+            tenantId: input.tenantId,
+            unitId: schedulingUnitId,
+            leadId: lead.id,
+            startAt: new Date(chosen.startAt),
+            prospectName: lead.name ?? lead.phone ?? 'Prospect',
+            prospectPhone: lead.phone ?? undefined,
+            prospectEmail: lead.email ?? undefined,
+            conversationId: conversation.id,
+          });
+
+          if (booked.ok) {
             const scheduledUnit = availableUnits.find((unit) => unit.id === schedulingUnitId);
             const scheduledAddress = scheduledUnit?.address
               ? `${scheduledUnit.address}, ${scheduledUnit.city}${scheduledUnit.province ? `, ${scheduledUnit.province}` : ''}`
               : undefined;
             const scheduledLabel = scheduledUnit ? `${scheduledUnit.propertyName} — ${scheduledUnit.name}` : undefined;
             const completedTourSlots: Record<string, string> = {
-              tour_scheduled_at: result.scheduledAt,
+              tour_scheduled_at: booked.scheduledAt,
               ...(scheduledAddress ? { scheduled_unit_address: scheduledAddress } : {}),
               ...(scheduledLabel ? { scheduled_unit_label: scheduledLabel } : {}),
             };
@@ -1321,20 +1326,27 @@ async function handleInboundMessageUnlocked(
             finalReply =
               `Your tour request has been submitted${scheduledLabel ? ` for ${scheduledLabel}` : ''}.\n\n` +
               `${scheduledAddress ? `Address:\n${formatStoredAddress(scheduledAddress)}\n\n` : ''}` +
-              `${new Date(result.scheduledAt).toLocaleDateString('en-CA', {
+              `${new Date(booked.scheduledAt).toLocaleDateString('en-CA', {
                 weekday: 'long',
                 month: 'long',
                 day: 'numeric',
-              })} at ${new Date(result.scheduledAt).toLocaleTimeString('en-CA', {
+              })} at ${new Date(booked.scheduledAt).toLocaleTimeString('en-CA', {
                 hour: 'numeric',
                 minute: '2-digit',
                 hour12: true,
               })}\n\n` +
               `The broker will confirm availability shortly. I’ll keep the confirmation and any updates right here in this conversation.`;
             newState = 'handoff';
-          } catch {
-            finalReply = 'There was a problem scheduling the tour. Would you like to try another time?';
-            newState = 'scheduling';
+          } else if (
+            booked.error === 'slot_taken' || booked.error === 'slot_no_longer_offered'
+          ) {
+            finalReply = 'That time was just taken. Let me pull up the current options.';
+            newState = 'proposing_tour';
+          } else {
+            finalReply = await handOffScheduling(
+              input.tenantId, conversation.id, conversation.leadId, booked.error,
+            );
+            newState = 'handoff';
           }
         }
       }
@@ -2824,7 +2836,7 @@ export function buildSystemPrompt(
     '- collecting_movein: continue collecting the next missing qualification detail, one question at a time.',
     '- proposing_units: suggest matching units',
     '- proposing_tour: offer to schedule a tour',
-    '- scheduling: move into tour scheduling through ShowMojo',
+    '- scheduling: move into tour scheduling against the agency calendar',
     '- handoff: hand off to a human when the question is out of scope',
     '',
     'QUALIFICATION BEFORE RECOMMENDING:',
@@ -3587,3 +3599,24 @@ const MIN_TYPING_MS = 700;
 const MS_PER_CHAR = 8;
 const MAX_TYPING_MS = 1_800;
 const TYPING_REFRESH_MS = 3500; // refresco del typing antes de que expire (~5s).
+
+/**
+ * Sin calendario disponible no se ofrecen horarios ni se crean showings: se
+ * dice la verdad y se pasa a un humano. Prometer una hora que nadie tiene
+ * bloqueada es peor que no agendar.
+ */
+async function handOffScheduling(
+  tenantId: string,
+  conversationId: string,
+  leadId: string | null,
+  reason: string,
+): Promise<string> {
+  await createConversationEvent({
+    tenantId,
+    conversationId,
+    leadId: leadId ?? undefined,
+    type: 'showing.availability_unavailable',
+    payload: { reason },
+  });
+  return 'Thanks — I have your details. One of our advisors will confirm a tour time with you shortly, right here in this conversation.';
+}

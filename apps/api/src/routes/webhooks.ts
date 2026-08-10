@@ -258,7 +258,7 @@ export async function processClaimedTwilioMessage(
   try {
     await handleInboundMessage(
       { tenantId, from: inbound.from, body: inbound.body, channel, mediaUrls },
-      { glm: adapters.glm, messaging: messagingAdapter, showmojo: adapters.showmojo },
+      { glm: adapters.glm, messaging: messagingAdapter },
     );
     await completeWebhookMessage('twilio', tenantId, messageSid, claimToken);
   } catch (error) {
@@ -434,7 +434,7 @@ export async function processClaimedMessengerMessage(
   try {
     await handleInboundMessage(
       { tenantId, from: inbound.from, body: inbound.body, channel: 'messenger' },
-      { glm: adapters.glm, messaging: adapters.messaging.messenger, showmojo: adapters.showmojo },
+      { glm: adapters.glm, messaging: adapters.messaging.messenger },
     );
     await completeWebhookMessage('messenger', tenantId, mid, claimToken);
   } catch (error) {

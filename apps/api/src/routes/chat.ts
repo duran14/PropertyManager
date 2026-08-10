@@ -52,7 +52,7 @@ chatRouter.post('/webhooks/telegram', async (req, res, next) => {
         channel: 'telegram',
         mediaUrls: inbound.mediaUrls,
       },
-      { glm: adapters.glm, messaging: adapters.messaging.telegram, showmojo: adapters.showmojo },
+      { glm: adapters.glm, messaging: adapters.messaging.telegram },
     );
     res.status(200).json({ status: 'processed' });
   } catch (err) {
@@ -87,7 +87,7 @@ chatRouter.post('/messages', async (req, res, next) => {
         body: parsed.data.message,
         channel: 'web',
       },
-      { glm: adapters.glm, messaging: adapters.messaging.web, showmojo: adapters.showmojo },
+      { glm: adapters.glm, messaging: adapters.messaging.web },
     );
     res.json(result);
   } catch (err) {

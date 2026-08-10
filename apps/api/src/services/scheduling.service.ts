@@ -1,20 +1,14 @@
 /**
- * Scheduling service connecting the chatbot to ShowMojo.
+ * Scheduling service connecting the chatbot to Google Calendar.
  */
-import type { ShowMojoAdapter, ShowMojoSlot } from '@property-manager/adapters';
+import { Prisma } from '@prisma/client';
+import { computeAvailableSlots } from '@property-manager/core';
 import { prisma } from '../config/db.js';
+import { getEnv } from '../config/env.js';
 import { writeAudit } from './audit.service.js';
 import { createConversationEvent } from './conversation-events.service.js';
-
-export interface AvailableSlotsResult {
-  slots: Array<{
-    index: number;
-    startAt: string;
-    endAt: string;
-    brokerName?: string;
-    label: string;
-  }>;
-}
+import { getUsableAccessToken } from './calendar-connection.service.js';
+import { getSchedulingConfig } from './scheduling-config.service.js';
 
 export function normalizeShowingDuration(durationMinutes: number | undefined): number {
   const duration = durationMinutes ?? 30;
@@ -30,14 +24,6 @@ export function canConfirmShowingStatus(status: string): boolean {
 
 export function canCancelShowingStatus(status: string): boolean {
   return status === 'scheduled' || status === 'confirmed';
-}
-
-export function resolveShowingBooking(
-  existing: { unitId: string | null } | null,
-  unitId: string,
-): { kind: 'new' | 'existing' | 'conflict' } {
-  if (!existing) return { kind: 'new' };
-  return existing.unitId === unitId ? { kind: 'existing' } : { kind: 'conflict' };
 }
 
 export function buildShowingConfirmationEmail(input: {
@@ -88,33 +74,272 @@ export function buildProspectSlotKey(
   return `${prospectIdentity}:${new Date(scheduledAt).toISOString()}`;
 }
 
-export async function getAvailableSlots(
+/**
+ * Etiqueta legible del hueco, formateada EN LA ZONA DE LA CONFIGURACIÓN.
+ * Formatear en la del servidor le diría al prospecto la hora equivocada
+ * en cuanto la API corra en UTC.
+ */
+export function formatSlotLabel(input: { startAt: string; timeZone: string }): string {
+  const start = new Date(input.startAt);
+  const day = start.toLocaleDateString('en-CA', {
+    timeZone: input.timeZone,
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+  });
+  const time = start.toLocaleTimeString('en-CA', {
+    timeZone: input.timeZone,
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  });
+  return `${day} at ${time}`;
+}
+
+export interface AvailableSlot {
+  index: number;
+  startAt: string;
+  endAt: string;
+  label: string;
+}
+
+export type SchedulingAvailabilityResult =
+  | { ok: true; slots: AvailableSlot[] }
+  | {
+    ok: false;
+    reason: 'not_connected' | 'revoked' | 'provider_error' | 'no_slots' | 'unit_not_found';
+  };
+
+/** Cuántas opciones caben en un mensaje de chat sin abrumar. */
+const MAX_OFFERED_SLOTS = 6;
+
+export async function getSchedulingAvailability(
   tenantId: string,
   unitId: string,
-  adapter: ShowMojoAdapter,
-): Promise<AvailableSlotsResult> {
-  const unit = await prisma.unit.findFirst({
-    where: { id: unitId, tenantId },
-    include: { property: true },
+): Promise<SchedulingAvailabilityResult> {
+  const unit = await prisma.unit.findFirst({ where: { id: unitId, tenantId } });
+  if (!unit) return { ok: false, reason: 'unit_not_found' };
+
+  const token = await getUsableAccessToken(tenantId);
+  if (!token.ok) return { ok: false, reason: token.reason };
+
+  const config = await getSchedulingConfig(tenantId);
+  const now = Date.now();
+  const from = new Date(now + config.minNoticeHours * 60 * 60_000);
+  const to = new Date(now + config.maxAdvanceDays * 24 * 60 * 60_000);
+
+  const { getAdapters } = await import('../config/adapters.js');
+  let busy;
+  try {
+    busy = await getAdapters().calendar.getBusy({
+      accessToken: token.accessToken,
+      // Los dos: el principal y el nuestro. Sin el nuestro, el bot ofrecería
+      // un horario donde ya hay otro showing.
+      calendarIds: ['primary', token.connection.showingsCalendarId],
+      from: from.toISOString(),
+      to: to.toISOString(),
+    });
+  } catch {
+    return { ok: false, reason: 'provider_error' };
+  }
+
+  const slots = computeAvailableSlots({
+    from,
+    to,
+    weeklyHours: config.weeklyHours,
+    busy: busy.map((interval) => ({
+      start: new Date(interval.startAt),
+      end: new Date(interval.endAt),
+    })),
+    timeZone: config.timeZone,
+    durationMinutes: config.showingDurationMinutes,
+    bufferMinutes: config.bufferMinutes,
+    granularityMinutes: config.slotGranularityMinutes,
   });
-  if (!unit) throw new Error('Unit not found');
 
-  const from = new Date();
-  const to = new Date();
-  to.setDate(to.getDate() + 14);
-
-  const listingCode = `unit_${unit.slug}`;
-  const slots = await adapter.getAvailableSlots(listingCode, from.toISOString(), to.toISOString());
+  if (slots.length === 0) return { ok: false, reason: 'no_slots' };
 
   return {
-    slots: slots.slice(0, 6).map((slot, index) => ({
+    ok: true,
+    slots: slots.slice(0, MAX_OFFERED_SLOTS).map((slot, index) => ({
       index,
-      startAt: slot.startAt,
-      endAt: slot.endAt,
-      brokerName: slot.brokerName,
-      label: formatSlotLabel(slot),
+      startAt: slot.start.toISOString(),
+      endAt: slot.end.toISOString(),
+      label: formatSlotLabel({ startAt: slot.start.toISOString(), timeZone: config.timeZone }),
     })),
   };
+}
+
+export interface BookShowingInput {
+  tenantId: string;
+  unitId: string;
+  leadId: string;
+  startAt: Date;
+  prospectName: string;
+  prospectEmail?: string;
+  prospectPhone?: string;
+  conversationId?: string;
+}
+
+export type BookShowingResult =
+  | { ok: true; showingId: string; scheduledAt: string; googleEventId: string }
+  | { ok: false; status: 404; error: 'unit_not_found' | 'lead_not_found' }
+  | {
+    ok: false;
+    status: 409;
+    error: 'slot_taken' | 'slot_no_longer_offered' | 'prospect_double_booked';
+  }
+  | { ok: false; status: 503; error: 'calendar_unavailable' };
+
+export async function bookShowingFromCalendar(
+  input: BookShowingInput,
+): Promise<BookShowingResult> {
+  const lead = await prisma.lead.findFirst({
+    where: { id: input.leadId, tenantId: input.tenantId },
+  });
+  if (!lead) return { ok: false, status: 404, error: 'lead_not_found' };
+
+  const unit = await prisma.unit.findFirst({
+    where: { id: input.unitId, tenantId: input.tenantId },
+    include: { property: true },
+  });
+  if (!unit) return { ok: false, status: 404, error: 'unit_not_found' };
+
+  // Se recalcula a propósito: los pending_slots guardados en la conversación
+  // pueden tener media hora de viejos.
+  const availability = await getSchedulingAvailability(input.tenantId, input.unitId);
+  if (!availability.ok) {
+    return availability.reason === 'no_slots'
+      ? { ok: false, status: 409, error: 'slot_no_longer_offered' }
+      : { ok: false, status: 503, error: 'calendar_unavailable' };
+  }
+  const startIso = input.startAt.toISOString();
+  const chosen = availability.slots.find((slot) => slot.startAt === startIso);
+  if (!chosen) return { ok: false, status: 409, error: 'slot_no_longer_offered' };
+
+  const token = await getUsableAccessToken(input.tenantId);
+  if (!token.ok) return { ok: false, status: 503, error: 'calendar_unavailable' };
+
+  const config = await getSchedulingConfig(input.tenantId);
+  const calendarSlotKey = `${token.connection.ownerKey}:${startIso}`;
+
+  // Primero la base: el INSERT es el paso que reserva el hueco de forma
+  // atómica. Al revés, dos reservas simultáneas crearían ambas su evento
+  // antes de chocar entre sí.
+  let showingId: string;
+  try {
+    showingId = await prisma.$transaction(async (tx) => {
+      const showing = await tx.showing.create({
+        data: {
+          tenantId: input.tenantId,
+          leadId: input.leadId,
+          unitId: input.unitId,
+          scheduledAt: input.startAt,
+          durationMinutes: config.showingDurationMinutes,
+          status: 'scheduled',
+          calendarSlotKey,
+          activeSlotKey: `${input.leadId}:${startIso}`,
+          activeProspectSlotKey: buildProspectSlotKey(
+            { leadId: input.leadId, email: input.prospectEmail, phone: input.prospectPhone },
+            input.startAt,
+          ),
+        },
+      });
+      await tx.lead.update({
+        where: { id: input.leadId },
+        data: { unitId: input.unitId, status: 'tour_scheduled' },
+      });
+      if (input.conversationId) {
+        await tx.chatConversation.updateMany({
+          where: { id: input.conversationId, tenantId: input.tenantId },
+          data: { unitId: input.unitId },
+        });
+      }
+      return showing.id;
+    });
+  } catch (error) {
+    if (isUniqueViolation(error, 'calendarSlotKey')) {
+      return { ok: false, status: 409, error: 'slot_taken' };
+    }
+    if (isUniqueViolation(error, 'activeProspectSlotKey')
+      || isUniqueViolation(error, 'activeSlotKey')) {
+      return { ok: false, status: 409, error: 'prospect_double_booked' };
+    }
+    throw error;
+  }
+
+  const { getAdapters } = await import('../config/adapters.js');
+  try {
+    const event = await getAdapters().calendar.createEvent({
+      accessToken: token.accessToken,
+      calendarId: token.connection.showingsCalendarId,
+      summary: `Showing — ${input.prospectName} — ${unit.property.name} · ${unit.name}`,
+      description: [
+        `Prospect: ${input.prospectName}`,
+        input.prospectPhone ? `Phone: ${input.prospectPhone}` : null,
+        input.prospectEmail ? `Email: ${input.prospectEmail}` : null,
+        `Lead: ${getEnv().WEB_URL}/leads/${input.leadId}`,
+      ].filter(Boolean).join('\n'),
+      location: `${unit.property.address}, ${unit.property.city}, ${unit.property.province}`,
+      startAt: startIso,
+      endAt: chosen.endAt,
+      timeZone: config.timeZone,
+      attendeeEmails: input.prospectEmail ? [input.prospectEmail] : [],
+    });
+
+    await prisma.showing.update({
+      where: { id: showingId },
+      data: {
+        googleEventId: event.eventId,
+        googleCalendarId: token.connection.showingsCalendarId,
+      },
+    });
+
+    await writeAudit({
+      tenantId: input.tenantId,
+      actorId: 'chatbot_agent',
+      actorType: 'ai_agent',
+      action: 'showing.scheduled',
+      entityType: 'showing',
+      entityId: showingId,
+      payload: {
+        leadId: input.leadId,
+        unitId: input.unitId,
+        scheduledAt: startIso,
+        googleEventId: event.eventId,
+      },
+    });
+
+    return { ok: true, showingId, scheduledAt: startIso, googleEventId: event.eventId };
+  } catch (error) {
+    // Compensación: un showing que no quedó bloqueado en ningún calendario
+    // es exactamente la mentira que este sistema no puede contar.
+    await prisma.showing.deleteMany({ where: { id: showingId } }).catch(() => undefined);
+    await writeAudit({
+      tenantId: input.tenantId,
+      actorId: 'scheduling_service',
+      actorType: 'system',
+      action: 'showing.calendar_event_failed',
+      entityType: 'showing',
+      entityId: showingId,
+      payload: {
+        leadId: input.leadId,
+        scheduledAt: startIso,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      },
+    });
+    return { ok: false, status: 503, error: 'calendar_unavailable' };
+  }
+}
+
+/** True solo si es P2002 y el índice violado incluye ese campo. */
+function isUniqueViolation(error: unknown, field: string): boolean {
+  if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') {
+    return false;
+  }
+  const target = error.meta?.target;
+  if (Array.isArray(target)) return target.includes(field);
+  return typeof target === 'string' && target.includes(field);
 }
 
 export async function createManualShowingFromConversation(input: {
@@ -206,151 +431,68 @@ export async function createManualShowingFromConversation(input: {
     },
   });
 
-  return showing;
-}
-
-export async function scheduleTour(input: {
-  tenantId: string;
-  unitId: string;
-  leadId: string;
-  slotIndex: number;
-  prospectName: string;
-  prospectPhone?: string;
-  prospectEmail?: string;
-  conversationId?: string;
-  adapter: ShowMojoAdapter;
-}): Promise<{
-  showingId: string;
-  showmojoUrl: string;
-  confirmUrl: string;
-  scheduledAt: string;
-}> {
-  const { tenantId, unitId, leadId, slotIndex, adapter } = input;
-
-  const unit = await prisma.unit.findFirst({
-    where: { id: unitId, tenantId },
-  });
-  if (!unit) throw new Error('Unit not found');
-
-  const from = new Date();
-  const to = new Date();
-  to.setDate(to.getDate() + 14);
-  const listingCode = `unit_${unit.slug}`;
-  const slots = await adapter.getAvailableSlots(listingCode, from.toISOString(), to.toISOString());
-  const slot = slots[slotIndex];
-  if (!slot) throw new Error(`Slot ${slotIndex} is not available`);
-
-  const scheduledAt = new Date(slot.startAt);
-  const prospectSlotKey = buildProspectSlotKey({
-    leadId,
-    email: input.prospectEmail,
-    phone: input.prospectPhone,
-  }, scheduledAt);
-  const existingShowing = await prisma.showing.findFirst({
-    where: { tenantId, activeProspectSlotKey: prospectSlotKey },
-    select: { id: true, unitId: true, showmojoUrl: true, scheduledAt: true },
-  });
-  const bookingResolution = resolveShowingBooking(existingShowing, unitId);
-  if (bookingResolution.kind === 'existing' && existingShowing) {
-    return {
-      showingId: existingShowing.id,
-      showmojoUrl: existingShowing.showmojoUrl ?? '',
-      confirmUrl: '',
-      scheduledAt: existingShowing.scheduledAt.toISOString(),
-    };
-  }
-  if (bookingResolution.kind === 'conflict') {
-    throw new Error('This prospect already has a showing scheduled at that time');
+  // Google Calendar: mejor esfuerzo, SIN compensación destructiva. A esta
+  // función solo llega quien ya sabía (por la UI) que el hueco estaba libre,
+  // así que un fallo de Google no debe borrar el showing — solo se audita y
+  // la pantalla de Showings queda a cargo de mostrar la advertencia.
+  const token = await getUsableAccessToken(input.tenantId);
+  if (!token.ok) {
+    await writeAudit({
+      tenantId: input.tenantId,
+      actorId: 'scheduling_service',
+      actorType: 'system',
+      action: 'showing.calendar_event_failed',
+      entityType: 'showing',
+      entityId: showing.id,
+      payload: { leadId, scheduledAt: input.scheduledAt.toISOString(), error: `calendar_not_usable:${token.reason}` },
+    });
+    return showing;
   }
 
-  const { showing } = await adapter.createShowing({
-    listingCode,
-    slot,
-    prospectName: input.prospectName,
-    prospectPhone: input.prospectPhone,
-    prospectEmail: input.prospectEmail,
-  });
+  try {
+    const config = await getSchedulingConfig(input.tenantId);
+    const endAt = new Date(input.scheduledAt.getTime() + durationMinutes * 60_000);
+    const { getAdapters } = await import('../config/adapters.js');
+    const event = await getAdapters().calendar.createEvent({
+      accessToken: token.accessToken,
+      calendarId: token.connection.showingsCalendarId,
+      summary: `Showing — ${showing.lead.name ?? showing.lead.phone ?? 'Prospect'} — ${showing.unit?.property.name ?? ''} · ${showing.unit?.name ?? ''}`,
+      description: [
+        `Prospect: ${showing.lead.name ?? 'Unknown'}`,
+        showing.lead.phone ? `Phone: ${showing.lead.phone}` : null,
+        showing.lead.email ? `Email: ${showing.lead.email}` : null,
+        `Lead: ${getEnv().WEB_URL}/leads/${leadId}`,
+      ].filter(Boolean).join('\n'),
+      location: showing.unit
+        ? `${showing.unit.property.address}, ${showing.unit.property.city}`
+        : undefined,
+      startAt: input.scheduledAt.toISOString(),
+      endAt: endAt.toISOString(),
+      timeZone: config.timeZone,
+      attendeeEmails: showing.lead.email ? [showing.lead.email] : [],
+    });
 
-  const dbShowing = await prisma.showing.create({
-    data: {
-      tenantId,
-      leadId,
-      unitId,
-      showmojoId: showing.id,
-      scheduledAt,
-      status: 'scheduled',
-      showmojoUrl: showing.showmojoUrl,
-      activeSlotKey: showingSlotKey(leadId, scheduledAt),
-      activeProspectSlotKey: prospectSlotKey,
-    },
-  });
-
-  await prisma.lead.update({
-    where: { id: leadId },
-    data: {
-      unitId,
-      status: 'tour_scheduled',
-      showmojoShowingId: showing.id,
-      tourUrl: showing.showmojoUrl,
-    },
-  });
-
-  if (input.conversationId) {
-    await prisma.chatConversation.updateMany({
-      where: { id: input.conversationId, tenantId },
-      data: { unitId },
+    await prisma.showing.update({
+      where: { id: showing.id },
+      data: { googleEventId: event.eventId, googleCalendarId: token.connection.showingsCalendarId },
+    });
+  } catch (error) {
+    await writeAudit({
+      tenantId: input.tenantId,
+      actorId: 'scheduling_service',
+      actorType: 'system',
+      action: 'showing.calendar_event_failed',
+      entityType: 'showing',
+      entityId: showing.id,
+      payload: {
+        leadId,
+        scheduledAt: input.scheduledAt.toISOString(),
+        error: error instanceof Error ? error.message : 'Unknown error',
+      },
     });
   }
 
-  await writeAudit({
-    tenantId,
-    actorId: 'chatbot_agent',
-    actorType: 'ai_agent',
-    action: 'showing.scheduled',
-    entityType: 'showing',
-    entityId: dbShowing.id,
-    payload: {
-      leadId,
-      unitId,
-      showmojoId: showing.id,
-      scheduledAt: slot.startAt,
-    },
-  });
-
-  await notifyBroker(tenantId, dbShowing.id, slot, input.prospectName);
-
-  return {
-    showingId: dbShowing.id,
-    showmojoUrl: showing.showmojoUrl ?? '',
-    confirmUrl: showing.confirmUrl ?? '',
-    scheduledAt: slot.startAt,
-  };
-}
-
-async function notifyBroker(
-  tenantId: string,
-  showingId: string,
-  slot: ShowMojoSlot,
-  prospectName: string,
-): Promise<void> {
-  const message =
-    `New showing scheduled:\n` +
-    `Prospect: ${prospectName}\n` +
-    `Date: ${formatSlotLabel(slot)}\n` +
-    `Broker: ${slot.brokerName ?? 'Unassigned'}\n` +
-    `Confirm the showing in the dashboard.`;
-
-  console.log(`[Scheduling] Broker notification:\n${message}\n`);
-
-  await writeAudit({
-    tenantId,
-    actorId: 'scheduling_service',
-    actorType: 'system',
-    action: 'showing.broker_notified',
-    entityType: 'showing',
-    entityId: showingId,
-    payload: { message, brokerName: slot.brokerName },
-  });
+  return showing;
 }
 
 export async function confirmShowing(
@@ -459,9 +601,39 @@ export async function cancelShowing(
     await adapters.showmojo.cancelShowing(showing.showmojoId, reason);
   }
 
+  if (showing.googleEventId && showing.googleCalendarId) {
+    const token = await getUsableAccessToken(tenantId);
+    if (token.ok) {
+      try {
+        await adapters.calendar.deleteEvent({
+          accessToken: token.accessToken,
+          calendarId: showing.googleCalendarId,
+          eventId: showing.googleEventId,
+        });
+      } catch (error) {
+        // Mejor esfuerzo: la cancelación en la app no se bloquea porque
+        // Google no responda, pero queda registrada.
+        await writeAudit({
+          tenantId,
+          actorId: 'scheduling_service',
+          actorType: 'system',
+          action: 'showing.calendar_event_delete_failed',
+          entityType: 'showing',
+          entityId: showingId,
+          payload: { error: error instanceof Error ? error.message : 'Unknown error' },
+        });
+      }
+    }
+  }
+
   await prisma.showing.update({
     where: { id: showingId },
-    data: { status: 'cancelled', activeSlotKey: null, activeProspectSlotKey: null },
+    data: {
+      status: 'cancelled',
+      activeSlotKey: null,
+      activeProspectSlotKey: null,
+      calendarSlotKey: null,
+    },
   });
 
   await writeAudit({
@@ -503,21 +675,6 @@ export async function listShowings(
       },
     },
   });
-}
-
-function formatSlotLabel(slot: ShowMojoSlot): string {
-  const start = new Date(slot.startAt);
-  const dayName = start.toLocaleDateString('en-CA', {
-    weekday: 'short',
-    month: 'short',
-    day: 'numeric',
-  });
-  const time = start.toLocaleTimeString('en-CA', {
-    hour: 'numeric',
-    minute: '2-digit',
-    hour12: true,
-  });
-  return `${dayName} at ${time}${slot.brokerName ? ` (${slot.brokerName})` : ''}`;
 }
 
 async function createShowingConversationEvent(input: {

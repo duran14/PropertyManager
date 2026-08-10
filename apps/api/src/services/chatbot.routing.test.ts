@@ -16,8 +16,10 @@ import { handleInboundMessage } from './chatbot.service.js';
  * (b) como respaldo ante un fallo real del proveedor?
  *
  * Usa Prisma real contra la BD de test (mismo patrón que
- * bills.service.test.ts) y adapters mock/espía para GLM, mensajería y
- * ShowMojo — nunca golpea la red real.
+ * bills.service.test.ts) y adapters mock/espía para GLM y mensajería —
+ * nunca golpea la red real. ShowMojo ya no es parte de las dependencias de
+ * `handleInboundMessage` (Tarea 9): el mock de aquí solo se usa para
+ * demostrar que nadie lo alcanza por otra vía.
  */
 
 const TENANT_ID = 'tenant_test_chatbot_routing';
@@ -40,8 +42,14 @@ async function cleanup() {
     await prisma.conversationSlot.deleteMany({ where: { conversationId: { in: conversationIds } } });
     await prisma.chatMessage.deleteMany({ where: { conversationId: { in: conversationIds } } });
   }
+  await prisma.conversationEvent.deleteMany({ where: { tenantId: TENANT_ID } });
+  await prisma.showing.deleteMany({ where: { tenantId: TENANT_ID } });
   await prisma.chatConversation.deleteMany({ where: { tenantId: TENANT_ID } });
   await prisma.lead.deleteMany({ where: { tenantId: TENANT_ID } });
+  await prisma.unit.deleteMany({ where: { tenantId: TENANT_ID } });
+  await prisma.property.deleteMany({ where: { tenantId: TENANT_ID } });
+  await prisma.calendarConnection.deleteMany({ where: { tenantId: TENANT_ID } });
+  await prisma.schedulingConfig.deleteMany({ where: { tenantId: TENANT_ID } });
 }
 
 function glmReturning(content: string): { glm: GlmAdapter; reason: ReturnType<typeof vi.fn> } {
@@ -72,8 +80,59 @@ async function seedConversationWithSlots(
   });
 }
 
+/**
+ * Deja una conversación de renta lista para que el siguiente turno entre al
+ * estado `scheduling`: unidad seleccionada y lead vinculado.
+ */
+async function seedReadyToSchedule(externalId: string) {
+  await seedTenant();
+  const property = await prisma.property.create({
+    data: {
+      tenantId: TENANT_ID,
+      name: 'Pacific Ridge',
+      address: '100 Test St',
+      city: 'Vancouver',
+      province: 'BC',
+    },
+  });
+  const unit = await prisma.unit.create({
+    data: {
+      tenantId: TENANT_ID,
+      propertyId: property.id,
+      name: 'Unit 101',
+      rentCents: 200_000,
+      slug: `unit-101-${TENANT_ID}`,
+    },
+  });
+  const lead = await prisma.lead.create({
+    data: { tenantId: TENANT_ID, name: 'Ana', phone: externalId, status: 'contacted', source: 'web' },
+  });
+  // La calificación debe quedar completa (igual que en el resto de las
+  // pruebas de esta suite): con prospect_name faltante,
+  // buildFastQualificationTurn intercepta el turno ANTES de que el mensaje
+  // llegue al modelo y nunca se entra al estado scheduling — el brief
+  // original solo seedeaba selected_unit_id, lo que rompía el turno con "what
+  // first name should I use for you?" en vez de la disponibilidad esperada.
+  const conversation = await seedConversationWithSlots(externalId, 'proposing_tour', {
+    transaction_intent: 'rent',
+    selected_unit_id: unit.id,
+    prospect_name: 'Ana',
+    preferred_area: 'Vancouver',
+    preferred_province: 'British Columbia',
+    location_confirmed: 'yes',
+    bedrooms: '2',
+    pets: 'none',
+    budget: '2600',
+    move_in_date: 'August',
+  });
+  await prisma.chatConversation.update({
+    where: { id: conversation.id },
+    data: { leadId: lead.id, unitId: unit.id },
+  });
+  return { conversationId: conversation.id, unitId: unit.id, leadId: lead.id };
+}
+
 const messaging = new WebChatMockAdapter();
-const showmojo = new ShowMojoMockAdapter();
 
 describe('chatbot routing integration (handleInboundMessage)', () => {
   beforeEach(async () => {
@@ -90,7 +149,7 @@ describe('chatbot routing integration (handleInboundMessage)', () => {
 
     const reply = await handleInboundMessage(
       { tenantId: TENANT_ID, from: 'routing-greeting-1', body: 'hi', channel: 'web' },
-      { glm, messaging, showmojo },
+      { glm, messaging },
     );
 
     expect(reason).not.toHaveBeenCalled();
@@ -123,7 +182,7 @@ describe('chatbot routing integration (handleInboundMessage)', () => {
 
     const reply = await handleInboundMessage(
       { tenantId: TENANT_ID, from: 'routing-rental-1', body: 'does it have parking?', channel: 'web' },
-      { glm, messaging, showmojo },
+      { glm, messaging },
     );
 
     expect(reason).toHaveBeenCalledTimes(1);
@@ -145,7 +204,7 @@ describe('chatbot routing integration (handleInboundMessage)', () => {
 
     const reply = await handleInboundMessage(
       { tenantId: TENANT_ID, from: 'routing-ownership-buy-1', body: 'My budget is around 850k for a townhouse in Burnaby', channel: 'web' },
-      { glm, messaging, showmojo },
+      { glm, messaging },
     );
 
     expect(reason).toHaveBeenCalledTimes(1);
@@ -168,7 +227,7 @@ describe('chatbot routing integration (handleInboundMessage)', () => {
 
     const reply = await handleInboundMessage(
       { tenantId: TENANT_ID, from: 'routing-ownership-sell-1', body: 'The property is at 45 Oak Street, Richmond', channel: 'web' },
-      { glm, messaging, showmojo },
+      { glm, messaging },
     );
 
     expect(reason).toHaveBeenCalledTimes(1);
@@ -192,7 +251,7 @@ describe('chatbot routing integration (handleInboundMessage)', () => {
 
     const reply = await handleInboundMessage(
       { tenantId: TENANT_ID, from: 'routing-rental-outage-1', body: 'does it have parking?', channel: 'web' },
-      { glm, messaging, showmojo },
+      { glm, messaging },
     );
 
     expect(reason).toHaveBeenCalledTimes(1);
@@ -211,7 +270,7 @@ describe('chatbot routing integration (handleInboundMessage)', () => {
 
     const reply = await handleInboundMessage(
       { tenantId: TENANT_ID, from: 'routing-ownership-outage-1', body: 'My name is Sarah', channel: 'web' },
-      { glm, messaging, showmojo },
+      { glm, messaging },
     );
 
     expect(reason).toHaveBeenCalledTimes(1);
@@ -227,7 +286,7 @@ describe('chatbot routing integration (handleInboundMessage)', () => {
 
     await handleInboundMessage(
       { tenantId: TENANT_ID, from: 'routing-messenger-1', body: 'hi', channel: 'messenger' },
-      { glm, messaging, showmojo },
+      { glm, messaging },
     );
 
     const lead = await prisma.lead.findFirst({
@@ -242,11 +301,11 @@ describe('chatbot routing integration (handleInboundMessage)', () => {
 
     await handleInboundMessage(
       { tenantId: TENANT_ID, from: '+16045550199', body: 'Hola, busco depa de 2 recámaras', channel: 'web' },
-      { glm, messaging, showmojo },
+      { glm, messaging },
     );
     await handleInboundMessage(
       { tenantId: TENANT_ID, from: '+16045550199', body: 'ya no me manden mensajes por favor', channel: 'web' },
-      { glm, messaging, showmojo },
+      { glm, messaging },
     );
 
     const lead = await prisma.lead.findFirst({ where: { tenantId: TENANT_ID, phone: '+16045550199' } });
@@ -258,7 +317,7 @@ describe('chatbot routing integration (handleInboundMessage)', () => {
 
     await handleInboundMessage(
       { tenantId: TENANT_ID, from: '+16045550198', body: 'Hola, busco depa de 2 recámaras', channel: 'web' },
-      { glm, messaging, showmojo },
+      { glm, messaging },
     );
 
     const lead = await prisma.lead.findFirst({ where: { tenantId: TENANT_ID, phone: '+16045550198' } });
@@ -270,7 +329,7 @@ describe('chatbot routing integration (handleInboundMessage)', () => {
 
     await handleInboundMessage(
       { tenantId: TENANT_ID, from: '+16045550197', body: 'Hi, I’m looking for a 2 bedroom', channel: 'web' },
-      { glm, messaging, showmojo },
+      { glm, messaging },
     );
     // Curly/smart apostrophe (U+2019), what iOS/Android autocorrect actually
     // produces — the negative lookbehind in OPT_OUT_PATTERNS only matches
@@ -278,10 +337,58 @@ describe('chatbot routing integration (handleInboundMessage)', () => {
     // would false-positive as an opt-out despite the "don't" negation.
     await handleInboundMessage(
       { tenantId: TENANT_ID, from: '+16045550197', body: 'please don’t unsubscribe me, I love this', channel: 'web' },
-      { glm, messaging, showmojo },
+      { glm, messaging },
     );
 
     const lead = await prisma.lead.findFirst({ where: { tenantId: TENANT_ID, phone: '+16045550197' } });
     expect(lead?.optedOutAt).toBeNull();
+  });
+
+  it('sin calendario conectado no ofrece horarios, pasa a handoff y no crea showings', async () => {
+    const { conversationId } = await seedReadyToSchedule('+16045550111');
+    // El mock de GLM debe devolver el JSON estructurado que interpretRentalTurn
+    // espera (no texto libre): intent 'request_tour' es lo que hace que el
+    // turno entre al estado scheduling.
+    const { glm } = glmReturning(JSON.stringify({
+      reply: 'Sure, let us book a tour.',
+      intent: 'request_tour',
+      confidence: 'high',
+      profile: { set: {}, clear: [] },
+    }));
+
+    const reply = await handleInboundMessage(
+      { tenantId: TENANT_ID, from: '+16045550111', body: 'quiero agendar una visita', channel: 'web' },
+      { glm, messaging: new WebChatMockAdapter() },
+    );
+
+    expect(reply.replyText.toLowerCase()).toContain('advisor');
+    expect(await prisma.showing.count({ where: { tenantId: TENANT_ID } })).toBe(0);
+    expect((await prisma.chatConversation.findUniqueOrThrow({ where: { id: conversationId } })).state)
+      .toBe('handoff');
+
+    const events = await prisma.conversationEvent.findMany({
+      where: { tenantId: TENANT_ID, type: 'showing.availability_unavailable' },
+    });
+    expect(events).toHaveLength(1);
+    expect((events[0]!.payload as { reason?: string }).reason).toBe('not_connected');
+  });
+
+  it('nunca consulta el adapter de ShowMojo para agendar', async () => {
+    await seedReadyToSchedule('+16045550222');
+    const { glm } = glmReturning(JSON.stringify({
+      reply: 'Sure, let us book a tour.',
+      intent: 'request_tour',
+      confidence: 'high',
+      profile: { set: {}, clear: [] },
+    }));
+    const showmojo = new ShowMojoMockAdapter();
+    const spy = vi.spyOn(showmojo, 'getAvailableSlots');
+
+    await handleInboundMessage(
+      { tenantId: TENANT_ID, from: '+16045550222', body: 'quiero agendar una visita', channel: 'web' },
+      { glm, messaging: new WebChatMockAdapter() },
+    );
+
+    expect(spy).not.toHaveBeenCalled();
   });
 });

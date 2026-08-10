@@ -79,7 +79,7 @@ async function pollLoop(adapter: TelegramRealAdapter): Promise<void> {
             body: msg.body,
             channel: 'telegram',
           },
-          { glm: adapters.glm, messaging: adapters.messaging.telegram, showmojo: adapters.showmojo },
+          { glm: adapters.glm, messaging: adapters.messaging.telegram },
         );
       } catch (err) {
         console.error('[Telegram] Error processing message:', err);

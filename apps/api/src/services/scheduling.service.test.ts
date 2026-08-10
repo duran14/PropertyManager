@@ -5,7 +5,6 @@ import {
   canCancelShowingStatus,
   canConfirmShowingStatus,
   normalizeShowingDuration,
-  resolveShowingBooking,
   sendShowingConfirmationEmail,
 } from './scheduling.service.js';
 
@@ -25,19 +24,6 @@ describe('scheduling service', () => {
     expect(canCancelShowingStatus('scheduled')).toBe(true);
     expect(canCancelShowingStatus('confirmed')).toBe(true);
     expect(canCancelShowingStatus('completed')).toBe(false);
-  });
-
-  it('treats a repeat booking for the same unit as idempotent and blocks a different unit at that time', () => {
-    const existing = {
-      id: 'showing-1',
-      unitId: 'unit-burnaby',
-      showmojoUrl: 'https://showmojo.example/showing-1',
-      scheduledAt: new Date('2026-08-03T21:00:00.000Z'),
-    };
-
-    expect(resolveShowingBooking(existing, 'unit-burnaby')).toEqual({ kind: 'existing' });
-    expect(resolveShowingBooking(existing, 'unit-kelowna')).toEqual({ kind: 'conflict' });
-    expect(resolveShowingBooking(null, 'unit-burnaby')).toEqual({ kind: 'new' });
   });
 
   it('uses one active slot key for the same prospect email across different leads', () => {

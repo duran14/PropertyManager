@@ -27,7 +27,7 @@ import {
 import { getReplyAddressFromConversation, handleInboundMessage } from '../services/chatbot.service.js';
 import { createConversationEvent } from '../services/conversation-events.service.js';
 import { buildShortlistPrefillContact, getPublicShortlist, hashShortlistToken } from '../services/shortlist.service.js';
-import { getAvailableSlots, scheduleTour } from '../services/scheduling.service.js';
+import { bookShowingFromCalendar, getSchedulingAvailability } from '../services/scheduling.service.js';
 import { parseShortlistBooking } from '../services/shortlist-booking.service.js';
 import {
   getPublicRentalApplication,
@@ -105,7 +105,13 @@ publicRouter.get('/shortlists/:token/slots', async (req, res, next) => {
   try {
     const shortlist = await prisma.propertyShortlist.findFirst({ where: { tokenHash: hashShortlistToken(req.params.token), expiresAt: { gt: new Date() } } });
     if (!shortlist?.selectedUnitId) return void res.status(400).json({ error: 'Select a property first' });
-    res.json(await getAvailableSlots(shortlist.tenantId, shortlist.selectedUnitId, getAdapters().showmojo));
+    const availability = await getSchedulingAvailability(shortlist.tenantId, shortlist.selectedUnitId);
+    if (!availability.ok) {
+      const status = availability.reason === 'unit_not_found' ? 404 : 503;
+      res.status(status).json({ error: availability.reason });
+      return;
+    }
+    res.json({ slots: availability.slots });
   } catch (error) { next(error); }
 });
 
@@ -134,7 +140,28 @@ publicRouter.post('/shortlists/:token/schedule', async (req, res, next) => {
         ...(booking.notes ? { message: booking.notes } : {}),
       },
     });
-    const result = await scheduleTour({ tenantId: shortlist.tenantId, unitId: shortlist.selectedUnitId, leadId: lead.id, slotIndex: booking.slotIndex, prospectName: booking.name, prospectPhone: booking.phone, prospectEmail: booking.email, conversationId: shortlist.conversationId, adapter: getAdapters().showmojo });
+    const availability = await getSchedulingAvailability(shortlist.tenantId, shortlist.selectedUnitId);
+    if (!availability.ok) {
+      const status = availability.reason === 'unit_not_found' ? 404 : 503;
+      res.status(status).json({ error: availability.reason });
+      return;
+    }
+    const chosen = availability.slots[booking.slotIndex];
+    if (!chosen) return void res.status(409).json({ error: 'slot_no_longer_offered' });
+    const booked = await bookShowingFromCalendar({
+      tenantId: shortlist.tenantId,
+      unitId: shortlist.selectedUnitId,
+      leadId: lead.id,
+      startAt: new Date(chosen.startAt),
+      prospectName: booking.name,
+      prospectPhone: booking.phone,
+      prospectEmail: booking.email,
+      conversationId: shortlist.conversationId,
+    });
+    if (!booked.ok) {
+      res.status(booked.status).json({ error: booked.error });
+      return;
+    }
     await prisma.propertyShortlist.update({ where: { id: shortlist.id }, data: { status: 'scheduled', scheduledAt: new Date(), remindersStopped: true, nextReminderAt: null } });
     const unitLabel = `${unit.property.name} — ${unit.name}`;
     const unitAddress = `${unit.property.address}, ${unit.property.city}, ${unit.property.province}`;
@@ -145,8 +172,8 @@ publicRouter.post('/shortlists/:token/schedule', async (req, res, next) => {
       }),
       prisma.conversationSlot.upsert({
         where: { conversationId_key: { conversationId: shortlist.conversationId, key: 'tour_scheduled_at' } },
-        update: { value: result.scheduledAt },
-        create: { conversationId: shortlist.conversationId, key: 'tour_scheduled_at', value: result.scheduledAt },
+        update: { value: booked.scheduledAt },
+        create: { conversationId: shortlist.conversationId, key: 'tour_scheduled_at', value: booked.scheduledAt },
       }),
       prisma.conversationSlot.upsert({
         where: { conversationId_key: { conversationId: shortlist.conversationId, key: 'scheduled_unit_address' } },
@@ -162,9 +189,9 @@ publicRouter.post('/shortlists/:token/schedule', async (req, res, next) => {
     await getAdapters().messaging[shortlist.conversation.channel].send({
       to: getReplyAddressFromConversation(shortlist.conversation.externalId),
       channel: shortlist.conversation.channel,
-      body: `Your tour for ${unitLabel} at ${unitAddress} is scheduled for ${new Date(result.scheduledAt).toLocaleString('en-CA')}. I'll keep the confirmation here for you.`,
+      body: `Your tour for ${unitLabel} at ${unitAddress} is scheduled for ${new Date(booked.scheduledAt).toLocaleString('en-CA')}. I'll keep the confirmation here for you.`,
     });
-    res.json({ ...result, unitLabel, unitAddress });
+    res.json({ ...booked, unitLabel, unitAddress });
   } catch (error) { next(error); }
 });
 
@@ -404,7 +431,13 @@ publicRouter.get('/units/:slug/slots', async (req, res, next) => {
     if (typeof tenantId !== 'string') return void res.status(400).json({ error: 'x-tenant-id header is required' });
     const unit = await prisma.unit.findFirst({ where: { tenantId, slug: req.params.slug, isActive: true }, select: { id: true } });
     if (!unit) return void res.status(404).json({ error: 'Unit not found' });
-    res.json(await getAvailableSlots(tenantId, unit.id, getAdapters().showmojo));
+    const availability = await getSchedulingAvailability(tenantId, unit.id);
+    if (!availability.ok) {
+      const status = availability.reason === 'unit_not_found' ? 404 : 503;
+      res.status(status).json({ error: availability.reason });
+      return;
+    }
+    res.json({ slots: availability.slots });
   } catch (err) { next(err); }
 });
 
@@ -441,20 +474,31 @@ publicRouter.post('/units/:slug/schedule', async (req, res, next) => {
       });
     }
 
-    const result = await scheduleTour({
+    const availability = await getSchedulingAvailability(tenantId, unit.id);
+    if (!availability.ok) {
+      const status = availability.reason === 'unit_not_found' ? 404 : 503;
+      res.status(status).json({ error: availability.reason });
+      return;
+    }
+    const chosen = availability.slots[parsed.data.slotIndex];
+    if (!chosen) return void res.status(409).json({ error: 'slot_no_longer_offered' });
+    const booked = await bookShowingFromCalendar({
       tenantId,
       unitId: unit.id,
       leadId: lead.id,
-      slotIndex: parsed.data.slotIndex,
+      startAt: new Date(chosen.startAt),
       prospectName: parsed.data.name,
       prospectPhone: parsed.data.phone,
       prospectEmail: parsed.data.email,
-      adapter: getAdapters().showmojo,
     });
+    if (!booked.ok) {
+      res.status(booked.status).json({ error: booked.error });
+      return;
+    }
 
     const unitLabel = `${unit.property.name} — ${unit.name}`;
     const unitAddress = `${unit.property.address}, ${unit.property.city}, ${unit.property.province}`;
-    res.json({ scheduledAt: result.scheduledAt, unitLabel, unitAddress });
+    res.json({ scheduledAt: booked.scheduledAt, unitLabel, unitAddress });
   } catch (err) { next(err); }
 });
 
@@ -628,7 +672,7 @@ leadsRouter.post('/simulate-chat', requireAuth, async (req, res, next) => {
     const ch = (channel ?? 'whatsapp') as ChatChannel;
     const result = await handleInboundMessage(
       { tenantId: user.tenantId, from, body, channel: ch },
-      { glm: adapters.glm, messaging: adapters.messaging[ch], showmojo: adapters.showmojo },
+      { glm: adapters.glm, messaging: adapters.messaging[ch] },
     );
     res.json(result);
   } catch (err) {
