@@ -7,7 +7,7 @@ import { prisma } from '../config/db.js';
 import { getEnv } from '../config/env.js';
 import { writeAudit } from './audit.service.js';
 import { createConversationEvent } from './conversation-events.service.js';
-import { getUsableAccessToken } from './calendar-connection.service.js';
+import { getUsableAccessToken, tenantOwnerKey } from './calendar-connection.service.js';
 import { getSchedulingConfig } from './scheduling-config.service.js';
 
 export function normalizeShowingDuration(durationMinutes: number | undefined): number {
@@ -223,6 +223,20 @@ export async function bookShowingFromCalendar(
   const config = await getSchedulingConfig(input.tenantId);
   const calendarSlotKey = `${token.connection.ownerKey}:${startIso}`;
 
+  // Estado previo del Lead/Conversation, para poder revertirlos si el evento
+  // de Google falla DESPUÉS de que la transacción de abajo ya los tocó. Sin
+  // esto, un booking fallido deja al lead marcado tour_scheduled para
+  // siempre — la misma mentira que la compensación del Showing existe para
+  // evitar, una tabla más allá.
+  const previousLeadStatus = lead.status;
+  const previousLeadUnitId = lead.unitId;
+  const previousConversationUnitId = input.conversationId
+    ? (await prisma.chatConversation.findFirst({
+      where: { id: input.conversationId, tenantId: input.tenantId },
+      select: { unitId: true },
+    }))?.unitId ?? null
+    : null;
+
   // Primero la base: el INSERT es el paso que reserva el hueco de forma
   // atómica. Al revés, dos reservas simultáneas crearían ambas su evento
   // antes de chocar entre sí.
@@ -313,8 +327,23 @@ export async function bookShowingFromCalendar(
     return { ok: true, showingId, scheduledAt: startIso, googleEventId: event.eventId };
   } catch (error) {
     // Compensación: un showing que no quedó bloqueado en ningún calendario
-    // es exactamente la mentira que este sistema no puede contar.
-    await prisma.showing.deleteMany({ where: { id: showingId } }).catch(() => undefined);
+    // es exactamente la mentira que este sistema no puede contar. Tiene que
+    // revertir TODO lo que la transacción de arriba tocó — Showing, Lead y
+    // Conversation — no solo el Showing: un lead que se queda marcado
+    // tour_scheduled sin tour es la misma mentira, una tabla más allá.
+    await prisma.$transaction([
+      prisma.showing.deleteMany({ where: { id: showingId } }),
+      prisma.lead.updateMany({
+        where: { id: input.leadId, tenantId: input.tenantId },
+        data: { status: previousLeadStatus, unitId: previousLeadUnitId },
+      }),
+      ...(input.conversationId
+        ? [prisma.chatConversation.updateMany({
+          where: { id: input.conversationId, tenantId: input.tenantId },
+          data: { unitId: previousConversationUnitId },
+        })]
+        : []),
+    ]).catch(() => undefined);
     await writeAudit({
       tenantId: input.tenantId,
       actorId: 'scheduling_service',
@@ -364,6 +393,15 @@ export async function createManualShowingFromConversation(input: {
   if (!unitId) throw new Error('Conversation has no recommended unit');
 
   const durationMinutes = normalizeShowingDuration(input.durationMinutes);
+  // Se fija SIEMPRE, incluso si más abajo no se llega a crear el evento de
+  // Google (o ni siquiera hay calendario conectado): sin esta llave, este
+  // hueco es invisible para las dos redes de concurrencia a la vez —
+  // getSchedulingAvailability no lo ve ocupado (no hay evento de Google que
+  // reportar) y la unique de base no tiene nada con qué chocar — así que el
+  // chatbot podría ofrecer y autoreservar el mismo horario encima. El modelo
+  // de conexión hoy es siempre a nivel agencia (ownerKey null), igual que en
+  // getUsableAccessToken.
+  const calendarSlotKey = `${tenantOwnerKey(null)}:${input.scheduledAt.toISOString()}`;
   const showing = await prisma.$transaction(async (tx) => {
     const dbShowing = await tx.showing.create({
       data: {
@@ -373,6 +411,7 @@ export async function createManualShowingFromConversation(input: {
         scheduledAt: input.scheduledAt,
         durationMinutes,
         status: 'scheduled',
+        calendarSlotKey,
         activeSlotKey: showingSlotKey(leadId, input.scheduledAt),
         activeProspectSlotKey: buildProspectSlotKey({
           leadId,

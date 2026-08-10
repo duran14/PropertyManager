@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  ShowMojoMockAdapter,
   WebChatMockAdapter,
   type GlmAdapter,
   type GlmReasoningRequest,
@@ -141,6 +140,9 @@ describe('chatbot routing integration (handleInboundMessage)', () => {
   });
 
   afterEach(async () => {
+    // El spy sobre getAdapters().showmojo apunta al singleton cacheado por
+    // proceso: sin restaurarlo aquí, se quedaría espiando entre pruebas.
+    vi.restoreAllMocks();
     await cleanup();
   });
 
@@ -381,8 +383,14 @@ describe('chatbot routing integration (handleInboundMessage)', () => {
       confidence: 'high',
       profile: { set: {}, clear: [] },
     }));
-    const showmojo = new ShowMojoMockAdapter();
-    const spy = vi.spyOn(showmojo, 'getAvailableSlots');
+    // La producción llega a ShowMojo (si es que llegara, que sería
+    // justamente la regresión que esta prueba busca atrapar) a través del
+    // singleton cacheado de getAdapters().showmojo — espiar una instancia
+    // local de ShowMojoMockAdapter que nunca se inyecta a nadie no prueba
+    // nada, porque jamás podría ser llamada sin importar lo que haga el
+    // código real.
+    const { getAdapters } = await import('../config/adapters.js');
+    const spy = vi.spyOn(getAdapters().showmojo, 'getAvailableSlots');
 
     await handleInboundMessage(
       { tenantId: TENANT_ID, from: '+16045550222', body: 'quiero agendar una visita', channel: 'web' },

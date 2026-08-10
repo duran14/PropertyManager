@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { zonedDateTimeToUtc } from '@property-manager/core';
 import { prisma } from '../config/db.js';
-import { saveCalendarConnection } from './calendar-connection.service.js';
+import { disconnectCalendar, saveCalendarConnection } from './calendar-connection.service.js';
 import {
   bookShowingFromCalendar,
   cancelShowing,
+  createManualShowingFromConversation,
   getSchedulingAvailability,
 } from './scheduling.service.js';
 
@@ -13,6 +14,9 @@ const TENANT_ID = 'tenant_test_scheduling_calendar';
 async function cleanup() {
   await prisma.showing.deleteMany({ where: { tenantId: TENANT_ID } });
   await prisma.conversationEvent.deleteMany({ where: { tenantId: TENANT_ID } });
+  // Antes de leads/units: ChatConversation los referencia y no tiene cascade
+  // en esas FKs, así que borrarlos primero rompería la limpieza.
+  await prisma.chatConversation.deleteMany({ where: { tenantId: TENANT_ID } });
   await prisma.lead.deleteMany({ where: { tenantId: TENANT_ID } });
   await prisma.unit.deleteMany({ where: { tenantId: TENANT_ID } });
   await prisma.property.deleteMany({ where: { tenantId: TENANT_ID } });
@@ -234,11 +238,12 @@ describe('bookShowingFromCalendar', () => {
     expect(await prisma.showing.count({ where: { tenantId: TENANT_ID } })).toBe(1);
   });
 
-  it('no deja ningún showing si Google rechaza el evento', async () => {
+  it('no deja ningún showing si Google rechaza el evento, y revierte al lead a su estado previo', async () => {
     const { unitId, leadId } = await seed();
     await connectCalendar();
     const available = await getSchedulingAvailability(TENANT_ID, unitId);
     if (!available.ok) throw new Error('se esperaban huecos');
+    const leadBefore = await prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
     const { getAdapters } = await import('../config/adapters.js');
     vi.spyOn(getAdapters().calendar, 'createEvent').mockRejectedValue(new Error('403'));
 
@@ -252,6 +257,12 @@ describe('bookShowingFromCalendar', () => {
 
     expect(result).toEqual({ ok: false, status: 503, error: 'calendar_unavailable' });
     expect(await prisma.showing.count({ where: { tenantId: TENANT_ID } })).toBe(0);
+    // La transacción original ya había marcado al lead tour_scheduled y le
+    // había puesto unitId antes de que el evento de Google fallara — la
+    // compensación tiene que deshacer eso también, no solo borrar el Showing.
+    const leadAfter = await prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
+    expect(leadAfter.status).toBe(leadBefore.status);
+    expect(leadAfter.unitId).toBe(leadBefore.unitId);
   });
 
   it('el hueco reservado deja de ofrecerse', async () => {
@@ -292,5 +303,59 @@ describe('cancelShowing', () => {
     const showing = await prisma.showing.findUniqueOrThrow({ where: { id: booked.showingId } });
     expect(showing.status).toBe('cancelled');
     expect(showing.calendarSlotKey).toBeNull();
+  });
+});
+
+describe('createManualShowingFromConversation', () => {
+  it('deja calendarSlotKey listo para bloquear un bookShowingFromCalendar posterior al mismo horario', async () => {
+    const { unitId, leadId, secondLeadId, userId } = await seed();
+    await connectCalendar();
+    const available = await getSchedulingAvailability(TENANT_ID, unitId);
+    if (!available.ok) throw new Error('se esperaban huecos');
+    const startAt = new Date(available.slots[0]!.startAt);
+
+    // El calendario se desconecta ANTES de la reserva manual a propósito: así
+    // createManualShowingFromConversation no llega a crear el evento de
+    // Google (rama de mejor esfuerzo, se salta) y el único rastro de que ese
+    // horario ya está tomado es el calendarSlotKey en la base — exactamente
+    // el escenario del Finding 2, donde getBusy nunca se entera del showing
+    // manual.
+    await disconnectCalendar(TENANT_ID);
+
+    const conversation = await prisma.chatConversation.create({
+      data: {
+        tenantId: TENANT_ID,
+        externalId: `manual-${TENANT_ID}`,
+        channel: 'web',
+        leadId,
+        unitId,
+      },
+    });
+
+    const manual = await createManualShowingFromConversation({
+      tenantId: TENANT_ID,
+      conversationId: conversation.id,
+      scheduledAt: startAt,
+      actorId: userId,
+    });
+    expect(manual.calendarSlotKey).toContain('tenant:');
+    expect(manual.googleEventId).toBeNull();
+
+    // Se reconecta para la segunda reserva: getSchedulingAvailability sigue
+    // ofreciendo ese horario (Google nunca se enteró del showing manual), así
+    // que lo único que puede rechazar la segunda reserva es la unique de
+    // calendarSlotKey — la red de concurrencia de base, no la de Google.
+    await connectCalendar();
+
+    const result = await bookShowingFromCalendar({
+      tenantId: TENANT_ID,
+      unitId,
+      leadId: secondLeadId,
+      startAt,
+      prospectName: 'Beto',
+    });
+
+    expect(result).toEqual({ ok: false, status: 409, error: 'slot_taken' });
+    expect(await prisma.showing.count({ where: { tenantId: TENANT_ID } })).toBe(1);
   });
 });
