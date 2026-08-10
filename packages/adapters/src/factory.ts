@@ -43,6 +43,7 @@ import { TelegramRealAdapter } from './real/telegram.real.js';
 import { MessengerRealAdapter } from './real/messenger.real.js';
 import { TwilioRealAdapter } from './real/twilio.real.js';
 import { ResendEmailAdapter } from './real/resend-email.real.js';
+import { GoogleCalendarRealAdapter } from './real/google-calendar.real.js';
 
 export interface Adapters {
   buildium: BuildiumAdapter;
@@ -90,9 +91,12 @@ export function createAdapters(env: Env): Adapters {
     google_calendar: !isIntegrationConfigured(env, 'google_calendar'),
   };
 
-  // El adapter real llega en la tarea siguiente; hasta entonces el mock
-  // cubre ambos casos y el flag solo alimenta mockModes.
-  const calendar: CalendarAdapter = new CalendarMockAdapter();
+  const calendar: CalendarAdapter = isIntegrationConfigured(env, 'google_calendar')
+    ? new GoogleCalendarRealAdapter({
+      clientId: env.GOOGLE_CLIENT_ID,
+      clientSecret: env.GOOGLE_CLIENT_SECRET,
+    })
+    : new CalendarMockAdapter();
 
   return {
     buildium: new BuildiumMockAdapter(),

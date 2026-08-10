@@ -144,4 +144,14 @@ describe('createAdapters', () => {
     expect(adapters.calendar.name).toBe('calendar_mock');
     expect(adapters.mockModes.google_calendar).toBe(true);
   });
+
+  it('usa el adapter real cuando hay client id y secret', () => {
+    const adapters = createAdapters({
+      ...baseEnv,
+      GOOGLE_CLIENT_ID: 'client-123',
+      GOOGLE_CLIENT_SECRET: 'secret-456',
+    });
+    expect(adapters.calendar.name).toBe('google_calendar');
+    expect(adapters.mockModes.google_calendar).toBe(false);
+  });
 });
