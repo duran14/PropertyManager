@@ -3867,7 +3867,20 @@ export async function resumeBotFromHandoff(input: {
     include: { messages: { orderBy: { createdAt: 'desc' }, take: 20 }, slots: true },
   });
   if (!conversation) return { ok: false, status: 404, error: 'not_found' };
-  if (!conversation.claimedByUserId) return { ok: false, status: 409, error: 'not_claimed' };
+
+  // El where: { claimedByUserId: { not: null } } es la misma red de
+  // concurrencia que claimConversation (arriba), aplicada al lado contrario:
+  // si dos miembros del staff presionan "Return to bot" casi al mismo
+  // tiempo, esta actualización condicional garantiza que solo uno gane el
+  // 200 y siga adelante con el turno sintético (llamada al modelo + envío
+  // al lead) — el otro recibe 409 aquí mismo, antes de tocar el GLM o
+  // mandar nada. Por eso corre ANTES de cualquier trabajo costoso o con
+  // efectos secundarios.
+  const claimReleased = await prisma.chatConversation.updateMany({
+    where: { id: input.conversationId, tenantId: input.tenantId, claimedByUserId: { not: null } },
+    data: { claimedByUserId: null, claimedAt: null, handoffReason: null, handoffNotifiedAt: null },
+  });
+  if (claimReleased.count === 0) return { ok: false, status: 409, error: 'not_claimed' };
 
   const existingSlots: Record<string, string> = {};
   for (const slot of conversation.slots) existingSlots[slot.key] = slot.value;
@@ -3918,15 +3931,12 @@ export async function resumeBotFromHandoff(input: {
 
   const newState = turn.next_state ?? landingState;
 
+  // Los campos de claim/handoff ya se limpiaron arriba, en el updateMany
+  // que sirve de guard de concurrencia — no hace falta (ni conviene)
+  // reescribirlos aquí también.
   await prisma.chatConversation.update({
     where: { id: conversation.id },
-    data: {
-      state: newState,
-      handoffReason: null,
-      handoffNotifiedAt: null,
-      claimedByUserId: null,
-      claimedAt: null,
-    },
+    data: { state: newState },
   });
 
   const assistantMessage = await prisma.chatMessage.create({

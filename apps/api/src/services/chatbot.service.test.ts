@@ -2849,4 +2849,59 @@ describe('resumeBotFromHandoff', () => {
     expect(row.state).not.toBe('handoff');
     expect(row.state).toBe('proposing_tour');
   });
+
+  it('devuelve 409 si dos "Return to bot" llegan a la vez — solo uno gana y solo el ganador llama al GLM y manda mensaje', async () => {
+    // Mismo principio que el test de condición de carrera de
+    // claimConversation, pero para el lado contrario: el updateMany
+    // condicional del guard (Fix 1 de la revisión final) debe garantizar
+    // que sólo una de las dos llamadas concurrentes pase a hacer el turno
+    // sintético (GLM + envío al lead + evento). La otra debe cortar en el
+    // 409 antes de tocar el adapter de GLM o de mensajería.
+    const staffUser = await prisma.user.create({
+      data: { tenantId: TENANT_ID, email: `resume-race-${TENANT_ID}@test.ca`, passwordHash: 'x', firstName: 'Pat', lastName: 'Manager', role: 'property_manager' },
+    });
+    const lead = await prisma.lead.create({
+      data: { tenantId: TENANT_ID, name: 'Ana', phone: '+16045550112', status: 'contacted', source: 'web' },
+    });
+    const conversation = await prisma.chatConversation.create({
+      data: {
+        tenantId: TENANT_ID, externalId: 'web:resume-race', channel: 'web', state: 'proposing_tour',
+        handoffReason: 'explicit_request', handoffNotifiedAt: new Date(),
+        claimedByUserId: staffUser.id, claimedAt: new Date(),
+        leadId: lead.id,
+        slots: { create: [{ key: 'transaction_intent', value: 'rent' }] },
+      },
+    });
+
+    const reason = vi.fn(async () => ({
+      content: JSON.stringify({ intent: 'other', confidence: 'high', reply: 'Sure, happy to help further.', profile: { set: {}, clear: [] } }),
+    }));
+    const send = vi.fn(async () => ({ messageId: 'm1' }));
+    vi.spyOn(await import('../config/adapters.js'), 'getAdapters').mockReturnValue({
+      glm: { name: 'glm', reason, extractReceipt: vi.fn() },
+      messaging: { web: { channel: 'web', send, parseWebhook: vi.fn() } },
+    } as never);
+
+    const [resultA, resultB] = await Promise.all([
+      resumeBotFromHandoff({ tenantId: TENANT_ID, conversationId: conversation.id, actorUserId: staffUser.id }),
+      resumeBotFromHandoff({ tenantId: TENANT_ID, conversationId: conversation.id, actorUserId: staffUser.id }),
+    ]);
+
+    const outcomes = [resultA, resultB];
+    expect(outcomes.filter((o) => o.ok)).toHaveLength(1);
+    expect(outcomes.filter((o) => !o.ok && o.status === 409 && o.error === 'not_claimed')).toHaveLength(1);
+
+    // El punto central del fix: la llamada perdedora corta antes del GLM y
+    // antes de enviar nada — no basta con que el resultado final sea 409,
+    // el efecto secundario doble (mensaje repetido al lead) es lo que este
+    // guard existe para prevenir.
+    expect(reason).toHaveBeenCalledTimes(1);
+    expect(send).toHaveBeenCalledTimes(1);
+
+    const events = await prisma.conversationEvent.findMany({ where: { tenantId: TENANT_ID, conversationId: conversation.id, type: 'handoff.resumed' } });
+    expect(events).toHaveLength(1);
+
+    const row = await prisma.chatConversation.findUniqueOrThrow({ where: { id: conversation.id } });
+    expect(row.claimedByUserId).toBeNull();
+  });
 });
