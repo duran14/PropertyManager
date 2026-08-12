@@ -458,10 +458,19 @@ describe('chatbot routing integration (handleInboundMessage)', () => {
     expect(spy).not.toHaveBeenCalled();
   });
 
-  it('no responde ni llama a GLM cuando la conversación está en handoff', async () => {
-    // Fase 1.2: `handoff` ya se usa en tres lugares (booking exitoso, sin
-    // calendario conectado, pausa manual del staff) pero nada verificaba
-    // ese estado antes de este guard — el bot seguía auto-respondiendo.
+  it('no responde ni llama a GLM cuando alguien ya tomó control de la conversación', async () => {
+    // Fase 1.2 (corregido): el guard ya no mira `state === 'handoff'` —
+    // solo `claimedByUserId` apaga al bot. Este test siembra ambas cosas
+    // (state 'handoff' Y claimedByUserId) para probar el guard real; el
+    // caso de solo `state: 'handoff'` sin claim está cubierto por
+    // 'el bot SIGUE respondiendo si hay handoffReason pero nadie ha tomado
+    // control' más abajo, que demuestra justo lo contrario.
+    const staffUser = await prisma.user.create({
+      data: {
+        tenantId: TENANT_ID, email: `guard-claimer-${TENANT_ID}@test.ca`, passwordHash: 'x',
+        firstName: 'Pat', lastName: 'Manager', role: 'property_manager',
+      },
+    });
     const conversation = await prisma.chatConversation.create({
       data: {
         tenantId: TENANT_ID,
@@ -469,6 +478,8 @@ describe('chatbot routing integration (handleInboundMessage)', () => {
         channel: 'web',
         state: 'handoff',
         handoffReason: 'manual',
+        claimedByUserId: staffUser.id,
+        claimedAt: new Date(),
       },
     });
 
@@ -491,6 +502,53 @@ describe('chatbot routing integration (handleInboundMessage)', () => {
     expect(messages).toHaveLength(1);
     expect(messages[0]!.role).toBe('user');
     expect(messages[0]!.content).toBe('hello?');
+  });
+
+  it('el bot SIGUE respondiendo si hay handoffReason pero nadie ha tomado control', async () => {
+    await prisma.chatConversation.create({
+      data: {
+        tenantId: TENANT_ID, externalId: 'web:pending-claim-1', channel: 'web',
+        state: 'handoff', handoffReason: 'explicit_request',
+        slots: { create: [{ key: 'transaction_intent', value: 'rent' }] },
+      },
+    });
+    const { glm, reason } = glmReturning(JSON.stringify({
+      intent: 'other', confidence: 'high', reply: 'Sure, happy to help.',
+      profile: { set: {}, clear: [] },
+    }));
+
+    const reply = await handleInboundMessage(
+      { tenantId: TENANT_ID, from: 'web:pending-claim-1', body: 'any updates?', channel: 'web' },
+      { glm, messaging: new WebChatMockAdapter() },
+    );
+
+    expect(reason).toHaveBeenCalledTimes(1);
+    expect(reply.replyText).not.toBe('');
+  });
+
+  it('el bot se calla en cuanto alguien tomó control', async () => {
+    const staffUser = await prisma.user.create({
+      data: {
+        tenantId: TENANT_ID, email: `claimer-${TENANT_ID}@test.ca`, passwordHash: 'x',
+        firstName: 'Pat', lastName: 'Manager', role: 'property_manager',
+      },
+    });
+    await prisma.chatConversation.create({
+      data: {
+        tenantId: TENANT_ID, externalId: 'web:claimed-1', channel: 'web',
+        state: 'proposing_tour', handoffReason: 'explicit_request',
+        claimedByUserId: staffUser.id, claimedAt: new Date(),
+      },
+    });
+    const { glm, reason } = glmReturning('should never be called');
+
+    const reply = await handleInboundMessage(
+      { tenantId: TENANT_ID, from: 'web:claimed-1', body: 'hello?', channel: 'web' },
+      { glm, messaging: new WebChatMockAdapter() },
+    );
+
+    expect(reason).not.toHaveBeenCalled();
+    expect(reply.replyText).toBe('');
   });
 
   it('un intent handoff explícito pausa el bot y notifica al staff', async () => {

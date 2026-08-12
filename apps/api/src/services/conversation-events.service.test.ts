@@ -11,6 +11,15 @@ describe('conversation events service', () => {
     });
   });
 
+  it('handoff.claimed se presenta con tono active', () => {
+    const presentation = buildConversationEventPresentation('handoff.claimed', {});
+    expect(presentation).toEqual({
+      label: 'Staff took control',
+      detail: 'A staff member took over this conversation',
+      tone: 'active',
+    });
+  });
+
   it('creates a staff event with normalized labels and details', async () => {
     const writes: unknown[] = [];
     const event = await createConversationEvent(

@@ -12,6 +12,7 @@ export type ConversationEventType =
   | 'staff.reply_sent'
   | 'handoff.requested'
   | 'handoff.resumed'
+  | 'handoff.claimed'
   | 'note.internal_added';
 
 export interface CreateConversationEventInput {
@@ -120,6 +121,12 @@ export function buildConversationEventPresentation(
         label: 'Bot resumed',
         detail: 'Staff re-enabled automated assistance',
         tone: 'done',
+      };
+    case 'handoff.claimed':
+      return {
+        label: 'Staff took control',
+        detail: formatText(payload.claimedByName) ?? 'A staff member took over this conversation',
+        tone: 'active',
       };
     case 'note.internal_added':
       return {

@@ -13,7 +13,7 @@ import { writeAudit } from './audit.service.js';
 import { formatKnowledgeContext, rankKnowledgeChunks } from './knowledge-retrieval.service.js';
 import { bookShowingFromCalendar, getSchedulingAvailability } from './scheduling.service.js';
 import { createConversationEvent } from './conversation-events.service.js';
-import { resolveStaffNotifyTargets, notifyStaffTargets } from './staff-notify.service.js';
+import { notifyStaffTargets } from './staff-notify.service.js';
 import { createShortlist, rotateShortlistToken } from './shortlist.service.js';
 import { nextDeliveryRetryAt } from './message-delivery-retry.service.js';
 import { buildOwnershipConversationTurn } from './ownership-conversation.service.js';
@@ -814,15 +814,23 @@ async function handleInboundMessageUnlocked(
     });
   }
 
-  // Fase 1.2: si la conversación está pausada para un humano, el bot no
-  // responde. El mensaje del lead ya quedó guardado arriba — el staff lo
-  // ve como cualquier otro — pero no se llama a GLM ni al motor
+  // Fase 1.2 (corregido): el bot NO se apaga solo porque haya pedido
+  // ayuda humana — sigue respondiendo mientras nadie ha tomado control.
+  // Solo un humano que presiona explícitamente "Take control" (la ruta
+  // /claim) apaga al bot. Ver spec Sección 0. El mensaje del lead ya
+  // quedó guardado arriba — el staff lo ve como cualquier otro — pero si
+  // ya hay un `claimedByUserId` no se llama a GLM ni al motor
   // determinístico, y no se envía nada por el canal del lead. Se usa
-  // `conversation.state` (el valor recién leído del `upsert` de arriba),
-  // no una variable derivada, porque este guard debe correr antes de
-  // cualquier lógica de /start o de la máquina de estados normal.
-  if (conversation.state === 'handoff') {
-    return { replyText: '', newState: 'handoff', leadCreated: false, handoff: true };
+  // `conversation.claimedByUserId` (el valor recién leído del `upsert`
+  // de arriba), no una variable derivada, porque este guard debe correr
+  // antes de cualquier lógica de /start o de la máquina de estados normal.
+  if (conversation.claimedByUserId) {
+    return {
+      replyText: '',
+      newState: conversation.state as ConversationState,
+      leadCreated: false,
+      handoff: true,
+    };
   }
 
   // /start (Telegram) significa "empezar de cero": resetear estado y slots
@@ -3663,13 +3671,17 @@ async function handOffScheduling(
 }
 
 export const HANDOFF_ACKNOWLEDGEMENT =
-  "I'll get someone from our team to help you with that — they'll follow up right here.";
+  "I've let the team know — someone will pick this up as soon as they can. " +
+  "In the meantime, I'm still here if you have other questions.";
 
 /**
- * Deja la conversación pausada (handoffReason/handoffPreState) y registra el
- * evento siempre; la notificación al staff (y su marca de tiempo) solo
- * corre cuando el disparo es automático — un handoff 'manual' ya lo inició
- * un humano desde la consola, así que avisarle a sí mismo no aporta nada.
+ * Marca `handoffReason` y registra el evento siempre; esto NO apaga al bot
+ * por sí solo (Fase 1.2 corregido: el guard de pausa mira
+ * `claimedByUserId`, no `handoffReason`) — solo dispara la notificación al
+ * staff para que alguien decida tomar control. La notificación (y su marca
+ * de tiempo) solo corre cuando el disparo es automático — un handoff
+ * 'manual' ya lo inició un humano desde la consola, así que avisarle a sí
+ * mismo no aporta nada.
  */
 export async function triggerHandoff(input: {
   tenantId: string;
@@ -3690,7 +3702,7 @@ export async function triggerHandoff(input: {
 
   await prisma.chatConversation.update({
     where: { id: input.conversation.id },
-    data: { handoffReason: input.reason, handoffPreState: input.preState },
+    data: { handoffReason: input.reason },
   });
 
   await createConversationEvent({
@@ -3730,17 +3742,19 @@ async function notifyStaffOfHandoff(input: {
 }): Promise<void> {
   try {
     const lead = input.leadId
-      ? await prisma.lead.findUnique({ where: { id: input.leadId }, select: { assignedUserId: true, name: true } })
+      ? await prisma.lead.findUnique({ where: { id: input.leadId }, select: { name: true } })
       : null;
-    const staff = await prisma.user.findMany({
-      where: { tenantId: input.tenantId, isActive: true },
-      select: { id: true, email: true, role: true, notificationChannel: true, notificationAddress: true },
-    });
-    const targets = resolveStaffNotifyTargets({
-      brokerUserId: null,
-      assignedUserId: lead?.assignedUserId ?? null,
-      staff,
-      propertyManagerIds: staff.filter((m) => m.role === 'property_manager').map((m) => m.id),
+    // A diferencia de la notificación de aplicaciones de renta (que sí usa
+    // la cascada de resolveStaffNotifyTargets), aquí se avisa a TODO el
+    // staff disponible con rol property_manager o broker — cualquiera que
+    // esté libre puede tomar control. No hay "dueño" de un hand-off.
+    const targets = await prisma.user.findMany({
+      where: {
+        tenantId: input.tenantId,
+        isActive: true,
+        role: { in: ['property_manager', 'broker'] },
+      },
+      select: { id: true, email: true, notificationChannel: true, notificationAddress: true },
     });
 
     const reasonText = input.reason === 'explicit_request'

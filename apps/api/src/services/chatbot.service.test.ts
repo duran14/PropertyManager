@@ -2414,7 +2414,6 @@ describe('triggerHandoff', () => {
 
     const row = await prisma.chatConversation.findUniqueOrThrow({ where: { id: conversation.id } });
     expect(row.handoffReason).toBe('explicit_request');
-    expect(row.handoffPreState).toBe('proposing_tour');
     expect(row.handoffNotifiedAt).not.toBeNull();
 
     const events = await prisma.conversationEvent.findMany({ where: { tenantId: TENANT_ID, conversationId: conversation.id, type: 'handoff.requested' } });
