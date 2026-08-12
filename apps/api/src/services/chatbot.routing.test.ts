@@ -421,16 +421,28 @@ describe('chatbot routing integration (handleInboundMessage)', () => {
       { glm, messaging: new WebChatMockAdapter() },
     );
 
-    expect(reply.replyText.toLowerCase()).toContain('advisor');
+    // Tarea 8: el texto específico de handOffScheduling queda superado por
+    // el acuse genérico de triggerHandoff — este ya no es solo un placeholder,
+    // ahora sí dispara el aviso al staff (por eso ya no se compara contra
+    // "advisor", sino contra el acknowledgement genérico real).
+    expect(reply.replyText).toContain("I've let the team know");
     expect(await prisma.showing.count({ where: { tenantId: TENANT_ID } })).toBe(0);
-    expect((await prisma.chatConversation.findUniqueOrThrow({ where: { id: conversationId } })).state)
-      .toBe('handoff');
+    const row = await prisma.chatConversation.findUniqueOrThrow({ where: { id: conversationId } });
+    expect(row.state).toBe('handoff');
+    expect(row.handoffReason).toBe('follow_up_needed');
+    expect(row.handoffNotifiedAt).not.toBeNull();
 
     const events = await prisma.conversationEvent.findMany({
       where: { tenantId: TENANT_ID, type: 'showing.availability_unavailable' },
     });
     expect(events).toHaveLength(1);
     expect((events[0]!.payload as { reason?: string }).reason).toBe('not_connected');
+
+    // El evento genérico 'handoff.requested' coexiste con el específico de arriba.
+    const handoffEvents = await prisma.conversationEvent.findMany({
+      where: { tenantId: TENANT_ID, type: 'handoff.requested' },
+    });
+    expect(handoffEvents).toHaveLength(1);
   });
 
   it('nunca consulta el adapter de ShowMojo para agendar', async () => {
@@ -580,6 +592,48 @@ describe('chatbot routing integration (handleInboundMessage)', () => {
     expect(reply.replyText).toContain('team');
     const row = await prisma.chatConversation.findUniqueOrThrow({ where: { id: conversation.id } });
     expect(row.handoffReason).toBe('explicit_request');
+    expect(row.handoffNotifiedAt).not.toBeNull();
+  });
+
+  it('calificación de compra completa dispara handoff con aviso al staff', async () => {
+    await seedTenant();
+    await prisma.user.create({
+      data: {
+        tenantId: TENANT_ID, email: `pm-buyer-${TENANT_ID}@test.ca`, passwordHash: 'x',
+        firstName: 'Pat', lastName: 'Manager', role: 'property_manager',
+      },
+    });
+    // Con transaction_intent ya en 'buy', el turno normal pasa por
+    // callOwnershipGlm (el modelo), no por buyerTurn directo — buyerTurn solo
+    // se alcanza en producción como fallback cuando el proveedor falla (ver
+    // resolveOwnershipTurnToInterpreted). throwingGlm simula justo esa falla
+    // real para ejercitar el mismo camino que corre en producción, en vez de
+    // inventar un atajo que el código real no tiene.
+    const conversation = await seedConversationWithSlots('web:buyer-qualified', 'collecting_budget', {
+      transaction_intent: 'buy',
+      prospect_name: 'Ana',
+      preferred_area: 'Kelowna',
+      preferred_province: 'British Columbia',
+      buyer_property_type: 'any',
+      bedrooms: '3',
+      purchase_budget: '850000',
+      financing_status: 'pre_approved',
+      purchase_timeline: 'flexible',
+      buyer_household: 'just me',
+      buyer_pets: 'none',
+      buyer_priorities: 'schools',
+    });
+
+    const { glm, reason } = throwingGlm();
+    const reply = await handleInboundMessage(
+      { tenantId: TENANT_ID, from: 'web:buyer-qualified', body: 'ana@example.com', channel: 'web' },
+      { glm, messaging: new WebChatMockAdapter() },
+    );
+
+    expect(reason).toHaveBeenCalledTimes(1);
+    expect(reply.newState).toBe('handoff');
+    const row = await prisma.chatConversation.findUniqueOrThrow({ where: { id: conversation.id } });
+    expect(row.handoffReason).toBe('follow_up_needed');
     expect(row.handoffNotifiedAt).not.toBeNull();
   });
 

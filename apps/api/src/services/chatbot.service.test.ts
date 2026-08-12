@@ -547,9 +547,13 @@ describe('chatbot conversation identity', () => {
       scheduled_unit_label: 'Cedar Court â€” Apt 305',
       tour_scheduled_at: '2026-08-03T21:00:00.000Z',
     })?.reply).toContain('1200 Granville St\nVancouver, BC');
-    expect(buildPostTourContextTurn('I need to reschedule', {
+    const rescheduleTurn = buildPostTourContextTurn('I need to reschedule', {
       tour_scheduled_at: '2026-08-03T21:00:00.000Z',
-    })?.reply).toContain('help you reschedule');
+    });
+    // El texto ya no promete "I'll check the available alternatives" sin respaldo:
+    // ahora marca handoffReason para que el despacho genérico avise al staff de verdad.
+    expect(rescheduleTurn?.reply).toContain('help you find a new time');
+    expect(rescheduleTurn?.handoffReason).toBe('follow_up_needed');
   });
 
   it('answers an incidental property question and signals that qualification should resume', () => {

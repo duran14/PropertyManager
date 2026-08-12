@@ -5,6 +5,7 @@ export type OwnershipConversationTurn = {
   slots: Record<string, string>;
   next_state: ConversationState;
   clearSlots?: string[];
+  handoffReason?: 'follow_up_needed';
 };
 
 const PROVINCES: Record<string, string> = {
@@ -320,15 +321,17 @@ function buyerTurn(message: string, slots: Record<string, string>): OwnershipCon
     const propertyLabel = slots.buyer_property_type === 'any' ? 'flexible property type' : slots.buyer_property_type;
     const petLabel = slots.buyer_pets === 'none' ? 'no pets' : `${slots.buyer_pets} needs`;
     return {
-      reply: `Great, ${slots.prospect_name}. I have you looking in ${slots.preferred_area}, ${slots.preferred_province}, for a ${slots.bedrooms}-bedroom home with ${propertyLabel}, a working budget of $${Number(slots.purchase_budget).toLocaleString('en-CA')}, ${slots.financing_status.replaceAll('_', ' ')}, and ${petLabel}. Your priorities are ${slots.buyer_priorities}. I'll connect you with a purchase advisor, who will contact you at ${Object.values(contact)[0]} with the next step.`,
+      reply: `Great, ${slots.prospect_name}. I have you looking in ${slots.preferred_area}, ${slots.preferred_province}, for a ${slots.bedrooms}-bedroom home with ${propertyLabel}, a working budget of $${Number(slots.purchase_budget).toLocaleString('en-CA')}, ${slots.financing_status.replaceAll('_', ' ')}, and ${petLabel}. Your priorities are ${slots.buyer_priorities}. I've flagged this for a purchase advisor to follow up — someone will reach out to ${Object.values(contact)[0]} as soon as they can.`,
       slots: { ...contact, ownership_qualification_complete: 'yes' },
       next_state: 'handoff',
+      handoffReason: 'follow_up_needed',
     };
   }
   return {
-    reply: `Your purchase brief is already complete. I'll connect you with the purchase specialist for the next step.`,
+    reply: `Your purchase brief is already complete — a purchase specialist has already been flagged for the next step.`,
     slots: {},
     next_state: 'handoff',
+    handoffReason: 'follow_up_needed',
   };
 }
 
@@ -416,15 +419,17 @@ function sellerTurn(message: string, slots: Record<string, string>): OwnershipCo
   if (!slots.seller_goal) {
     const sellerGoal = parseSellerGoal(message) ?? 'exploring';
     return {
-      reply: `Thank you — I have enough context to make the conversation useful. I'll connect you with a selling specialist for a proper market analysis and next steps.`,
+      reply: `Thank you — I have enough context to make the conversation useful. I've flagged this for a selling specialist to follow up with a proper market analysis and next steps.`,
       slots: { seller_goal: sellerGoal, ownership_qualification_complete: 'yes' },
       next_state: 'handoff',
+      handoffReason: 'follow_up_needed',
     };
   }
   return {
-    reply: `Your sale brief is already complete. I'll connect you with the selling specialist for the next step.`,
+    reply: `Your sale brief is already complete — a selling specialist has already been flagged for the next step.`,
     slots: {},
     next_state: 'handoff',
+    handoffReason: 'follow_up_needed',
   };
 }
 

@@ -129,7 +129,10 @@ describe('50 buy and sell conversation simulations', () => {
       expect(result.slots).toMatchObject(scenario.expected);
       expect(result.slots.ownership_qualification_complete).toBe('yes');
       expect(result.lastReply).toMatch(/specialist|advisor|agent/i);
-      expect(result.replies.some((reply) => /connect you/i.test(reply))).toBe(true);
+      // Tarea 8: la copia ya no promete "I'll connect you" sin respaldo — ahora
+      // dice honestamente que quedó "flagged" para que un humano lo retome,
+      // que es justo lo que handoffReason: 'follow_up_needed' dispara de verdad.
+      expect(result.replies.some((reply) => /flagged/i.test(reply))).toBe(true);
     });
   }
 });
@@ -161,6 +164,44 @@ describe('unexpected ownership conversation behavior', () => {
     expect(result.lastReply).toContain('$2,000,000');
     expect(result.lastReply).not.toMatch(/invent|brief a purchase specialist/i);
     expect(result.lastReply).toMatch(/contact|advisor|specialist/i);
+  });
+
+  it('marca handoffReason follow_up_needed cuando la calificación de compra queda completa', () => {
+    // Tarea 8: este era uno de los cinco lugares que le prometían un humano
+    // al lead sin avisar a nadie — buildDeterministicQualificationTurn/
+    // handleInboundMessageUnlocked recogen este campo y disparan triggerHandoff.
+    const turn = buildOwnershipConversationTurn('nitro@example.com', {
+      transaction_intent: 'buy', prospect_name: 'Nitro', preferred_area: 'Burnaby',
+      preferred_province: 'British Columbia', location_confirmed: 'yes',
+      buyer_property_type: 'any', bedrooms: '3', purchase_budget: '850000',
+      financing_status: 'pre_approved', purchase_timeline: 'flexible',
+      buyer_household: 'just me', buyer_pets: 'none', buyer_priorities: 'schools',
+    });
+    expect(turn?.next_state).toBe('handoff');
+    expect(turn?.handoffReason).toBe('follow_up_needed');
+
+    // La rama "ya está completo" (re-preguntado tras el handoff) también avisa.
+    const alreadyComplete = buildOwnershipConversationTurn('anything else?', {
+      transaction_intent: 'buy', prospect_name: 'Nitro', preferred_area: 'Burnaby',
+      preferred_province: 'British Columbia', location_confirmed: 'yes',
+      buyer_property_type: 'any', bedrooms: '3', purchase_budget: '850000',
+      financing_status: 'pre_approved', purchase_timeline: 'flexible',
+      buyer_household: 'just me', buyer_pets: 'none', buyer_priorities: 'schools',
+      contact_email: 'nitro@example.com', ownership_qualification_complete: 'yes',
+    });
+    expect(alreadyComplete?.next_state).toBe('handoff');
+    expect(alreadyComplete?.handoffReason).toBe('follow_up_needed');
+  });
+
+  it('marca handoffReason follow_up_needed cuando la calificación de venta queda completa', () => {
+    const turn = buildOwnershipConversationTurn('just exploring for now', {
+      transaction_intent: 'sell', prospect_name: 'Ana',
+      seller_property_address: '4 Mountain Way, Squamish',
+      seller_property_type: 'townhouse', seller_bedrooms: '3',
+      occupancy_status: 'vacant', selling_timeline: 'next spring',
+    });
+    expect(turn?.next_state).toBe('handoff');
+    expect(turn?.handoffReason).toBe('follow_up_needed');
   });
 
   it('treats a stated amount as a working budget rather than silently declaring a ceiling', () => {

@@ -197,7 +197,7 @@ export interface InterpretedTurn {
   selection_scope?: 'single' | 'multiple' | 'all';
   next_state?: ConversationState;
   clearSlots?: string[];
-  handoffReason?: 'explicit_request' | 'provider_failure';
+  handoffReason?: 'explicit_request' | 'provider_failure' | 'follow_up_needed';
 }
 
 const rentalProfileFields = new Set<RentalProfileField>([
@@ -294,16 +294,18 @@ export function buildPostTourContextTurn(
   }
   if (/\b(?:reschedule|change (?:the )?(?:time|date)|another time)\b/.test(normalized)) {
     return {
-      reply: "Of course — I can help you reschedule. Tell me which day or time would work better, and I’ll check the available alternatives.",
+      reply: "Got it — I've flagged this so the team can help you find a new time. " + HANDOFF_ACKNOWLEDGEMENT,
       slots: { post_tour_action: 'reschedule' },
       next_state: 'handoff',
+      handoffReason: 'follow_up_needed',
     };
   }
   if (/\b(?:cancel|cannot make it|can't make it|won't make it)\b/.test(normalized)) {
     return {
-      reply: "I can help with that. I’ll treat this as a cancellation request and make sure the property manager is notified.",
+      reply: "I've noted this as a cancellation request and flagged it for the team. " + HANDOFF_ACKNOWLEDGEMENT,
       slots: { post_tour_action: 'cancel' },
       next_state: 'handoff',
+      handoffReason: 'follow_up_needed',
     };
   }
   if (/\b(?:what.*bring|documents?|identification|id)\b/.test(normalized)) {
@@ -1294,6 +1296,7 @@ async function handleInboundMessageUnlocked(
       } else {
         finalReply = await handOffScheduling(input.tenantId, conversation.id, conversation.leadId, availability.reason);
         newState = 'handoff';
+        glmResult.handoffReason = 'follow_up_needed';
       }
     }
   } else if (currentState === 'scheduling') {
@@ -1370,6 +1373,7 @@ async function handleInboundMessageUnlocked(
               input.tenantId, conversation.id, conversation.leadId, booked.error,
             );
             newState = 'handoff';
+            glmResult.handoffReason = 'follow_up_needed';
           }
         }
       }
@@ -3686,7 +3690,7 @@ export const HANDOFF_ACKNOWLEDGEMENT =
 export async function triggerHandoff(input: {
   tenantId: string;
   conversation: { id: string; leadId: string | null };
-  reason: 'explicit_request' | 'provider_failure' | 'manual';
+  reason: 'explicit_request' | 'provider_failure' | 'follow_up_needed' | 'manual';
   preState: ConversationState;
 }): Promise<{ acknowledgement: string }> {
   // Se lee el estado actual de handoffNotifiedAt ANTES de tocar la fila:
@@ -3753,7 +3757,7 @@ async function notifyStaffOfHandoff(input: {
   tenantId: string;
   conversationId: string;
   leadId: string | null;
-  reason: 'explicit_request' | 'provider_failure';
+  reason: 'explicit_request' | 'provider_failure' | 'follow_up_needed';
 }): Promise<void> {
   try {
     const lead = input.leadId
@@ -3774,7 +3778,9 @@ async function notifyStaffOfHandoff(input: {
 
     const reasonText = input.reason === 'explicit_request'
       ? 'asked to speak with a person'
-      : 'ran into a problem our assistant could not resolve on its own';
+      : input.reason === 'follow_up_needed'
+        ? 'needs a follow-up our assistant cannot complete on its own'
+        : 'ran into a problem our assistant could not resolve on its own';
     const env = getEnv();
     const link = `${env.WEB_URL}/conversations?conversationId=${input.conversationId}`;
     const body = `${lead?.name ?? 'A lead'} ${reasonText} and needs a reply.\n\n${link}`;
