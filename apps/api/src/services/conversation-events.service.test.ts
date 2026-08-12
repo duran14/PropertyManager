@@ -1,7 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { createConversationEvent } from './conversation-events.service.js';
+import { buildConversationEventPresentation, createConversationEvent } from './conversation-events.service.js';
 
 describe('conversation events service', () => {
+  it('handoff.resumed se presenta con tono done', () => {
+    const presentation = buildConversationEventPresentation('handoff.resumed', {});
+    expect(presentation).toEqual({
+      label: 'Bot resumed',
+      detail: 'Staff re-enabled automated assistance',
+      tone: 'done',
+    });
+  });
+
   it('creates a staff event with normalized labels and details', async () => {
     const writes: unknown[] = [];
     const event = await createConversationEvent(

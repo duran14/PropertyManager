@@ -11,6 +11,7 @@ export type ConversationEventType =
   | 'showing.availability_unavailable'
   | 'staff.reply_sent'
   | 'handoff.requested'
+  | 'handoff.resumed'
   | 'note.internal_added';
 
 export interface CreateConversationEventInput {
@@ -113,6 +114,12 @@ export function buildConversationEventPresentation(
         label: 'Human handoff requested',
         detail: formatText(payload.reason) ?? 'Conversation needs staff attention',
         tone: 'attention',
+      };
+    case 'handoff.resumed':
+      return {
+        label: 'Bot resumed',
+        detail: 'Staff re-enabled automated assistance',
+        tone: 'done',
       };
     case 'note.internal_added':
       return {

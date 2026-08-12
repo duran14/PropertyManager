@@ -588,6 +588,14 @@ model ChatConversation {
   // Lead asociado (nullable hasta que se crea el lead)
   leadId     String?
   lead       Lead?               @relation(fields: [leadId], references: [id])
+  // Fase 1.2: por qué está pausada la conversación. Null cuando no lo está.
+  handoffReason      String?   // explicit_request | provider_failure | manual
+  handoffNotifiedAt  DateTime?
+  // El estado justo antes de pausar. Es una pieza técnica: al reanudar, se
+  // usa como el `currentState` que exigen callGlm/callOwnershipGlm — el
+  // modelo decide el estado real desde ahí, esto no es "dónde continuar
+  // literalmente", solo el parámetro de entrada que la función necesita.
+  handoffPreState    String?
   createdAt  DateTime            @default(now())
   updatedAt  DateTime            @updatedAt
 
