@@ -2130,10 +2130,14 @@ esa conversación.
 
 - [ ] **Step 3: Retirar el botón/mutación de la ruta manual vieja**
 
-Si `ConversationsPage.tsx` tiene algún botón o mutación apuntando a
-`/conversations/:id/handoff` (verificar — el spec original asumía que
-existía, confirmar contra el código real), quitarlo: esa ruta ya no
-existe (Tarea 7).
+**Confirmado, no es condicional:** `ConversationsPage.tsx:379-389` define
+`handoffMutation` apuntando a `` `/chat/conversations/${id}/handoff` `` (esa
+ruta ya no existe, se eliminó en la Tarea 7), y el botón "Request handoff"
+que la dispara vive en `:837-852` junto con un textarea de motivo. Ambos
+quedan como una llamada rota (404) desde que la Tarea 7 se commiteó hasta
+que este Step se ejecuta — quitar `handoffMutation` y el botón/textarea
+por completo, reemplazados por los botones "Take control"/"Return to bot"
+del Step 4 de esta misma tarea.
 
 - [ ] **Step 4: Franja de tres estados**
 
