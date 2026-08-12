@@ -8,10 +8,12 @@
 import type { ChatChannel, GlmAdapter, MessagingAdapter } from '@property-manager/adapters';
 import type { LeadSource } from '@prisma/client';
 import { prisma } from '../config/db.js';
+import { getEnv } from '../config/env.js';
 import { writeAudit } from './audit.service.js';
 import { formatKnowledgeContext, rankKnowledgeChunks } from './knowledge-retrieval.service.js';
 import { bookShowingFromCalendar, getSchedulingAvailability } from './scheduling.service.js';
 import { createConversationEvent } from './conversation-events.service.js';
+import { resolveStaffNotifyTargets, notifyStaffTargets } from './staff-notify.service.js';
 import { createShortlist, rotateShortlistToken } from './shortlist.service.js';
 import { nextDeliveryRetryAt } from './message-delivery-retry.service.js';
 import { buildOwnershipConversationTurn } from './ownership-conversation.service.js';
@@ -195,6 +197,7 @@ export interface InterpretedTurn {
   selection_scope?: 'single' | 'multiple' | 'all';
   next_state?: ConversationState;
   clearSlots?: string[];
+  handoffReason?: 'explicit_request' | 'provider_failure';
 }
 
 const rentalProfileFields = new Set<RentalProfileField>([
@@ -1012,6 +1015,7 @@ async function handleInboundMessageUnlocked(
     glmResult.next_state = 'scheduling';
   } else if (glmResult.intent === 'handoff') {
     glmResult.next_state = 'handoff';
+    glmResult.handoffReason = glmResult.handoffReason ?? 'explicit_request';
   }
   if (glmResult.intent === 'rent' || glmResult.intent === 'buy' || glmResult.intent === 'sell') {
     glmResult.slots = { ...(glmResult.slots ?? {}), transaction_intent: glmResult.intent };
@@ -1372,6 +1376,16 @@ async function handleInboundMessageUnlocked(
     data: { state: newState, ...(presentedUnit ? { unitId: presentedUnit.id } : {}) },
   });
 
+  if (newState === 'handoff' && glmResult.handoffReason) {
+    const { acknowledgement } = await triggerHandoff({
+      tenantId: input.tenantId,
+      conversation: { id: conversation.id, leadId: conversation.leadId },
+      reason: glmResult.handoffReason,
+      preState: currentState,
+    });
+    finalReply = acknowledgement;
+  }
+
   const assistantMessage = await prisma.chatMessage.create({
     data: {
       conversationId: conversation.id,
@@ -1602,8 +1616,9 @@ export function resolveRentalTurnToInterpreted(input: {
     if (deterministicFallback) return deterministicFallback;
     return {
       reply: turn.reply,
-      intent: 'ask_clarification',
-      next_state: currentState,
+      intent: 'handoff',
+      next_state: 'handoff',
+      handoffReason: 'provider_failure',
     };
   }
 
@@ -1722,8 +1737,9 @@ export function resolveOwnershipTurnToInterpreted(input: {
     if (deterministicFallback) return deterministicFallback;
     return {
       reply: turn.reply,
-      intent: 'ask_clarification',
-      next_state: currentState,
+      intent: 'handoff',
+      next_state: 'handoff',
+      handoffReason: 'provider_failure',
     };
   }
 
@@ -3644,4 +3660,104 @@ async function handOffScheduling(
     payload: { reason },
   });
   return 'Thanks — I have your details. One of our advisors will confirm a tour time with you shortly, right here in this conversation.';
+}
+
+export const HANDOFF_ACKNOWLEDGEMENT =
+  "I'll get someone from our team to help you with that — they'll follow up right here.";
+
+/**
+ * Deja la conversación pausada (handoffReason/handoffPreState) y registra el
+ * evento siempre; la notificación al staff (y su marca de tiempo) solo
+ * corre cuando el disparo es automático — un handoff 'manual' ya lo inició
+ * un humano desde la consola, así que avisarle a sí mismo no aporta nada.
+ */
+export async function triggerHandoff(input: {
+  tenantId: string;
+  conversation: { id: string; leadId: string | null };
+  reason: 'explicit_request' | 'provider_failure' | 'manual';
+  preState: ConversationState;
+}): Promise<{ acknowledgement: string }> {
+  // Se lee el estado actual de handoffNotifiedAt ANTES de tocar la fila:
+  // en producción el guard de pausa (Tarea 3) impide que este disparador se
+  // vuelva a invocar mientras la conversación siga en 'handoff', pero un
+  // llamador directo (reintento, doble webhook) sí podría invocar esta
+  // función dos veces dentro del mismo episodio — sin esta lectura previa
+  // se le mandaría al staff dos avisos idénticos por el mismo evento.
+  const existing = await prisma.chatConversation.findUnique({
+    where: { id: input.conversation.id },
+    select: { handoffNotifiedAt: true },
+  });
+
+  await prisma.chatConversation.update({
+    where: { id: input.conversation.id },
+    data: { handoffReason: input.reason, handoffPreState: input.preState },
+  });
+
+  await createConversationEvent({
+    tenantId: input.tenantId,
+    conversationId: input.conversation.id,
+    leadId: input.conversation.leadId,
+    type: 'handoff.requested',
+    payload: { reason: input.reason },
+  });
+
+  if (input.reason !== 'manual' && !existing?.handoffNotifiedAt) {
+    await notifyStaffOfHandoff({
+      tenantId: input.tenantId,
+      conversationId: input.conversation.id,
+      leadId: input.conversation.leadId,
+      reason: input.reason,
+    });
+    await prisma.chatConversation.update({
+      where: { id: input.conversation.id },
+      data: { handoffNotifiedAt: new Date() },
+    });
+  }
+
+  return { acknowledgement: HANDOFF_ACKNOWLEDGEMENT };
+}
+
+/**
+ * Best-effort, igual que notifyStaffOfApplication (Fase 2A): la pausa del
+ * bot y el mensaje al lead ya se sostienen sin depender de que esto
+ * funcione. Un fallo aquí se loguea y nunca se propaga.
+ */
+async function notifyStaffOfHandoff(input: {
+  tenantId: string;
+  conversationId: string;
+  leadId: string | null;
+  reason: 'explicit_request' | 'provider_failure';
+}): Promise<void> {
+  try {
+    const lead = input.leadId
+      ? await prisma.lead.findUnique({ where: { id: input.leadId }, select: { assignedUserId: true, name: true } })
+      : null;
+    const staff = await prisma.user.findMany({
+      where: { tenantId: input.tenantId, isActive: true },
+      select: { id: true, email: true, role: true, notificationChannel: true, notificationAddress: true },
+    });
+    const targets = resolveStaffNotifyTargets({
+      brokerUserId: null,
+      assignedUserId: lead?.assignedUserId ?? null,
+      staff,
+      propertyManagerIds: staff.filter((m) => m.role === 'property_manager').map((m) => m.id),
+    });
+
+    const reasonText = input.reason === 'explicit_request'
+      ? 'asked to speak with a person'
+      : 'ran into a problem our assistant could not resolve on its own';
+    const env = getEnv();
+    const link = `${env.WEB_URL}/conversations?conversationId=${input.conversationId}`;
+    const body = `${lead?.name ?? 'A lead'} ${reasonText} and needs a reply.\n\n${link}`;
+
+    const { getAdapters } = await import('../config/adapters.js');
+    await notifyStaffTargets({
+      targets,
+      subject: 'A conversation needs your attention',
+      body,
+      messaging: getAdapters().messaging,
+    });
+  } catch (error) {
+    console.error(`[Handoff] No se pudo notificar la conversación ${input.conversationId}:`, error);
+  }
 }

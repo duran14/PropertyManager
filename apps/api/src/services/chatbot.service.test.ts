@@ -1,4 +1,4 @@
-﻿import { describe, expect, it, vi } from 'vitest';
+﻿import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { GlmAdapter } from '@property-manager/adapters';
 import {
   buildGlmFallback,
@@ -53,12 +53,14 @@ import {
   classifyProfileSlotKey,
   shouldSkipContextualSlotHeuristics,
   detectOptOutPhrase,
+  triggerHandoff,
 } from './chatbot.service.js';
 import type { AvailableUnit, ConversationState, InterpretedTurn } from './chatbot.service.js';
 import type { ConversationTurn } from './rental-conversation.types.js';
 import { interpretRentalTurn } from './rental-conversation.interpreter.js';
 import { buildOwnershipConversationTurn } from './ownership-conversation.service.js';
 import type { OwnershipConversationSemanticTurn } from './ownership-conversation.types.js';
+import { prisma } from '../config/db.js';
 
 describe('chatbot conversation identity', () => {
   it('invalidates stale selection and scheduling when search criteria change', () => {
@@ -1988,7 +1990,11 @@ describe('resolveRentalTurnToInterpreted (semantic adapter mapping)', () => {
     expect(result.slots).toMatchObject({ transaction_intent: 'rent' });
   });
 
-  it('falls back to a safe clarification on outage when no deterministic turn applies', () => {
+  it('hands off to staff on outage when no deterministic turn applies (Tarea 5: ya no hay hueco de "ask_clarification" sin salida)', () => {
+    // Antes de la Tarea 5, un fallo de proveedor sin deterministicFallback
+    // dejaba al bot repitiendo 'ask_clarification' en el mismo estado — un
+    // ciclo sin salida si el proveedor sigue caído. Ahora ese hueco se cierra
+    // pasando la conversación a 'handoff' con motivo 'provider_failure'.
     const result = resolveRentalTurnToInterpreted({
       turn: rentalTurn({ reply: 'Could you clarify that in one sentence?', confidence: 'low' }),
       providerFailed: true,
@@ -1997,9 +2003,10 @@ describe('resolveRentalTurnToInterpreted (semantic adapter mapping)', () => {
     });
 
     expect(result).toMatchObject({
-      intent: 'ask_clarification',
+      intent: 'handoff',
       reply: 'Could you clarify that in one sentence?',
-      next_state: 'proposing_tour',
+      next_state: 'handoff',
+      handoffReason: 'provider_failure',
     });
   });
 
@@ -2160,7 +2167,10 @@ describe('resolveOwnershipTurnToInterpreted (semantic adapter mapping)', () => {
     expect(result).toBe(deterministicFallback);
   });
 
-  it('falls back to a safe clarification on outage when no deterministic turn applies', () => {
+  it('hands off to staff on outage when no deterministic turn applies (Tarea 5: ya no hay hueco de "ask_clarification" sin salida)', () => {
+    // Mismo cierre de hueco que en resolveRentalTurnToInterpreted: sin
+    // deterministicFallback, un fallo de proveedor pasa a 'handoff' en vez
+    // de dejar al lead atascado en 'ask_clarification'.
     const result = resolveOwnershipTurnToInterpreted({
       turn: ownershipTurn({ reply: 'Could you clarify that in one sentence?', confidence: 'low' }),
       providerFailed: true,
@@ -2168,9 +2178,10 @@ describe('resolveOwnershipTurnToInterpreted (semantic adapter mapping)', () => {
     });
 
     expect(result).toMatchObject({
-      intent: 'ask_clarification',
+      intent: 'handoff',
       reply: 'Could you clarify that in one sentence?',
-      next_state: 'collecting_budget',
+      next_state: 'handoff',
+      handoffReason: 'provider_failure',
     });
   });
 
@@ -2340,5 +2351,155 @@ describe('shouldSkipContextualSlotHeuristics (Finding 2: never mutate the profil
     "don't stop messaging me please",
   ])('does not flag an ordinary message as opt-out: %s', (message) => {
     expect(detectOptOutPhrase(message)).toBe(false);
+  });
+});
+
+/**
+ * `triggerHandoff` toca Prisma real (a diferencia del resto de este
+ * archivo, que son pruebas puramente unitarias) — mismo patrón de BD de
+ * prueba que chatbot.routing.test.ts.
+ */
+describe('triggerHandoff', () => {
+  const TENANT_ID = 'tenant_test_chatbot_service_handoff';
+
+  async function cleanup() {
+    const conversations = await prisma.chatConversation.findMany({
+      where: { tenantId: TENANT_ID },
+      select: { id: true },
+    });
+    const conversationIds = conversations.map((c) => c.id);
+    if (conversationIds.length > 0) {
+      await prisma.chatMessage.deleteMany({ where: { conversationId: { in: conversationIds } } });
+    }
+    await prisma.conversationEvent.deleteMany({ where: { tenantId: TENANT_ID } });
+    await prisma.chatConversation.deleteMany({ where: { tenantId: TENANT_ID } });
+    await prisma.lead.deleteMany({ where: { tenantId: TENANT_ID } });
+    await prisma.user.deleteMany({ where: { tenantId: TENANT_ID } });
+  }
+
+  beforeEach(cleanup);
+  afterEach(async () => {
+    // El spy sobre getAdapters().messaging apunta al singleton cacheado por
+    // proceso: sin restaurarlo aquí, se quedaría espiando entre pruebas.
+    vi.restoreAllMocks();
+    await cleanup();
+  });
+
+  it('deja handoffReason, un evento, y notifica al staff cuando no es manual', async () => {
+    await prisma.tenant.upsert({
+      where: { id: TENANT_ID }, update: {}, create: { id: TENANT_ID, name: 'Handoff Test', province: 'BC' },
+    });
+    await prisma.user.create({
+      data: {
+        tenantId: TENANT_ID, email: `pm-${TENANT_ID}@test.ca`, passwordHash: 'x',
+        firstName: 'Pat', lastName: 'Manager', role: 'property_manager',
+        notificationChannel: 'telegram', notificationAddress: '900300',
+      },
+    });
+    const lead = await prisma.lead.create({
+      data: { tenantId: TENANT_ID, name: 'Ana', phone: '+16045550111', status: 'contacted', source: 'web' },
+    });
+    const conversation = await prisma.chatConversation.create({
+      data: { tenantId: TENANT_ID, externalId: 'web:trigger-1', channel: 'web', state: 'proposing_tour', leadId: lead.id },
+    });
+
+    const result = await triggerHandoff({
+      tenantId: TENANT_ID,
+      conversation: { id: conversation.id, leadId: lead.id },
+      reason: 'explicit_request',
+      preState: 'proposing_tour',
+    });
+
+    expect(result.acknowledgement).toContain('team');
+
+    const row = await prisma.chatConversation.findUniqueOrThrow({ where: { id: conversation.id } });
+    expect(row.handoffReason).toBe('explicit_request');
+    expect(row.handoffPreState).toBe('proposing_tour');
+    expect(row.handoffNotifiedAt).not.toBeNull();
+
+    const events = await prisma.conversationEvent.findMany({ where: { tenantId: TENANT_ID, conversationId: conversation.id, type: 'handoff.requested' } });
+    expect(events).toHaveLength(1);
+    expect((events[0]!.payload as { reason?: string }).reason).toBe('explicit_request');
+  });
+
+  it('no notifica cuando reason es manual', async () => {
+    await prisma.tenant.upsert({
+      where: { id: TENANT_ID }, update: {}, create: { id: TENANT_ID, name: 'Handoff Test', province: 'BC' },
+    });
+    await prisma.user.create({
+      data: {
+        tenantId: TENANT_ID, email: `pm-manual-${TENANT_ID}@test.ca`, passwordHash: 'x',
+        firstName: 'Pat', lastName: 'Manager', role: 'property_manager',
+        notificationChannel: 'telegram', notificationAddress: '900300',
+      },
+    });
+    const lead = await prisma.lead.create({
+      data: { tenantId: TENANT_ID, name: 'Ana', phone: '+16045550112', status: 'contacted', source: 'web' },
+    });
+    const conversation = await prisma.chatConversation.create({
+      data: { tenantId: TENANT_ID, externalId: 'web:trigger-manual', channel: 'web', state: 'proposing_tour', leadId: lead.id },
+    });
+
+    const { getAdapters } = await import('../config/adapters.js');
+    const emailSpy = vi.spyOn(getAdapters().messaging.email, 'send');
+
+    const result = await triggerHandoff({
+      tenantId: TENANT_ID,
+      conversation: { id: conversation.id, leadId: lead.id },
+      reason: 'manual',
+      preState: 'proposing_tour',
+    });
+
+    expect(result.acknowledgement).toContain('team');
+    expect(emailSpy).not.toHaveBeenCalled();
+
+    const row = await prisma.chatConversation.findUniqueOrThrow({ where: { id: conversation.id } });
+    expect(row.handoffReason).toBe('manual');
+    expect(row.handoffNotifiedAt).toBeNull();
+  });
+
+  it('no vuelve a notificar en un segundo trigger dentro del mismo episodio', async () => {
+    await prisma.tenant.upsert({
+      where: { id: TENANT_ID }, update: {}, create: { id: TENANT_ID, name: 'Handoff Test', province: 'BC' },
+    });
+    await prisma.user.create({
+      data: {
+        tenantId: TENANT_ID, email: `pm-repeat-${TENANT_ID}@test.ca`, passwordHash: 'x',
+        firstName: 'Pat', lastName: 'Manager', role: 'property_manager',
+        notificationChannel: 'telegram', notificationAddress: '900300',
+      },
+    });
+    const lead = await prisma.lead.create({
+      data: { tenantId: TENANT_ID, name: 'Ana', phone: '+16045550113', status: 'contacted', source: 'web' },
+    });
+    const conversation = await prisma.chatConversation.create({
+      data: { tenantId: TENANT_ID, externalId: 'web:trigger-repeat', channel: 'web', state: 'proposing_tour', leadId: lead.id },
+    });
+
+    const { getAdapters } = await import('../config/adapters.js');
+    const emailSpy = vi.spyOn(getAdapters().messaging.email, 'send');
+
+    await triggerHandoff({
+      tenantId: TENANT_ID,
+      conversation: { id: conversation.id, leadId: lead.id },
+      reason: 'explicit_request',
+      preState: 'proposing_tour',
+    });
+    expect(emailSpy).toHaveBeenCalledTimes(1);
+
+    // Segundo disparo sobre la misma conversación, ya con handoffNotifiedAt
+    // seteado por el primero — no debe generar un segundo aviso al staff.
+    await triggerHandoff({
+      tenantId: TENANT_ID,
+      conversation: { id: conversation.id, leadId: lead.id },
+      reason: 'explicit_request',
+      preState: 'proposing_tour',
+    });
+    expect(emailSpy).toHaveBeenCalledTimes(1);
+
+    const events = await prisma.conversationEvent.findMany({
+      where: { tenantId: TENANT_ID, conversationId: conversation.id, type: 'handoff.requested' },
+    });
+    expect(events).toHaveLength(2);
   });
 });

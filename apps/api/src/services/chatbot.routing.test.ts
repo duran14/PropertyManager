@@ -50,6 +50,10 @@ async function cleanup() {
   await prisma.property.deleteMany({ where: { tenantId: TENANT_ID } });
   await prisma.calendarConnection.deleteMany({ where: { tenantId: TENANT_ID } });
   await prisma.schedulingConfig.deleteMany({ where: { tenantId: TENANT_ID } });
+  // Los dos tests de handoff (Tarea 5) siembran un property_manager con
+  // email fijo por tenant — sin borrarlo aquí, una segunda corrida de la
+  // suite chocaría con el unique constraint de email.
+  await prisma.user.deleteMany({ where: { tenantId: TENANT_ID } });
 }
 
 function glmReturning(content: string): { glm: GlmAdapter; reason: ReturnType<typeof vi.fn> } {
@@ -488,4 +492,53 @@ describe('chatbot routing integration (handleInboundMessage)', () => {
     expect(messages[0]!.role).toBe('user');
     expect(messages[0]!.content).toBe('hello?');
   });
+
+  it('un intent handoff explícito pausa el bot y notifica al staff', async () => {
+    await seedTenant();
+    await prisma.user.create({
+      data: {
+        tenantId: TENANT_ID, email: `pm-handoff-${TENANT_ID}@test.ca`, passwordHash: 'x',
+        firstName: 'Pat', lastName: 'Manager', role: 'property_manager',
+      },
+    });
+    const conversation = await seedConversationWithSlots('web:handoff-explicit', 'proposing_tour', {
+      transaction_intent: 'rent',
+    });
+    const { glm } = glmReturning(JSON.stringify({
+      intent: 'handoff', confidence: 'high', reply: 'Let me get someone.',
+      profile: { set: {}, clear: [] },
+    }));
+
+    const reply = await handleInboundMessage(
+      { tenantId: TENANT_ID, from: 'web:handoff-explicit', body: 'I want to talk to a person', channel: 'web' },
+      { glm, messaging: new WebChatMockAdapter() },
+    );
+
+    expect(reply.newState).toBe('handoff');
+    expect(reply.replyText).toContain('team');
+    const row = await prisma.chatConversation.findUniqueOrThrow({ where: { id: conversation.id } });
+    expect(row.handoffReason).toBe('explicit_request');
+    expect(row.handoffNotifiedAt).not.toBeNull();
+  });
+
+  // NOTA (Tarea 5): el plan original proponía un test end-to-end aquí con una
+  // conversación nueva (sin transaction_intent) y un primer mensaje rico en
+  // señales de renta, asumiendo que ese era el único caso real sin fallback
+  // determinístico — deducido de leer solo buildFastQualificationTurn.
+  // Verificado en la práctica (logging temporal + corrida real de ese caso):
+  // no es alcanzable end-to-end. buildGlmFallback (el fallback que
+  // callGlm/callOwnershipGlm SIEMPRE calculan antes de invocar al proveedor,
+  // por el fix de Finding 1) es una función total — para currentState
+  // 'greeting' su rama dedicada responde con el menú genérico o el saludo, y
+  // para cualquier otro estado cae al catch-all "I'm still with you...".
+  // Nunca devuelve undefined, así que resolveRentalTurnToInterpreted /
+  // resolveOwnershipTurnToInterpreted jamás reciben providerFailed=true con
+  // deterministicFallback ausente a través del handler real — ese camino
+  // (glmResult.handoffReason = 'provider_failure') hoy solo es alcanzable
+  // llamando directo a esas funciones puras, lo cual ya está cubierto en
+  // chatbot.service.test.ts ("hands off to staff on outage when no
+  // deterministic turn applies"). El wiring que conecta handoffReason con
+  // triggerHandoff (pausa + notificación) no distingue el motivo, y ya está
+  // probado end-to-end por el test de arriba ('un intent handoff
+  // explícito...'), así que no queda wiring sin cubrir.
 });
