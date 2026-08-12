@@ -1298,7 +1298,7 @@ async function handleInboundMessageUnlocked(
           `${slotsText}\n\n` +
           `Reply with the number of the option you prefer (1-${availability.slots.length}).`;
       } else {
-        finalReply = await handOffScheduling(input.tenantId, conversation.id, conversation.leadId, availability.reason);
+        await handOffScheduling(input.tenantId, conversation.id, conversation.leadId, availability.reason);
         newState = 'handoff';
         glmResult.handoffReason = 'follow_up_needed';
       }
@@ -1373,7 +1373,7 @@ async function handleInboundMessageUnlocked(
             finalReply = 'That time was just taken. Let me pull up the current options.';
             newState = 'proposing_tour';
           } else {
-            finalReply = await handOffScheduling(
+            await handOffScheduling(
               input.tenantId, conversation.id, conversation.leadId, booked.error,
             );
             newState = 'handoff';
@@ -3667,7 +3667,14 @@ async function handOffScheduling(
   conversationId: string,
   leadId: string | null,
   reason: string,
-): Promise<string> {
+): Promise<void> {
+  // No retorna un texto de reply: ambos call sites actuales fijan
+  // glmResult.handoffReason justo después y dejan que el despacho genérico
+  // (más abajo, vía triggerHandoff) escriba el finalReply real con
+  // HANDOFF_ACKNOWLEDGEMENT. Un string de retorno aquí solo invitaría a un
+  // futuro call site a usarlo directamente como finalReply y olvidar fijar
+  // handoffReason — reintroduciendo el bug que esta rama existe para
+  // eliminar (el bot promete seguimiento humano sin avisarle a nadie).
   await createConversationEvent({
     tenantId,
     conversationId,
@@ -3675,7 +3682,6 @@ async function handOffScheduling(
     type: 'showing.availability_unavailable',
     payload: { reason },
   });
-  return 'Thanks — I have your details. One of our advisors will confirm a tour time with you shortly, right here in this conversation.';
 }
 
 export const HANDOFF_ACKNOWLEDGEMENT =
