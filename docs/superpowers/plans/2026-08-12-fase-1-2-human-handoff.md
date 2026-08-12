@@ -118,6 +118,39 @@ pnpm --filter @property-manager/web test
 
 ---
 
+## Corrección post-Tarea 5 — leer antes de tocar las Tareas 6+
+
+Las Tareas 1-5 de abajo ya están commiteadas y revisadas — se dejan tal
+cual, son el registro real de lo que se construyó. Pero la revisión de la
+Tarea 5 encontró que el diseño sobre el que se construyeron (el bot se
+calla en cuanto `state === 'handoff'`) estaba mal: silencia, sin avisarle
+a nadie, ~10 puntos que ya existían antes de esta fase y que le prometen
+al lead que un humano lo va a contactar. El usuario corrigió el mecanismo
+completo — ver **Sección 0 del spec**
+(`docs/superpowers/specs/2026-08-12-fase-1-2-human-handoff-design.md`),
+que ahora gobierna sobre las Secciones 1-8 originales del mismo documento.
+
+Las Tareas 6, 7 y 8 originales de este plan (tal como aparecían antes de
+esta corrección) **se reemplazan por completo** por las Tareas 6-9 nuevas
+que siguen después de la Tarea 5. Resumen del cambio de mecánica:
+
+- El guard de pausa deja de depender de `state === 'handoff'` y pasa a
+  depender de un campo nuevo, `claimedByUserId` — nulo mientras nadie ha
+  tomado control (el bot sigue respondiendo con normalidad), con valor
+  una vez que un miembro del staff presiona explícitamente "Take control".
+- `handoffPreState` (agregado en la Tarea 1) se retira — ya no hace falta,
+  porque el bot nunca deja de correr mientras nadie ha tomado control, así
+  que `conversation.state` sigue vivo y actualizado en todo momento.
+- La notificación deja de usar la cascada de `resolveStaffNotifyTargets`
+  (que se queda intacta para su otro consumidor, Fase 2A) y pasa a avisar
+  a **todo** el staff activo con rol `property_manager`/`broker`.
+- La ruta manual de pausa preexistente (`POST
+  /conversations/:id/handoff`) se retira — "tomar control" la reemplaza
+  por completo.
+- Se extiende el disparo de aviso a los puntos que ya prometían un humano
+  (calificación de compra/venta terminada, reagendar, cancelar, falla de
+  agendamiento), corrigiendo su texto para que deje de prometer y avise.
+
 ## Task 1: Esquema — campos de handoff y tipo de evento nuevo
 
 **Files:**
@@ -1133,33 +1166,439 @@ git commit -m "feat: disparadores automáticos de handoff con notificación al s
 
 ---
 
-## Task 6: Reanudar el bot
+## Task 6: Migración de campos, guard de "tomar control", notificación a todo el staff
+
+**Contexto real (ya commiteado, verificado línea por línea antes de escribir
+esta tarea):** el guard de pausa vive en
+`apps/api/src/services/chatbot.service.ts:824-826`:
+
+```ts
+  if (conversation.state === 'handoff') {
+    return { replyText: '', newState: 'handoff', leadCreated: false, handoff: true };
+  }
+```
+
+`triggerHandoff` (exportado, `:3674-3718`) ya escribe
+`handoffPreState: input.preState` y ya trae el guard de idempotencia de
+notificación (`existing.handoffNotifiedAt`) que la revisión de la Tarea 5
+agregó sobre el diseño original del plan. `notifyStaffOfHandoff`
+(`:3725-3763`) hoy resuelve destinatarios con `resolveStaffNotifyTargets`
+(la cascada broker → dueño del lead → todos los PM). `HANDOFF_ACKNOWLEDGEMENT`
+(`:3665-3667`) hoy dice *"I'll get someone from our team to help you with
+that — they'll follow up right here."*
+
+**Files:**
+- Modify: `apps/api/prisma/schema.prisma`
+- Modify: `apps/api/src/services/chatbot.service.ts`
+- Modify: `apps/api/src/services/conversation-events.service.ts`
+- Test: `apps/api/src/services/chatbot.service.test.ts`
+- Test: `apps/api/src/services/chatbot.routing.test.ts`
+- Test: `apps/api/src/services/conversation-events.service.test.ts`
+
+**Interfaces:**
+- Consumes: `notifyStaffTargets` (Tarea 2) — se sigue usando tal cual, solo
+  cambia quién llega en `targets`.
+- Produces: `triggerHandoff`/`notifyStaffOfHandoff` con la misma firma
+  pública que ya tienen (sin cambios de tipo); el guard de pausa revisado.
+
+- [ ] **Step 1: Migración — retirar `handoffPreState`, agregar `claimedByUserId`/`claimedAt`**
+
+En `apps/api/prisma/schema.prisma`, dentro de `model ChatConversation`,
+reemplazar:
+
+```prisma
+  handoffReason      String?
+  handoffNotifiedAt  DateTime?
+  handoffPreState    String?
+```
+
+por:
+
+```prisma
+  handoffReason      String?   // explicit_request | provider_failure | manual | follow_up_needed
+  handoffNotifiedAt  DateTime?
+  // Quién tomó control de la conversación. Nulo mientras nadie lo ha
+  // hecho — el bot sigue respondiendo con normalidad; no se apaga solo
+  // porque handoffReason esté puesto. Ver spec Sección 0.
+  claimedByUserId    String?
+  claimedAt          DateTime?
+
+  claimedByUser User? @relation("ConversationClaimedBy", fields: [claimedByUserId], references: [id])
+```
+
+Y en `model User`, junto a `assignedLeads`, agregar la relación inversa:
+
+```prisma
+  claimedConversations ChatConversation[] @relation("ConversationClaimedBy")
+```
+
+Correr:
+
+```bash
+pnpm --filter @property-manager/api exec prisma migrate dev --name add_conversation_claim
+```
+
+Esperado: elimina la columna `handoffPreState` y agrega `claimedByUserId`
+(con su FK) y `claimedAt`. Confirmar que la migración generada NO borra
+`handoffReason` ni `handoffNotifiedAt` — esas se quedan igual.
+
+- [ ] **Step 2: Nuevo tipo de evento `handoff.claimed`**
+
+En `apps/api/src/services/conversation-events.service.ts`, agregar al
+union:
+
+```ts
+  | 'handoff.claimed'
+```
+
+Y el caso en `buildConversationEventPresentation`:
+
+```ts
+    case 'handoff.claimed':
+      return {
+        label: 'Staff took control',
+        detail: formatText(payload.claimedByName) ?? 'A staff member took over this conversation',
+        tone: 'active',
+      };
+```
+
+Prueba (en `conversation-events.service.test.ts`, siguiendo el patrón del
+caso `handoff.resumed` que ya existe ahí):
+
+```ts
+it('handoff.claimed se presenta con tono active', () => {
+  const presentation = buildConversationEventPresentation('handoff.claimed', {});
+  expect(presentation).toEqual({
+    label: 'Staff took control',
+    detail: 'A staff member took over this conversation',
+    tone: 'active',
+  });
+});
+```
+
+- [ ] **Step 3: Reescribir el guard de pausa**
+
+En `chatbot.service.ts:824-826`, reemplazar:
+
+```ts
+  if (conversation.state === 'handoff') {
+    return { replyText: '', newState: 'handoff', leadCreated: false, handoff: true };
+  }
+```
+
+por:
+
+```ts
+  // Fase 1.2 (corregido): el bot NO se apaga solo porque haya pedido
+  // ayuda humana — sigue respondiendo mientras nadie ha tomado control.
+  // Solo un humano que presiona explícitamente "Take control" (la ruta
+  // /claim) apaga al bot. Ver spec Sección 0.
+  if (conversation.claimedByUserId) {
+    return {
+      replyText: '',
+      newState: conversation.state as ConversationState,
+      leadCreated: false,
+      handoff: true,
+    };
+  }
+```
+
+Actualizar el comentario que queda arriba de este bloque (el que hoy dice
+"si la conversación está pausada para un humano, el bot no responde") para
+reflejar que la condición es `claimedByUserId`, no `state`.
+
+- [ ] **Step 4: Escribir la prueba que falla para el guard nuevo**
+
+En `chatbot.routing.test.ts`, junto a la prueba existente "sin calendario
+conectado no ofrece horarios..." (que sigue vigente sin cambios), agregar
+dos casos:
+
+```ts
+it('el bot SIGUE respondiendo si hay handoffReason pero nadie ha tomado control', async () => {
+  const conversation = await prisma.chatConversation.create({
+    data: {
+      tenantId: TENANT_ID, externalId: 'web:pending-claim-1', channel: 'web',
+      state: 'proposing_tour', handoffReason: 'explicit_request',
+      slots: { create: [{ key: 'transaction_intent', value: 'rent' }] },
+    },
+  });
+  const { glm, reason } = glmReturning(JSON.stringify({
+    intent: 'other', confidence: 'high', reply: 'Sure, happy to help.',
+    profile: { set: {}, clear: [] },
+  }));
+
+  const reply = await handleInboundMessage(
+    { tenantId: TENANT_ID, from: 'web:pending-claim-1', body: 'any updates?', channel: 'web' },
+    { glm, messaging: new WebChatMockAdapter() },
+  );
+
+  expect(reason).toHaveBeenCalledTimes(1);
+  expect(reply.replyText).not.toBe('');
+});
+
+it('el bot se calla en cuanto alguien tomó control', async () => {
+  const staffUser = await prisma.user.create({
+    data: {
+      tenantId: TENANT_ID, email: `claimer-${TENANT_ID}@test.ca`, passwordHash: 'x',
+      firstName: 'Pat', lastName: 'Manager', role: 'property_manager',
+    },
+  });
+  const conversation = await prisma.chatConversation.create({
+    data: {
+      tenantId: TENANT_ID, externalId: 'web:claimed-1', channel: 'web',
+      state: 'proposing_tour', handoffReason: 'explicit_request',
+      claimedByUserId: staffUser.id, claimedAt: new Date(),
+    },
+  });
+  const { glm, reason } = glmReturning('should never be called');
+
+  const reply = await handleInboundMessage(
+    { tenantId: TENANT_ID, from: 'web:claimed-1', body: 'hello?', channel: 'web' },
+    { glm, messaging: new WebChatMockAdapter() },
+  );
+
+  expect(reason).not.toHaveBeenCalled();
+  expect(reply.replyText).toBe('');
+});
+```
+
+Extender `cleanup()` de ese archivo para borrar también `prisma.user` de
+`TENANT_ID` (si aún no lo hace) — el segundo caso siembra un usuario nuevo.
+
+- [ ] **Step 5: Correr y ver que el primer caso nuevo falla**
+
+```bash
+pnpm --filter @property-manager/api test -- chatbot.routing
+```
+
+Esperado: el primer caso nuevo FALLA contra el código viejo (el guard
+todavía revisa `state === 'handoff'`, así que una conversación con
+`handoffReason` puesto pero `state: 'proposing_tour'` no se ve afectada
+por el guard viejo — para que este test realmente demuestre el cambio,
+verificar contra el guard ANTES de aplicar el Step 3 que el escenario
+correcto que SÍ fallaría es uno con `state: 'handoff'` Y `handoffReason`
+puesto pero sin `claimedByUserId` — ajustar el seed del primer caso si
+hace falta para que efectivamente ejercite la diferencia real entre el
+guard viejo y el nuevo).
+
+- [ ] **Step 6: Aplicar el Step 3 y confirmar que ambos casos pasan**
+
+```bash
+pnpm --filter @property-manager/api test -- chatbot.routing
+```
+
+- [ ] **Step 7: Notificación a todo el staff disponible, no en cascada**
+
+En `notifyStaffOfHandoff` (`:3725-3763`), reemplazar la resolución de
+destinatarios:
+
+```ts
+    const lead = input.leadId
+      ? await prisma.lead.findUnique({ where: { id: input.leadId }, select: { assignedUserId: true, name: true } })
+      : null;
+    const staff = await prisma.user.findMany({
+      where: { tenantId: input.tenantId, isActive: true },
+      select: { id: true, email: true, role: true, notificationChannel: true, notificationAddress: true },
+    });
+    const targets = resolveStaffNotifyTargets({
+      brokerUserId: null,
+      assignedUserId: lead?.assignedUserId ?? null,
+      staff,
+      propertyManagerIds: staff.filter((m) => m.role === 'property_manager').map((m) => m.id),
+    });
+```
+
+por:
+
+```ts
+    const lead = input.leadId
+      ? await prisma.lead.findUnique({ where: { id: input.leadId }, select: { name: true } })
+      : null;
+    // A diferencia de la notificación de aplicaciones de renta (que sí usa
+    // la cascada de resolveStaffNotifyTargets), aquí se avisa a TODO el
+    // staff disponible con rol property_manager o broker — cualquiera que
+    // esté libre puede tomar control. No hay "dueño" de un hand-off.
+    const targets = await prisma.user.findMany({
+      where: {
+        tenantId: input.tenantId,
+        isActive: true,
+        role: { in: ['property_manager', 'broker'] },
+      },
+      select: { id: true, email: true, notificationChannel: true, notificationAddress: true },
+    });
+```
+
+`resolveStaffNotifyTargets` deja de importarse/usarse en este archivo si
+no queda ningún otro caller local — verificar antes de quitar el import
+(no tocar su declaración en `staff-notify.service.ts`, sigue en uso desde
+`rental-application.service.ts`).
+
+- [ ] **Step 8: Texto honesto del acuse de recibo**
+
+Reemplazar `HANDOFF_ACKNOWLEDGEMENT` (`:3665-3667`):
+
+```ts
+export const HANDOFF_ACKNOWLEDGEMENT =
+  "I've let the team know — someone will pick this up as soon as they can. " +
+  "In the meantime, I'm still here if you have other questions.";
+```
+
+Buscar cualquier prueba existente (Tarea 5) que haga match exacto o
+parcial sobre el texto viejo (`'team'`, `"they'll follow up"`, etc.) y
+actualizar esas aserciones al nuevo texto — no debe quedar ninguna prueba
+verificando el string viejo.
+
+- [ ] **Step 9: Correr toda la suite y verificar**
+
+```bash
+pnpm --filter @property-manager/api test
+pnpm -r exec tsc --noEmit
+```
+
+- [ ] **Step 10: Commit**
+
+```bash
+git add apps/api/prisma/schema.prisma apps/api/prisma/migrations apps/api/src/services/chatbot.service.ts apps/api/src/services/conversation-events.service.ts apps/api/src/services/chatbot.service.test.ts apps/api/src/services/chatbot.routing.test.ts apps/api/src/services/conversation-events.service.test.ts
+git commit -m "fix: el bot no se apaga hasta que un humano toma control explícitamente"
+```
+
+---
+
+## Task 7: Tomar control / devolver control
 
 **Files:**
 - Modify: `apps/api/src/services/chatbot.service.ts`
 - Modify: `apps/api/src/routes/chat.ts`
 - Test: `apps/api/src/services/chatbot.service.test.ts`
-- Test: crear o extender el archivo de pruebas de rutas de `chat.ts`
 
 **Interfaces:**
-- Consumes: `callGlm`/`callOwnershipGlm` (ya existentes, con el filtro
-  corregido de la Tarea 4); `prepareConversationHistory`,
+- Consumes: `callGlm`/`callOwnershipGlm`, `prepareConversationHistory`,
   `getReplyAddressFromConversation`, `sendHumanLike`, `nextDeliveryRetryAt`
-  (todas ya exportadas o ya importadas en el archivo).
-- Produces: `export async function resumeBotFromHandoff(input: { tenantId: string; conversationId: string; actorUserId: string }): Promise<{ ok: true } | { ok: false; status: 404 | 409; error: string }>`
+  (todas ya exportadas/importadas); `claimedByUserId`/`claimedAt` (Tarea 6).
+- Produces:
+  - `export async function claimConversation(input: { tenantId: string; conversationId: string; userId: string }): Promise<{ ok: true } | { ok: false; status: 404 | 409; error: string }>`
+  - `export async function resumeBotFromHandoff(input: { tenantId: string; conversationId: string; actorUserId: string }): Promise<{ ok: true } | { ok: false; status: 404 | 409; error: string }>`
 
-- [ ] **Step 1: Escribir la prueba que falla**
+- [ ] **Step 1: Escribir las pruebas que fallan — `claimConversation`**
+
+```ts
+describe('claimConversation', () => {
+  it('marca la conversación como tomada y crea el evento', async () => {
+    const staffUser = await prisma.user.create({
+      data: {
+        tenantId: TENANT_ID, email: `claim-1-${TENANT_ID}@test.ca`, passwordHash: 'x',
+        firstName: 'Pat', lastName: 'Manager', role: 'property_manager',
+      },
+    });
+    const conversation = await prisma.chatConversation.create({
+      data: { tenantId: TENANT_ID, externalId: 'web:claim-1', channel: 'web', state: 'proposing_tour', handoffReason: 'explicit_request' },
+    });
+
+    const result = await claimConversation({ tenantId: TENANT_ID, conversationId: conversation.id, userId: staffUser.id });
+
+    expect(result).toEqual({ ok: true });
+    const row = await prisma.chatConversation.findUniqueOrThrow({ where: { id: conversation.id } });
+    expect(row.claimedByUserId).toBe(staffUser.id);
+    expect(row.claimedAt).not.toBeNull();
+
+    const events = await prisma.conversationEvent.findMany({ where: { tenantId: TENANT_ID, conversationId: conversation.id, type: 'handoff.claimed' } });
+    expect(events).toHaveLength(1);
+  });
+
+  it('devuelve 409 si ya la tomó alguien más — dos intentos simultáneos dejan exactamente un dueño', async () => {
+    const [staffA, staffB] = await Promise.all([
+      prisma.user.create({ data: { tenantId: TENANT_ID, email: `claim-a-${TENANT_ID}@test.ca`, passwordHash: 'x', firstName: 'A', lastName: 'A', role: 'property_manager' } }),
+      prisma.user.create({ data: { tenantId: TENANT_ID, email: `claim-b-${TENANT_ID}@test.ca`, passwordHash: 'x', firstName: 'B', lastName: 'B', role: 'broker' } }),
+    ]);
+    const conversation = await prisma.chatConversation.create({
+      data: { tenantId: TENANT_ID, externalId: 'web:claim-race', channel: 'web', state: 'proposing_tour', handoffReason: 'explicit_request' },
+    });
+
+    const [resultA, resultB] = await Promise.all([
+      claimConversation({ tenantId: TENANT_ID, conversationId: conversation.id, userId: staffA.id }),
+      claimConversation({ tenantId: TENANT_ID, conversationId: conversation.id, userId: staffB.id }),
+    ]);
+
+    const outcomes = [resultA, resultB];
+    expect(outcomes.filter((o) => o.ok)).toHaveLength(1);
+    expect(outcomes.filter((o) => !o.ok && o.status === 409)).toHaveLength(1);
+
+    const row = await prisma.chatConversation.findUniqueOrThrow({ where: { id: conversation.id } });
+    expect([staffA.id, staffB.id]).toContain(row.claimedByUserId);
+  });
+
+  it('devuelve 404 si la conversación no existe', async () => {
+    const result = await claimConversation({ tenantId: TENANT_ID, conversationId: 'no_existe', userId: 'user_1' });
+    expect(result).toEqual({ ok: false, status: 404, error: 'not_found' });
+  });
+});
+```
+
+- [ ] **Step 2: Implementar `claimConversation`**
+
+```ts
+export async function claimConversation(input: {
+  tenantId: string;
+  conversationId: string;
+  userId: string;
+}): Promise<{ ok: true } | { ok: false; status: 404 | 409; error: string }> {
+  const conversation = await prisma.chatConversation.findFirst({
+    where: { id: input.conversationId, tenantId: input.tenantId },
+    select: { id: true, leadId: true },
+  });
+  if (!conversation) return { ok: false, status: 404, error: 'not_found' };
+
+  // El where: { claimedByUserId: null } es la red de concurrencia: si dos
+  // miembros del staff presionan "Take control" casi al mismo tiempo, esta
+  // actualización condicional garantiza que solo uno tenga éxito, sin
+  // necesitar una unique nueva — el mismo principio de "las condiciones de
+  // la base son la red" aplicado a un UPDATE en vez de un INSERT.
+  const result = await prisma.chatConversation.updateMany({
+    where: { id: input.conversationId, tenantId: input.tenantId, claimedByUserId: null },
+    data: { claimedByUserId: input.userId, claimedAt: new Date() },
+  });
+  if (result.count === 0) return { ok: false, status: 409, error: 'already_claimed' };
+
+  const user = await prisma.user.findUnique({ where: { id: input.userId }, select: { firstName: true, lastName: true } });
+  await createConversationEvent({
+    tenantId: input.tenantId,
+    conversationId: input.conversationId,
+    leadId: conversation.leadId,
+    actorUserId: input.userId,
+    type: 'handoff.claimed',
+    payload: { claimedByName: user ? `${user.firstName} ${user.lastName}` : undefined },
+  });
+
+  return { ok: true };
+}
+```
+
+- [ ] **Step 3: Correr y ver que pasa**
+
+```bash
+pnpm --filter @property-manager/api test -- chatbot.service
+```
+
+- [ ] **Step 4: Escribir las pruebas que fallan — `resumeBotFromHandoff`**
+
+Mismo esqueleto de pruebas que la versión original de esta tarea (ver
+historial de este archivo si hace falta referencia), con dos ajustes
+respecto al diseño viejo:
 
 ```ts
 describe('resumeBotFromHandoff', () => {
-  it('usa el historial completo, incluidos los mensajes de staff, y limpia los campos de handoff', async () => {
+  it('usa el historial completo, incluidos los mensajes de staff, y limpia claim + handoff', async () => {
+    const staffUser = await prisma.user.create({
+      data: { tenantId: TENANT_ID, email: `resume-1-${TENANT_ID}@test.ca`, passwordHash: 'x', firstName: 'Pat', lastName: 'Manager', role: 'property_manager' },
+    });
     const lead = await prisma.lead.create({
-      data: { tenantId: TENANT_ID, name: 'Ana', phone: '+16045550111', status: 'contacted' },
+      data: { tenantId: TENANT_ID, name: 'Ana', phone: '+16045550111', status: 'contacted', source: 'web' },
     });
     const conversation = await prisma.chatConversation.create({
       data: {
-        tenantId: TENANT_ID, externalId: 'web:resume-1', channel: 'web', state: 'handoff',
-        handoffReason: 'explicit_request', handoffPreState: 'proposing_tour', handoffNotifiedAt: new Date(),
+        tenantId: TENANT_ID, externalId: 'web:resume-1', channel: 'web', state: 'proposing_tour',
+        handoffReason: 'explicit_request', handoffNotifiedAt: new Date(),
+        claimedByUserId: staffUser.id, claimedAt: new Date(),
         leadId: lead.id,
         slots: { create: [{ key: 'transaction_intent', value: 'rent' }] },
         messages: {
@@ -1181,7 +1620,7 @@ describe('resumeBotFromHandoff', () => {
       messaging: { web: { channel: 'web', send: vi.fn(async () => ({ messageId: 'm1' })), parseWebhook: vi.fn() } },
     } as never);
 
-    const result = await resumeBotFromHandoff({ tenantId: TENANT_ID, conversationId: conversation.id, actorUserId: 'user_1' });
+    const result = await resumeBotFromHandoff({ tenantId: TENANT_ID, conversationId: conversation.id, actorUserId: staffUser.id });
 
     expect(result).toEqual({ ok: true });
     expect(capturedPrompt).toContain('happy to help');
@@ -1189,12 +1628,12 @@ describe('resumeBotFromHandoff', () => {
     const row = await prisma.chatConversation.findUniqueOrThrow({ where: { id: conversation.id } });
     expect(row.handoffReason).toBeNull();
     expect(row.handoffNotifiedAt).toBeNull();
-    expect(row.handoffPreState).toBeNull();
-    expect(row.state).not.toBe('handoff');
+    expect(row.claimedByUserId).toBeNull();
+    expect(row.claimedAt).toBeNull();
 
     const messages = await prisma.chatMessage.findMany({ where: { conversationId: conversation.id }, orderBy: { createdAt: 'asc' } });
-    expect(messages).toHaveLength(3); // user + staff + el nuevo assistant
-    expect(messages.filter((m) => m.role === 'user')).toHaveLength(1); // nada nuevo de tipo user
+    expect(messages).toHaveLength(3);
+    expect(messages.filter((m) => m.role === 'user')).toHaveLength(1);
 
     const events = await prisma.conversationEvent.findMany({ where: { tenantId: TENANT_ID, conversationId: conversation.id, type: 'handoff.resumed' } });
     expect(events).toHaveLength(1);
@@ -1205,32 +1644,26 @@ describe('resumeBotFromHandoff', () => {
     expect(result).toEqual({ ok: false, status: 404, error: 'not_found' });
   });
 
-  it('devuelve 409 si la conversación no está en handoff', async () => {
+  it('devuelve 409 si nadie ha tomado control', async () => {
     const conversation = await prisma.chatConversation.create({
       data: { tenantId: TENANT_ID, externalId: 'web:resume-2', channel: 'web', state: 'proposing_tour' },
     });
     const result = await resumeBotFromHandoff({ tenantId: TENANT_ID, conversationId: conversation.id, actorUserId: 'user_1' });
-    expect(result).toEqual({ ok: false, status: 409, error: 'not_paused' });
+    expect(result).toEqual({ ok: false, status: 409, error: 'not_claimed' });
   });
 
-  it('sustituye scheduling por proposing_tour como estado de entrada al reanudar', async () => {
+  it('sustituye scheduling por proposing_tour como estado de entrada', async () => {
+    const staffUser = await prisma.user.create({
+      data: { tenantId: TENANT_ID, email: `resume-3-${TENANT_ID}@test.ca`, passwordHash: 'x', firstName: 'Pat', lastName: 'Manager', role: 'property_manager' },
+    });
     const conversation = await prisma.chatConversation.create({
       data: {
-        tenantId: TENANT_ID, externalId: 'web:resume-3', channel: 'web', state: 'handoff',
-        handoffReason: 'provider_failure', handoffPreState: 'scheduling',
+        tenantId: TENANT_ID, externalId: 'web:resume-3', channel: 'web', state: 'scheduling',
+        handoffReason: 'provider_failure', claimedByUserId: staffUser.id, claimedAt: new Date(),
         slots: { create: [{ key: 'transaction_intent', value: 'rent' }] },
       },
     });
 
-    let capturedState: string | undefined;
-    // Espiar callGlm no es directo porque no está exportado; en su lugar,
-    // verificar indirectamente: el intérprete no debe recibir 'scheduling'
-    // como parte del prompt de forma que intente parsear un número de
-    // input.body — dado que el body es el prompt sintético (texto, no un
-    // dígito), lo verificable de forma robusta es que la llamada NO lanza
-    // y el resultado es ok:true. Si el implementador encuentra un punto de
-    // inspección más directo (ej. exportar currentState recibido en un modo
-    // de prueba), preferirlo; si no, esta aserción indirecta es aceptable.
     const reason = vi.fn(async () => ({
       content: JSON.stringify({ intent: 'other', confidence: 'high', reply: 'ok', profile: { set: {}, clear: [] } }),
     }));
@@ -1239,21 +1672,18 @@ describe('resumeBotFromHandoff', () => {
       messaging: { web: { channel: 'web', send: vi.fn(async () => ({ messageId: 'm1' })), parseWebhook: vi.fn() } },
     } as never);
 
-    const result = await resumeBotFromHandoff({ tenantId: TENANT_ID, conversationId: conversation.id, actorUserId: 'user_1' });
+    const result = await resumeBotFromHandoff({ tenantId: TENANT_ID, conversationId: conversation.id, actorUserId: staffUser.id });
     expect(result).toEqual({ ok: true });
   });
 });
 ```
 
-- [ ] **Step 2: Correr y ver que falla**
+- [ ] **Step 5: Implementar `resumeBotFromHandoff`**
 
-```bash
-pnpm --filter @property-manager/api test -- chatbot.service
-```
-
-- [ ] **Step 3: Implementar `resumeBotFromHandoff`**
-
-En `apps/api/src/services/chatbot.service.ts`:
+Mismo cuerpo que la versión original de esta función (el turno sintético
+vía `callGlm`/`callOwnershipGlm` no cambia en absoluto — la corrección es
+solo de dónde sale el `currentState` de entrada y qué campos se limpian al
+terminar):
 
 ```ts
 const RESUME_SYNTHETIC_PROMPT =
@@ -1273,7 +1703,7 @@ export async function resumeBotFromHandoff(input: {
     include: { messages: { orderBy: { createdAt: 'desc' }, take: 20 }, slots: true },
   });
   if (!conversation) return { ok: false, status: 404, error: 'not_found' };
-  if (conversation.state !== 'handoff') return { ok: false, status: 409, error: 'not_paused' };
+  if (!conversation.claimedByUserId) return { ok: false, status: 409, error: 'not_claimed' };
 
   const existingSlots: Record<string, string> = {};
   for (const slot of conversation.slots) existingSlots[slot.key] = slot.value;
@@ -1288,8 +1718,11 @@ export async function resumeBotFromHandoff(input: {
   // 'scheduling' depende de que input.body sea un número de opción elegido
   // por el lead — no aplica al prompt sintético. proposing_tour es neutral
   // y ya rutea por el modelo para cualquier transaction_intent conocido.
-  const rawPreState = (conversation.handoffPreState ?? 'proposing_tour') as ConversationState;
-  const landingState: ConversationState = rawPreState === 'scheduling' ? 'proposing_tour' : rawPreState;
+  // Ya no se lee handoffPreState (retirado en la Tarea 6): como el bot
+  // nunca dejó de correr mientras nadie tomaba control, conversation.state
+  // sigue siendo el estado real y vivo de la conversación.
+  const currentDbState = conversation.state as ConversationState;
+  const landingState: ConversationState = currentDbState === 'scheduling' ? 'proposing_tour' : currentDbState;
 
   const turn = isOwnershipConversation
     ? await callOwnershipGlm(adapters.glm, {
@@ -1313,7 +1746,13 @@ export async function resumeBotFromHandoff(input: {
 
   await prisma.chatConversation.update({
     where: { id: conversation.id },
-    data: { state: newState, handoffReason: null, handoffNotifiedAt: null, handoffPreState: null },
+    data: {
+      state: newState,
+      handoffReason: null,
+      handoffNotifiedAt: null,
+      claimedByUserId: null,
+      claimedAt: null,
+    },
   });
 
   const assistantMessage = await prisma.chatMessage.create({
@@ -1353,31 +1792,43 @@ export async function resumeBotFromHandoff(input: {
 }
 ```
 
-**Verificar contra el código real** antes de dar esto por terminado: el
-tipo exacto de `ChatChannel` que exige `adapters.messaging[...]` (¿es un
-`Record<ChatChannel, MessagingAdapter>` indexable directo con
-`conversation.channel: string`? puede requerir un cast `as ChatChannel`,
-igual que se ve en otros puntos del archivo), y que `getTenantName`,
-`getAvailableUnits`, `buildGlmFallback`, `callGlm`, `callOwnershipGlm`,
-`prepareConversationHistory`, `getReplyAddressFromConversation`,
-`sendHumanLike`, `nextDeliveryRetryAt` estén todas accesibles desde el
-punto donde se agrega esta función (todas viven en el mismo archivo salvo
-`nextDeliveryRetryAt`, ya importado).
-
-- [ ] **Step 4: Correr y ver que pasa**
+- [ ] **Step 6: Correr y ver que pasa**
 
 ```bash
 pnpm --filter @property-manager/api test -- chatbot.service
 ```
 
-- [ ] **Step 5: La ruta**
+- [ ] **Step 7: Rutas — retirar la manual, agregar claim/resume**
 
-En `apps/api/src/routes/chat.ts`, importar `resumeBotFromHandoff` y
-`requireRole` (verificar que `requireRole` ya esté importado en este
-archivo; si no, agregarlo desde `../auth/context.js`). Agregar, cerca de la
-ruta `/conversations/:id/handoff` existente:
+En `apps/api/src/routes/chat.ts`: **eliminar por completo** la ruta `POST
+/conversations/:id/handoff` (bloque completo, incluidos `handoffSchema` si
+solo lo usaba esa ruta y ningún otro handler) — "tomar control" la
+reemplaza; no queda ninguna acción separada de "solo pausar". Verificar
+que nada más en el archivo (ni en el frontend — ya confirmado que
+`ConversationsPage.tsx` no llama esa ruta hoy) dependa de ella antes de
+borrarla.
+
+Agregar las dos rutas nuevas:
 
 ```ts
+chatRouter.post('/conversations/:id/claim', requireAuth, requireRole('property_manager', 'broker'), async (req, res, next) => {
+  try {
+    const user = requireUser(req);
+    const result = await claimConversation({
+      tenantId: user.tenantId,
+      conversationId: req.params.id,
+      userId: user.userId,
+    });
+    if (!result.ok) {
+      res.status(result.status).json({ error: result.error });
+      return;
+    }
+    res.status(200).json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
 chatRouter.post('/conversations/:id/resume', requireAuth, requireRole('property_manager', 'broker'), async (req, res, next) => {
   try {
     const user = requireUser(req);
@@ -1397,146 +1848,252 @@ chatRouter.post('/conversations/:id/resume', requireAuth, requireRole('property_
 });
 ```
 
-- [ ] **Step 6: Pruebas de la ruta**
+Importar `claimConversation`, `resumeBotFromHandoff`, `requireRole`,
+`type ConversationState` desde `../services/chatbot.service.js` /
+`../auth/context.js` según corresponda (verificar qué ya está importado
+en el archivo antes de duplicar imports).
 
-Buscar si existe `apps/api/src/routes/chat.test.ts`. Si no existe, crear
-uno mínimo siguiendo el patrón de pruebas de servicio del repo llamando
-DIRECTO a `resumeBotFromHandoff` (ya cubierto exhaustivamente en el Step 1
-de esta tarea) — no es necesario un test HTTP end-to-end nuevo si el
-servicio ya está probado a fondo y la ruta es un mapeo delgado de status;
-si el repo ya tiene un patrón de pruebas HTTP para `chat.ts` (revisar
-`apps/api/src/routes/webhooks.messenger.test.ts` como referencia de estilo
-si aplica a rutas no-webhook), seguirlo. Como mínimo, una prueba de que
-`requireRole('property_manager', 'broker')` está en la cadena de
-middleware de esta ruta (grep del archivo de rutas ya sirve como
-verificación manual si no hay infraestructura de test HTTP en este
-directorio).
-
-- [ ] **Step 7: Correr y verificar**
+- [ ] **Step 8: Correr y verificar**
 
 ```bash
 pnpm --filter @property-manager/api test
 pnpm -r exec tsc --noEmit
 ```
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
 git add apps/api/src/services/chatbot.service.ts apps/api/src/routes/chat.ts apps/api/src/services/chatbot.service.test.ts
-git commit -m "feat: reanudar el bot revisando la conversación completa"
+git commit -m "feat: tomar control de la conversación y devolverla al bot"
 ```
 
 ---
 
-## Task 7: La ruta manual existente pasa por `triggerHandoff`
+## Task 8: Extender el aviso honesto a los puntos que ya prometían un humano
+
+**Contexto:** estos cinco lugares en el código, todos previos a esta fase,
+le dicen al lead que un humano lo va a contactar y hoy nunca lo notifican
+a nadie. Con el guard nuevo de la Tarea 6 el bot ya NO se calla después de
+estos — pero el texto sigue siendo una promesa vacía hasta que esta tarea
+los conecte al mismo mecanismo de aviso que ya existe.
+
+**El patrón es siempre el mismo:** los cuatro primeros ya devuelven (o
+pueden devolver) un objeto con forma de `InterpretedTurn`/
+`OwnershipConversationTurn`, que ya tienen (o ganan aquí) el campo opcional
+`handoffReason`. El punto único de despacho que ya existe en
+`handleInboundMessageUnlocked` (`if (newState === 'handoff' &&
+glmResult.handoffReason) { triggerHandoff(...) }`, línea ~1379) recoge
+automáticamente cualquier `handoffReason` que llegue puesto en
+`glmResult` — no hace falta llamar a `triggerHandoff` desde un lugar
+nuevo, solo asegurarse de que el campo llegue con el valor correcto.
 
 **Files:**
-- Modify: `apps/api/src/routes/chat.ts`
-- Test: pruebas existentes de esa ruta, si las hay; si no, agregar un caso.
+- Modify: `apps/api/src/services/chatbot.service.ts`
+- Modify: `apps/api/src/services/ownership-conversation.service.ts`
+- Test: `apps/api/src/services/chatbot.service.test.ts`
+- Test: `apps/api/src/services/ownership-conversation.service.test.ts`
+- Test: `apps/api/src/services/chatbot.routing.test.ts`
 
-**Interfaces:**
-- Consumes: `triggerHandoff` (Tarea 5), exportado de
-  `chatbot.service.ts` — **verificar que se agregue `export`** delante de
-  `async function triggerHandoff` en la Tarea 5, ya que hasta ahora se
-  usaba solo dentro del mismo archivo.
+- [ ] **Step 1: `buildPostTourContextTurn` — reagendar y cancelar**
 
-- [ ] **Step 1: Exportar `triggerHandoff`**
-
-En `chatbot.service.ts`, cambiar `async function triggerHandoff` por
-`export async function triggerHandoff`.
-
-- [ ] **Step 2: Actualizar la ruta manual**
-
-En `apps/api/src/routes/chat.ts`, la ruta `POST
-/conversations/:id/handoff` (línea ~282) reemplaza su bloque de:
+En `chatbot.service.ts`, dentro de `buildPostTourContextTurn`
+(línea ~285-320), las ramas de reagendar y cancelar:
 
 ```ts
-    const event = await createConversationEvent({
-      tenantId: user.tenantId,
-      conversationId: conversation.id,
-      leadId: conversation.leadId,
-      actorUserId: user.userId,
-      type: 'handoff.requested',
-      payload: { reason: parsed.data.reason },
-    });
-
-    await prisma.chatConversation.update({
-      where: { id: conversation.id },
-      data: { state: 'handoff', updatedAt: new Date() },
-    });
+  if (/\b(?:reschedule|change (?:the )?(?:time|date)|another time)\b/.test(normalized)) {
+    return {
+      reply: "Of course — I can help you reschedule. Tell me which day or time would work better, and I'll check the available alternatives.",
+      slots: { post_tour_action: 'reschedule' },
+      next_state: 'handoff',
+    };
+  }
+  if (/\b(?:cancel|cannot make it|can't make it|won't make it)\b/.test(normalized)) {
+    return {
+      reply: "I can help with that. I'll treat this as a cancellation request and make sure the property manager is notified.",
+      slots: { post_tour_action: 'cancel' },
+      next_state: 'handoff',
+    };
+  }
 ```
 
-por:
+pasan a:
 
 ```ts
-    const currentConversation = await prisma.chatConversation.findFirstOrThrow({
-      where: { id: conversation.id },
-      select: { state: true },
-    });
-
-    await triggerHandoff({
-      tenantId: user.tenantId,
-      conversation: { id: conversation.id, leadId: conversation.leadId },
-      reason: 'manual',
-      preState: currentConversation.state as ConversationState,
-    });
-
-    // El evento de la razón dada por el staff en el formulario (parsed.data.reason,
-    // texto libre) se conserva aparte del evento genérico 'handoff.requested' que
-    // ya crea triggerHandoff con reason: 'manual' — ese texto libre no cabe en el
-    // discriminador reason de triggerHandoff (que es un enum fijo), así que se
-    // guarda en un evento propio para no perderlo.
-    const event = await createConversationEvent({
-      tenantId: user.tenantId,
-      conversationId: conversation.id,
-      leadId: conversation.leadId,
-      actorUserId: user.userId,
-      type: 'note.internal_added',
-      payload: { note: `Manual handoff: ${parsed.data.reason}` },
-    });
+  if (/\b(?:reschedule|change (?:the )?(?:time|date)|another time)\b/.test(normalized)) {
+    return {
+      reply: "Got it — I've flagged this so the team can help you find a new time. " + HANDOFF_ACKNOWLEDGEMENT,
+      slots: { post_tour_action: 'reschedule' },
+      next_state: 'handoff',
+      handoffReason: 'follow_up_needed',
+    };
+  }
+  if (/\b(?:cancel|cannot make it|can't make it|won't make it)\b/.test(normalized)) {
+    return {
+      reply: "I've noted this as a cancellation request and flagged it for the team. " + HANDOFF_ACKNOWLEDGEMENT,
+      slots: { post_tour_action: 'cancel' },
+      next_state: 'handoff',
+      handoffReason: 'follow_up_needed',
+    };
+  }
 ```
 
-Verificar contra el código real de esa ruta (línea ~282-320) el nombre
-exacto de la variable `conversation` y si ya trae `state` seleccionado en
-su `findFirst` original (línea ~291-294) — si ya lo trae, no hace falta el
-`findFirstOrThrow` extra, se puede usar directo `conversation.state`. El
-implementador debe leer el bloque completo antes de aplicar este cambio,
-no copiarlo a ciegas si la forma real difiere.
+(`HANDOFF_ACKNOWLEDGEMENT` ya se exporta desde este mismo archivo — Tarea
+6 la corrigió; el texto final que el lead ve termina reemplazándose de
+todas formas por el genérico cuando `triggerHandoff` corre, así que
+concatenarlo aquí es solo para que la prueba directa de esta función
+tenga un texto honesto incluso antes de pasar por el despacho — verificar
+si el implementador prefiere omitir el texto extra dado que se sobreescribe
+igual; cualquiera de las dos opciones es válida, lo que NO puede pasar es
+que quede el texto viejo que promete "notified"/"I'll check alternatives"
+sin que nada lo respalde).
 
-Mantener sin cambios el resto de la ruta: el `if (conversation.leadId) {
-await prisma.lead.update({ ..., data: { operationalStatus:
-'needs_handoff' } }) }` que ya existe se queda igual.
+No es necesario un `else` ni cambiar la firma de la función — `InterpretedTurn`
+ya tiene `handoffReason?: 'explicit_request' | 'provider_failure'` desde la
+Tarea 5; **ampliar ese union a** `'explicit_request' | 'provider_failure' |
+'follow_up_needed'` en la declaración de `InterpretedTurn`.
 
-- [ ] **Step 3: Importar `ConversationState` y `triggerHandoff` en `chat.ts`**
+- [ ] **Step 2: `handOffScheduling` — falla real de agendamiento**
+
+En `chatbot.service.ts`, los dos call sites que hacen `finalReply = await
+handOffScheduling(...); newState = 'handoff';` (uno en la rama de
+`getSchedulingAvailability` sin resultado, otro en la rama de reserva
+fallida — buscar ambos con `handOffScheduling(` en el archivo) agregan,
+justo después de la asignación de `newState`:
 
 ```ts
-import { triggerHandoff, type ConversationState } from '../services/chatbot.service.js';
+        glmResult.handoffReason = 'follow_up_needed';
 ```
 
-(ajustar si `ConversationState` ya se importa con otro alias en ese
-archivo).
+Esto hace que el despacho genérico de la línea ~1379 recoja el caso — el
+texto específico que devuelve `handOffScheduling` queda superado por el
+acuse genérico de `triggerHandoff`, lo cual es correcto (ambos textos ya
+dicen esencialmente lo mismo). No hace falta cambiar la firma ni el cuerpo
+de `handOffScheduling` en sí — solo sigue escribiendo su propio
+`ConversationEvent` de tipo `'showing.availability_unavailable'`, que se
+conserva sin cambios como el detalle específico de por qué no hubo
+horarios; `triggerHandoff` agrega el evento genérico `'handoff.requested'`
+aparte, ambos coexisten sin conflicto.
 
-- [ ] **Step 4: Correr y verificar**
+- [ ] **Step 3: `buyerTurn`/`sellerTurn` — calificación de compra/venta completa**
+
+En `apps/api/src/services/ownership-conversation.service.ts`, agregar el
+campo al tipo:
+
+```ts
+export type OwnershipConversationTurn = {
+  reply: string;
+  slots: Record<string, string>;
+  next_state: ConversationState;
+  clearSlots?: string[];
+  handoffReason?: 'follow_up_needed';
+};
+```
+
+En `buyerTurn` (línea ~322-329), los dos `return` con `next_state:
+'handoff'`:
+
+```ts
+    return {
+      reply: `Great, ${slots.prospect_name}. I have you looking in ${slots.preferred_area}, ${slots.preferred_province}, for a ${slots.bedrooms}-bedroom home with ${propertyLabel}, a working budget of $${Number(slots.purchase_budget).toLocaleString('en-CA')}, ${slots.financing_status.replaceAll('_', ' ')}, and ${petLabel}. Your priorities are ${slots.buyer_priorities}. I'll connect you with a purchase advisor, who will contact you at ${Object.values(contact)[0]} with the next step.`,
+      slots: { ...contact, ownership_qualification_complete: 'yes' },
+      next_state: 'handoff',
+    };
+  }
+  return {
+    reply: `Your purchase brief is already complete. I'll connect you with the purchase specialist for the next step.`,
+    slots: {},
+    next_state: 'handoff',
+  };
+```
+
+pasan a:
+
+```ts
+    return {
+      reply: `Great, ${slots.prospect_name}. I have you looking in ${slots.preferred_area}, ${slots.preferred_province}, for a ${slots.bedrooms}-bedroom home with ${propertyLabel}, a working budget of $${Number(slots.purchase_budget).toLocaleString('en-CA')}, ${slots.financing_status.replaceAll('_', ' ')}, and ${petLabel}. Your priorities are ${slots.buyer_priorities}. I've flagged this for a purchase advisor to follow up — someone will reach out to ${Object.values(contact)[0]} as soon as they can.`,
+      slots: { ...contact, ownership_qualification_complete: 'yes' },
+      next_state: 'handoff',
+      handoffReason: 'follow_up_needed',
+    };
+  }
+  return {
+    reply: `Your purchase brief is already complete — a purchase specialist has already been flagged for the next step.`,
+    slots: {},
+    next_state: 'handoff',
+    handoffReason: 'follow_up_needed',
+  };
+```
+
+Mismo tratamiento en `sellerTurn` (línea ~421-428): el texto
+`"I'll connect you with a selling specialist for a proper market
+analysis and next steps."` y `"Your sale brief is already complete. I'll
+connect you with the selling specialist for the next step."` pasan a la
+misma redacción honesta ("I've flagged this for a selling specialist...",
+sin prometer contacto específico), y ambos `return` ganan `handoffReason:
+'follow_up_needed'`.
+
+- [ ] **Step 4: Verificar que el campo llega hasta `glmResult`**
+
+`buildOwnershipConversationTurn` (que envuelve `buyerTurn`/`sellerTurn`) y
+`buildDeterministicQualificationTurn` (que la llama y hace `return
+ownershipTurn;`) no necesitan ningún cambio — `OwnershipConversationTurn`
+ya es estructuralmente compatible con `InterpretedTurn` vía ese `return`
+directo, así que el campo nuevo viaja solo. Confirmar esto con una prueba
+de integración en `chatbot.routing.test.ts` en vez de asumirlo:
+
+```ts
+it('calificación de compra completa dispara handoff con aviso al staff', async () => {
+  await seedTenant();
+  await prisma.user.create({
+    data: { tenantId: TENANT_ID, email: `pm-buyer-${TENANT_ID}@test.ca`, passwordHash: 'x', firstName: 'Pat', lastName: 'Manager', role: 'property_manager' },
+  });
+  const conversation = await seedConversationWithSlots('web:buyer-qualified', 'collecting_budget', {
+    transaction_intent: 'buy',
+    prospect_name: 'Ana', preferred_area: 'Kelowna', preferred_province: 'British Columbia',
+    bedrooms: '3', buyer_property_type: 'any', purchase_budget: '850000',
+    financing_status: 'pre_approved', buyer_pets: 'none', buyer_priorities: 'schools',
+    buyer_email: 'ana@example.com',
+  });
+
+  const reply = await handleInboundMessage(
+    { tenantId: TENANT_ID, from: 'web:buyer-qualified', body: 'that all sounds right', channel: 'web' },
+    { glm: throwingGlm().glm, messaging: new WebChatMockAdapter() },
+  );
+
+  expect(reply.newState).toBe('handoff');
+  const row = await prisma.chatConversation.findUniqueOrThrow({ where: { id: conversation.id } });
+  expect(row.handoffReason).toBe('follow_up_needed');
+  expect(row.handoffNotifiedAt).not.toBeNull();
+});
+```
+
+Usar `throwingGlm()` (o cualquier GLM que no se espera que se llame) es
+intencional: si `buildOwnershipConversationTurn` realmente intercepta el
+turno antes de llegar al modelo (como debe), el test pasa sin que GLM se
+invoque nunca — si por algún motivo el modelo SÍ se llama, el mock lanza y
+el test falla, delatando que el intercept no está funcionando. Ajustar los
+nombres exactos de los slots de comprador contra
+`ownership-conversation.service.ts`/`ownership-conversation.types.ts` si
+difieren de los usados arriba — verificar contra el código real antes de
+fijar el seed.
+
+- [ ] **Step 5: Correr y verificar**
 
 ```bash
 pnpm --filter @property-manager/api test
 pnpm -r exec tsc --noEmit
 ```
 
-Esperado: la ruta manual sigue funcionando (verificar contra cualquier
-prueba existente de esa ruta), y ahora además dispara el guard de pausa de
-la Tarea 3 porque `handoffReason` queda seteado.
-
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add apps/api/src/routes/chat.ts apps/api/src/services/chatbot.service.ts
-git commit -m "refactor: la pausa manual también pasa por triggerHandoff"
+git add apps/api/src/services/chatbot.service.ts apps/api/src/services/ownership-conversation.service.ts apps/api/src/services/chatbot.service.test.ts apps/api/src/services/ownership-conversation.service.test.ts apps/api/src/services/chatbot.routing.test.ts
+git commit -m "fix: los puntos que ya prometían un humano ahora avisan de verdad"
 ```
 
 ---
 
-## Task 8: Interfaz y documentación
+## Task 9: Interfaz de tres estados y documentación
 
 **Files:**
 - Modify: `apps/web/src/pages/ConversationsPage.tsx`
@@ -1544,61 +2101,71 @@ git commit -m "refactor: la pausa manual también pasa por triggerHandoff"
 - Modify: `docs/PRODUCT_ROADMAP.md`
 
 **Interfaces:**
-- Consumes: `POST /chat/conversations/:id/resume` (Tarea 6).
+- Consumes: `POST /chat/conversations/:id/claim`, `POST
+  /chat/conversations/:id/resume` (Tarea 7).
 
 - [ ] **Step 1: Tipos**
 
-En `apps/web/src/lib/types.ts`, agregar al tipo de `Conversation` (o donde
-viva ese tipo) los tres campos nuevos:
+En `apps/web/src/lib/types.ts`, agregar al tipo de `Conversation`:
 
 ```ts
   handoffReason?: string | null;
   handoffNotifiedAt?: string | null;
-  handoffPreState?: string | null;
+  claimedByUserId?: string | null;
+  claimedByUserName?: string | null; // si la API ya incluye el nombre resuelto; si no, ajustar al shape real del endpoint de detalle de conversación
 ```
+
+Verificar contra la ruta `GET /chat/conversations/:id` real si el nombre
+del staff que tomó control ya viene resuelto o solo el id — si solo viene
+el id, mostrar el id o extender esa ruta con un `select` del nombre
+(decisión del implementador, cualquiera de las dos es aceptable para esta
+fase).
 
 - [ ] **Step 2: Deep link `?conversationId=`**
 
-En `apps/web/src/pages/ConversationsPage.tsx`, agregar `useSearchParams`
-de `react-router-dom` (mismo patrón usado en `PublicListingPage.tsx` y en
-`ShowingsPage.tsx` de Fase 1.3 para `?calendar=`). Al montar, si hay un
-`conversationId` en la URL, llamar `setSelectedId(...)` con ese valor.
+En `ConversationsPage.tsx`, agregar `useSearchParams` de
+`react-router-dom` (mismo patrón que `?calendar=` en `ShowingsPage.tsx`,
+Fase 1.3). Al montar, si hay un `conversationId` en la URL, seleccionar
+esa conversación.
 
-- [ ] **Step 3: Franja de pausa + botón "Resume bot"**
+- [ ] **Step 3: Retirar el botón/mutación de la ruta manual vieja**
 
-Agregar una `useMutation` que llame `POST
-/chat/conversations/${selectedId}/resume` e invalide la query de la
-conversación seleccionada al terminar (mismo patrón que las mutaciones
-existentes de esa página, ej. la de `/handoff` que ya está ahí).
+Si `ConversationsPage.tsx` tiene algún botón o mutación apuntando a
+`/conversations/:id/handoff` (verificar — el spec original asumía que
+existía, confirmar contra el código real), quitarlo: esa ruta ya no
+existe (Tarea 7).
 
-Cuando la conversación seleccionada tenga `state === 'handoff'`, mostrar
-una franja (mismo estilo de alerta que usa esa página para otros avisos)
-con el texto:
+- [ ] **Step 4: Franja de tres estados**
 
-```
-"Automated replies are paused" + (handoffReason legible: "The lead asked
-to speak with someone" | "Our assistant ran into a problem" | "Paused by
-staff")
-```
+Agregar dos mutaciones — `POST .../claim` y `POST .../resume` — que
+invaliden la query de la conversación seleccionada al terminar.
 
-y el botón **"Resume bot"**, deshabilitado si `user.role` no es
-`property_manager` ni `broker` (mismo patrón `useAuth()` que
-`AuditPage.tsx`).
+Render condicional en la conversación seleccionada:
 
-- [ ] **Step 4: Verificar que compila**
+- Sin `handoffReason`: nada.
+- `handoffReason` puesto, `claimedByUserId` nulo: franja *"🔔 Needs a
+  human — the bot is still responding while it waits."* + botón **"Take
+  control"**.
+- `claimedByUserId` puesto: franja *"👤 [nombre o id] is handling this
+  conversation."* + botón **"Return to bot"**.
+
+Ambos botones deshabilitados si `user.role` no es `property_manager` ni
+`broker` (mismo patrón `useAuth()` que `AuditPage.tsx`).
+
+- [ ] **Step 5: Verificar que compila**
 
 ```bash
 pnpm --filter @property-manager/web test
 pnpm -r exec tsc --noEmit
 ```
 
-- [ ] **Step 5: Roadmap**
+- [ ] **Step 6: Roadmap**
 
 En `docs/PRODUCT_ROADMAP.md`, sección 1.2, marcar como entregado con nota
-de lo que quedó fuera (confianza baja como disparador, re-notificación por
-mensaje), mismo estilo usado para §1.3.
+de lo que quedó fuera (confianza baja como disparador de handoff,
+re-notificación por mensaje mientras nadie ha tomado control).
 
-- [ ] **Step 6: Regresión completa del monorepo**
+- [ ] **Step 7: Regresión completa del monorepo**
 
 ```bash
 pnpm -r exec tsc --noEmit
@@ -1608,24 +2175,31 @@ pnpm -r run test
 Esperado: todo verde en los cuatro paquetes. Si algo falla, no commitear:
 reportar.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 git add apps/web/src docs/PRODUCT_ROADMAP.md
-git commit -m "feat: pantalla de pausa/reanudación de handoff y roadmap"
+git commit -m "feat: pantalla de tomar/devolver control y roadmap"
 ```
 
 ---
 
 ## Notas para quien ejecute el plan
 
-- **La Tarea 5 tiene dos puntos marcados explícitamente "verificar contra
-  el código real antes de fijar la aserción/implementación"** — el
-  intérprete de fallo de proveedor y el tipo exacto de `history` que
-  consumen `buildRentalConversationPrompt`/`buildOwnershipConversationPrompt`.
-  No copiar el pseudocódigo a ciegas si diverge de lo que el archivo real
-  muestra: leer primero, ajustar, luego escribir la prueba.
-- **`triggerHandoff` se usa en dos tareas separadas** (Tarea 5 la crea sin
-  exportar, Tarea 7 la exporta y la reutiliza) — si se ejecuta la Tarea 7
-  antes de que la 5 esté commiteada, no existe todavía; respetar el orden.
+- **Las Tareas 1-5 ya están commiteadas y revisadas bajo el diseño
+  original** (el bot se apagaba en cuanto `state === 'handoff'`). Las
+  Tareas 6-9 corrigen ese mecanismo — no hace falta revertir nada, se
+  corrige hacia adelante.
+- **La Tarea 6 depende de que la Tarea 5 ya esté commiteada** (usa
+  `triggerHandoff`/`notifyStaffOfHandoff`/`HANDOFF_ACKNOWLEDGEMENT` tal
+  como quedaron, y los modifica in situ) — ya lo está.
+- **La Tarea 8 depende de que la Tarea 6 haya corrido `prisma migrate
+  dev`** (el campo `handoffReason` en `InterpretedTurn`/
+  `OwnershipConversationTurn` es independiente del schema, pero las
+  pruebas de la Tarea 8 siembran `claimedByUserId`, que no existe hasta
+  la migración de la Tarea 6).
+- **La Tarea 5 tiene un punto marcado "verificar contra el código real"**
+  que ya se resolvió en la práctica (el intérprete de fallo de proveedor
+  resultó ser código muerto en producción — ver ledger de la Tarea 5 — y
+  se dejó como red de seguridad, no se retiró).
 - **Si una prueba no pasa, se reporta BLOCKED.** No se commitea en rojo.

@@ -1,8 +1,204 @@
 # Fase 1.2 — Hand-off de IA a humano
 
 **Fecha:** 2026-08-12
-**Estado:** aprobado por el usuario, listo para plan de implementación
+**Estado:** corregido tras la revisión de la Tarea 5 (ver Sección 0) — la
+Sección 0 gobierna sobre cualquier texto posterior que la contradiga.
 **Roadmap:** [`docs/PRODUCT_ROADMAP.md`](../../PRODUCT_ROADMAP.md) §1.2
+
+## 0. Corrección post-Tarea 5 — el bot no se apaga solo, alguien lo tiene que apagar
+
+Las Tareas 1-5 (ya commiteadas, ver plan) se construyeron sobre un diseño
+que la revisión de la Tarea 5 mostró que estaba mal: un guard que pausaba
+el bot en cuanto `state === 'handoff'`, sin importar si algún humano ya
+estaba mirando la conversación o no.
+
+La revisión encontró que ese guard silencia, sin avisarle a nadie, ~10
+puntos que YA existían antes de esta fase y que le prometen al lead que un
+humano lo va a contactar — calificación de compra/venta terminada,
+solicitud de reagendar, solicitud de cancelar, falla real de agendamiento.
+El bot dice *"I'll connect you with a purchase advisor"* / *"I'll make sure
+the property manager is notified"*, y nadie se entera nunca.
+
+**Regla nueva, dada por el usuario:** si el bot tiene que pasar la
+conversación a una persona, no puede prometer que esa persona va a
+contestar — solo puede avisar que ya dio aviso y que está esperando a que
+alguien pueda retomar. **Mientras ningún humano intervenga, el bot no se
+apaga ni abandona la conversación.**
+
+El mecanismo, tomado de un patrón que el usuario ya tiene funcionando en
+otra aplicación: un botón explícito **"Tomar control de la conversación"**.
+Nadie infiere que un humano "ya está mirando" a partir de que mandó un
+mensaje cualquiera — alguien decide explícitamente hacerse cargo, y eso es
+lo único que apaga al bot. Cuando esa persona termina, otro botón le
+devuelve el control al bot.
+
+### 0.1 Qué cambia respecto a las Secciones 1-8 originales (abajo)
+
+- **El guard de pausa (Sección 1, ya commiteado en la Tarea 3) se reemplaza
+  por completo.** Ya no depende de `state === 'handoff'`. Depende de un
+  campo nuevo, `claimedByUserId`: nulo → el bot sigue respondiendo
+  normalmente; con valor → el bot se calla, un humano ya tomó control.
+- **`handoffPreState` (Sección 2.1, Tarea 1) se elimina.** Ya no hace
+  falta: como el bot nunca deja de procesar turnos mientras nadie ha
+  tomado control, `conversation.state` sigue vivo y actualizado en todo
+  momento. Al devolver el control, `resumeBotFromHandoff` usa
+  `conversation.state` tal cual está en ese momento, no un valor congelado.
+- **La notificación (Sección 2.5, Tarea 5) deja de usar la cascada de
+  `resolveStaffNotifyTargets`** (broker de la visita → dueño del lead →
+  todos los property managers, deteniéndose en el primer nivel no vacío).
+  Ese comportamiento se queda exactamente como está para su único otro
+  consumidor, la notificación de aplicaciones de renta (Fase 2A) — no se
+  toca. Para el hand-off del bot se agrega una función nueva que notifica
+  a **todo** el staff activo con rol `property_manager` o `broker`, sin
+  cascada: cualquiera que esté disponible puede tomar control.
+- **La ruta manual de pausa (Sección 4, Tarea 7, aún no implementada) se
+  retira.** "Pausar manualmente" y "tomar control" eran, en la práctica,
+  la misma acción — un humano decidiendo hacerse cargo. Se reemplaza por
+  completo con el botón de "Tomar control" nuevo; no queda una acción
+  separada de "solo pausar sin tomar control".
+- **Se extiende el disparo de aviso a los ~10 puntos que ya prometían un
+  humano** (calificación de compra/venta terminada, reagendar, cancelar,
+  falla de agendamiento) — ahora todos llaman al mismo mecanismo de aviso,
+  y su texto deja de prometer contacto ("I'll connect you with...") para
+  avisar honestamente ("I've let the team know...").
+- El disparador de fallo de proveedor sin fallback determinístico (Sección
+  2.3) se queda tal cual — la revisión confirmó que es código muerto hoy
+  (ver ledger de la Tarea 5), pero es una red de seguridad correcta y
+  probada por si `buildGlmFallback`/`buildOwnershipConversationTurn`
+  cambian en el futuro. No se retira.
+
+### 0.2 El mecanismo corregido, completo
+
+**Campos en `ChatConversation`** (reemplaza lo que describe la Sección 2.1):
+
+```prisma
+  handoffReason      String?   // explicit_request | provider_failure | manual | follow_up_needed
+  handoffNotifiedAt  DateTime?
+  claimedByUserId    String?
+  claimedAt          DateTime?
+
+  claimedByUser User? @relation("ConversationClaimedBy", fields: [claimedByUserId], references: [id])
+```
+
+`manual` deja de generarse desde una ruta separada (esa ruta se retira,
+ver 0.1) — se conserva como valor del enum solo por si algún flujo futuro
+lo necesita marcar sin pasar por el flujo de aviso automático; hoy nada lo
+escribe. `follow_up_needed` es el valor genérico para los ~10 puntos que
+ya prometían contacto — el detalle específico (reagendar vs. cancelar vs.
+calificación completa vs. sin horarios) va en el `payload.detail` del
+`ConversationEvent`, no en un campo nuevo por cada caso.
+
+**`triggerHandoff`** (reemplaza el cuerpo de la Sección 2.4): ya NO asume
+que el bot se apaga. Su trabajo es únicamente: dejar `handoffReason`,
+crear el evento, avisar a todo el staff disponible (best-effort, una sola
+vez por episodio vía `handoffNotifiedAt`), y devolver el texto honesto de
+reconocimiento. No toca `claimedByUserId` — eso es un flujo aparte.
+
+```ts
+const HANDOFF_ACKNOWLEDGEMENT =
+  "I've let the team know — someone will pick this up as soon as they can. " +
+  "In the meantime, I'm still here if you have other questions.";
+```
+
+**Notificación a todo el staff disponible** (reemplaza la Sección 2.5):
+consulta directa, sin pasar por `resolveStaffNotifyTargets`:
+
+```ts
+const staff = await prisma.user.findMany({
+  where: {
+    tenantId: input.tenantId,
+    isActive: true,
+    role: { in: ['property_manager', 'broker'] },
+  },
+  select: { id: true, email: true, notificationChannel: true, notificationAddress: true },
+});
+await notifyStaffTargets({
+  targets: staff,
+  subject: 'A conversation needs your attention',
+  body: `${leadName} ${reasonText} and needs a reply.\n\n${link}`,
+  messaging: getAdapters().messaging,
+});
+```
+
+`notifyStaffTargets` (Tarea 2) se reutiliza tal cual — solo cambia quién
+llega en `targets`. `resolveStaffNotifyTargets` no se toca ni se llama
+desde este flujo.
+
+**El guard de pausa** (reemplaza la Sección 1 completa):
+
+```ts
+if (conversation.claimedByUserId) {
+  return { replyText: '', newState: conversation.state as ConversationState, leadCreated: false, handoff: true };
+}
+```
+
+Corre en el mismo punto donde vivía el guard viejo (después del opt-out,
+antes de `/start` y de cualquier lógica de estado). La diferencia clave:
+ya NO bloquea solo porque `state === 'handoff'` — un lead cuya
+conversación tiene `handoffReason` puesto pero nadie ha tomado control
+sigue recibiendo respuestas normales del bot.
+
+**Tomar control** — `POST /chat/conversations/:id/claim`, `requireAuth`,
+`requireRole('property_manager', 'broker')`:
+
+```ts
+const result = await prisma.chatConversation.updateMany({
+  where: { id: req.params.id, tenantId: user.tenantId, claimedByUserId: null },
+  data: { claimedByUserId: user.userId, claimedAt: new Date() },
+});
+if (result.count === 0) {
+  res.status(409).json({ error: 'already_claimed' });
+  return;
+}
+```
+
+El `where: { claimedByUserId: null }` es la red de concurrencia: si dos
+miembros del staff presionan "Tomar control" casi al mismo tiempo, la
+actualización condicional garantiza que solo uno tenga éxito (`count ===
+1`), sin necesitar una unique nueva — el mismo principio de "las
+condiciones de la base son la red, no los `if` del código" aplicado a un
+`UPDATE` en vez de un `INSERT`. Crea un `ConversationEvent` de tipo nuevo
+`'handoff.claimed'` (`label: 'Staff took control'`, tono `active`).
+
+**Devolver el control al bot** (reemplaza la Sección 3 — el mecanismo
+interno de `resumeBotFromHandoff`, llamar a `callGlm`/`callOwnershipGlm`
+con un prompt sintético y contexto completo incluidos los mensajes de
+staff, **se queda exactamente igual**; lo único que cambia es de dónde
+saca el `currentState` de entrada):
+
+```ts
+const landingState: ConversationState =
+  conversation.state === 'scheduling' ? 'proposing_tour' : (conversation.state as ConversationState);
+```
+
+en vez de leer `handoffPreState` (que ya no existe). Limpia
+`claimedByUserId`, `claimedAt`, `handoffReason`, `handoffNotifiedAt` al
+terminar.
+
+**Interfaz:** tres estados posibles en la franja de
+`ConversationsPage.tsx`:
+
+- Sin `handoffReason`: nada, conversación normal.
+- `handoffReason` puesto, `claimedByUserId` nulo: *"🔔 Needs a human — the
+  bot is still responding while it waits."* + botón **"Take control"**.
+- `claimedByUserId` puesto: *"👤 [nombre] is handling this conversation."*
+  + botón **"Return to bot"**.
+
+### 0.3 Qué NO cambia
+
+El resto de esta sección (0) es el único texto que gobierna la mecánica de
+pausa/aviso/reanudación. Las Secciones 1-8 de abajo documentan el diseño
+ORIGINAL, previo a esta corrección — se conservan como registro histórico
+de por qué se llegó a la Sección 0, no como especificación vigente. Todo
+lo demás que esas secciones ya cubrían y esta corrección no menciona
+explícitamente sigue vigente tal cual: el esquema de
+`ConversationEventType`, el fix del filtro de contexto para mensajes
+`role: 'staff'` (Sección 3.2 original, ya commiteado en la Tarea 4), el
+turno sintético de reanudación en sí (Sección 3.4 original), el deep link
+`?conversationId=`, y toda la batería de pruebas salvo donde el guard
+nuevo la contradiga.
+
+---
 
 ## Problema
 
