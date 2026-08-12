@@ -192,6 +192,59 @@ describe('chatbot routing integration (handleInboundMessage)', () => {
     expect(reply.replyText).toBe('Sure — this unit has a dedicated parking stall included.');
   });
 
+  it('the context sent to the model includes what staff replied manually during a pause', async () => {
+    const { glm, reason } = glmReturning(JSON.stringify({
+      reply: 'ok',
+      intent: 'other',
+      confidence: 'high',
+      profile: { set: {}, clear: [] },
+    }));
+
+    // Mismos slots de calificación que el caso "routes a rental conversation
+    // through the model..." de arriba: con calificación incompleta,
+    // buildFastQualificationTurn intercepta el turno antes de que el mensaje
+    // llegue al modelo y `reason` nunca se invoca.
+    await prisma.chatConversation.create({
+      data: {
+        tenantId: TENANT_ID,
+        externalId: 'routing-staff-context-1',
+        channel: 'web',
+        state: 'proposing_tour',
+        slots: {
+          create: [
+            { key: 'transaction_intent', value: 'rent' },
+            { key: 'prospect_name', value: 'Carlos' },
+            { key: 'preferred_area', value: 'Burnaby' },
+            { key: 'preferred_province', value: 'British Columbia' },
+            { key: 'location_confirmed', value: 'yes' },
+            { key: 'bedrooms', value: '2' },
+            { key: 'pets', value: 'cat' },
+            { key: 'budget', value: '2600' },
+            { key: 'move_in_date', value: 'August' },
+          ],
+        },
+        // El staff respondió a mano mientras el bot estaba en pausa
+        // (role: 'staff') — esta prueba verifica que ese mensaje llegue al
+        // prompt que arma el modelo, no solo que se haya guardado en la BD.
+        messages: {
+          create: [
+            { role: 'user', content: 'Is the unit still available?' },
+            { role: 'staff', content: 'Yes, still available — I can hold it for you.' },
+          ],
+        },
+      },
+    });
+
+    await handleInboundMessage(
+      { tenantId: TENANT_ID, from: 'routing-staff-context-1', body: 'ok thanks', channel: 'web' },
+      { glm, messaging },
+    );
+
+    expect(reason).toHaveBeenCalledTimes(1);
+    const [request] = reason.mock.calls[0] as [GlmReasoningRequest];
+    expect(request.systemPrompt).toContain('still available — I can hold it');
+  });
+
   it('routes an ownership (buy) conversation through the model once transaction_intent is buy, never through the deterministic buyer builder', async () => {
     const { glm, reason } = glmReturning(JSON.stringify({
       reply: 'Got it — a $850k budget for a townhouse in Burnaby.',

@@ -1543,8 +1543,15 @@ async function callGlm(
   }
   const history = ctx.history
     .slice(-10)
-    .filter((message): message is { role: 'user' | 'assistant'; content: string } =>
-      message.role === 'user' || message.role === 'assistant');
+    .filter((message): message is { role: 'user' | 'assistant' | 'staff'; content: string } =>
+      message.role === 'user' || message.role === 'assistant' || message.role === 'staff')
+    .map((message) => ({
+      // El lead ve un mensaje de staff igual que uno del bot: ambos son
+      // "lo que la agencia respondió". No se inventa un tercer rol para
+      // el prompt del modelo.
+      role: message.role === 'staff' ? 'assistant' as const : message.role,
+      content: message.content,
+    }));
   let pendingSlotCount = 0;
   try {
     const pendingSlots = JSON.parse(ctx.existingSlots.pending_slots ?? '[]') as unknown;
@@ -1676,8 +1683,15 @@ async function callOwnershipGlm(
   }
   const history = ctx.history
     .slice(-10)
-    .filter((message): message is { role: 'user' | 'assistant'; content: string } =>
-      message.role === 'user' || message.role === 'assistant');
+    .filter((message): message is { role: 'user' | 'assistant' | 'staff'; content: string } =>
+      message.role === 'user' || message.role === 'assistant' || message.role === 'staff')
+    .map((message) => ({
+      // El lead ve un mensaje de staff igual que uno del bot: ambos son
+      // "lo que la agencia respondió". No se inventa un tercer rol para
+      // el prompt del modelo.
+      role: message.role === 'staff' ? 'assistant' as const : message.role,
+      content: message.content,
+    }));
 
   const { turn, providerFailed } = await interpretOwnershipTurn({
     glm,
