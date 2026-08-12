@@ -3714,6 +3714,20 @@ export async function triggerHandoff(input: {
     payload: { reason: input.reason },
   });
 
+  // La vieja ruta manual (retirada en la Tarea 7) era el único lugar que
+  // marcaba esto — el dropdown de LeadDetailPage lo usa para que el staff
+  // filtre/triage por leads que necesitan atención humana. Se marca aquí,
+  // en el momento de la escalación (no en claimConversation): una vez
+  // reclamada, la conversación ya no "necesita" un hand-off, ya lo tiene.
+  // Aplica para las cuatro razones — todas representan "este lead necesita
+  // atención humana".
+  if (input.conversation.leadId) {
+    await prisma.lead.update({
+      where: { id: input.conversation.leadId },
+      data: { operationalStatus: 'needs_handoff' },
+    });
+  }
+
   if (input.reason !== 'manual' && !existing?.handoffNotifiedAt) {
     await notifyStaffOfHandoff({
       tenantId: input.tenantId,
@@ -3804,7 +3818,10 @@ export async function claimConversation(input: {
   });
   if (result.count === 0) return { ok: false, status: 409, error: 'already_claimed' };
 
-  const user = await prisma.user.findUnique({ where: { id: input.userId }, select: { firstName: true, lastName: true } });
+  const user = await prisma.user.findFirst({
+    where: { id: input.userId, tenantId: input.tenantId },
+    select: { firstName: true, lastName: true },
+  });
   await createConversationEvent({
     tenantId: input.tenantId,
     conversationId: input.conversationId,
@@ -3852,14 +3869,24 @@ export async function resumeBotFromHandoff(input: {
   const adapters = getAdapters();
   const tenantName = await getTenantName(input.tenantId);
 
-  // 'scheduling' depende de que input.body sea un número de opción elegido
-  // por el lead — no aplica al prompt sintético. proposing_tour es neutral
-  // y ya rutea por el modelo para cualquier transaction_intent conocido.
+  // Dos estados de conversation.state NO pueden pasar tal cual como
+  // currentState del turno sintético:
+  // - 'scheduling' depende de que input.body sea un número de opción
+  //   elegido por el lead — no aplica al prompt sintético.
+  // - 'handoff' es un marcador terminal de pausa, no un estado
+  //   conversacional vivo: nextStateForRentalTurn no lo mapea a nada para
+  //   un intent genérico, así que si se deja pasar, newState se queda en
+  //   'handoff' y se re-persiste — dejando la conversación atascada para
+  //   siempre (isRentalQualification y shouldGenerateRecommendations
+  //   quedan gateados apagados mientras el estado sea 'handoff').
+  // proposing_tour es el aterrizaje neutral para ambos casos: ya rutea por
+  // el modelo para cualquier transaction_intent conocido.
   // Ya no se lee handoffPreState (retirado en la Tarea 6): como el bot
   // nunca dejó de correr mientras nadie tomaba control, conversation.state
   // sigue siendo el estado real y vivo de la conversación.
   const currentDbState = conversation.state as ConversationState;
-  const landingState: ConversationState = currentDbState === 'scheduling' ? 'proposing_tour' : currentDbState;
+  const landingState: ConversationState =
+    currentDbState === 'scheduling' || currentDbState === 'handoff' ? 'proposing_tour' : currentDbState;
 
   const turn = isOwnershipConversation
     ? await callOwnershipGlm(adapters.glm, {

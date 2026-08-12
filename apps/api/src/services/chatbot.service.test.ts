@@ -2423,6 +2423,38 @@ describe('triggerHandoff', () => {
     expect((events[0]!.payload as { reason?: string }).reason).toBe('explicit_request');
   });
 
+  it('marca el lead como needs_handoff — la vieja ruta manual retirada era la única que lo hacía (Finding 3)', async () => {
+    await prisma.tenant.upsert({
+      where: { id: TENANT_ID }, update: {}, create: { id: TENANT_ID, name: 'Handoff Test', province: 'BC' },
+    });
+    await prisma.user.create({
+      data: {
+        tenantId: TENANT_ID, email: `pm-lead-status-${TENANT_ID}@test.ca`, passwordHash: 'x',
+        firstName: 'Pat', lastName: 'Manager', role: 'property_manager',
+        notificationChannel: 'telegram', notificationAddress: '900300',
+      },
+    });
+    const lead = await prisma.lead.create({
+      data: {
+        tenantId: TENANT_ID, name: 'Ana', phone: '+16045550120', status: 'contacted', source: 'web',
+        operationalStatus: 'needs_review',
+      },
+    });
+    const conversation = await prisma.chatConversation.create({
+      data: { tenantId: TENANT_ID, externalId: 'web:trigger-lead-status', channel: 'web', state: 'proposing_tour', leadId: lead.id },
+    });
+
+    await triggerHandoff({
+      tenantId: TENANT_ID,
+      conversation: { id: conversation.id, leadId: lead.id },
+      reason: 'explicit_request',
+      preState: 'proposing_tour',
+    });
+
+    const updatedLead = await prisma.lead.findUniqueOrThrow({ where: { id: lead.id } });
+    expect(updatedLead.operationalStatus).toBe('needs_handoff');
+  });
+
   it('no notifica cuando reason es manual', async () => {
     await prisma.tenant.upsert({
       where: { id: TENANT_ID }, update: {}, create: { id: TENANT_ID, name: 'Handoff Test', province: 'BC' },
@@ -2765,5 +2797,39 @@ describe('resumeBotFromHandoff', () => {
 
     const result = await resumeBotFromHandoff({ tenantId: TENANT_ID, conversationId: conversation.id, actorUserId: staffUser.id });
     expect(result).toEqual({ ok: true });
+  });
+
+  it('sustituye handoff por proposing_tour como estado de entrada — el caso real dominante (Finding 1)', async () => {
+    // El intent 'handoff' del modelo persiste conversation.state como
+    // 'handoff' (ver chatbot.routing.test.ts ~L579): por lejos el caso más
+    // común al reanudar. Dejarlo pasar tal cual como currentState atasca la
+    // conversación para siempre — nextStateForRentalTurn no mapea 'handoff'
+    // a nada para un intent genérico, así que newState se queda en
+    // 'handoff' y se re-persiste, apagando la calificación/recomendación.
+    const staffUser = await prisma.user.create({
+      data: { tenantId: TENANT_ID, email: `resume-4-${TENANT_ID}@test.ca`, passwordHash: 'x', firstName: 'Pat', lastName: 'Manager', role: 'property_manager' },
+    });
+    const conversation = await prisma.chatConversation.create({
+      data: {
+        tenantId: TENANT_ID, externalId: 'web:resume-4', channel: 'web', state: 'handoff',
+        handoffReason: 'explicit_request', claimedByUserId: staffUser.id, claimedAt: new Date(),
+        slots: { create: [{ key: 'transaction_intent', value: 'rent' }] },
+      },
+    });
+
+    const reason = vi.fn(async () => ({
+      content: JSON.stringify({ intent: 'other', confidence: 'high', reply: 'ok', profile: { set: {}, clear: [] } }),
+    }));
+    vi.spyOn(await import('../config/adapters.js'), 'getAdapters').mockReturnValue({
+      glm: { name: 'glm', reason, extractReceipt: vi.fn() },
+      messaging: { web: { channel: 'web', send: vi.fn(async () => ({ messageId: 'm1' })), parseWebhook: vi.fn() } },
+    } as never);
+
+    const result = await resumeBotFromHandoff({ tenantId: TENANT_ID, conversationId: conversation.id, actorUserId: staffUser.id });
+    expect(result).toEqual({ ok: true });
+
+    const row = await prisma.chatConversation.findUniqueOrThrow({ where: { id: conversation.id } });
+    expect(row.state).not.toBe('handoff');
+    expect(row.state).toBe('proposing_tour');
   });
 });
