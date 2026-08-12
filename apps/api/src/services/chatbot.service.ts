@@ -277,7 +277,11 @@ export function buildPostTourContextTurn(
   slots: Record<string, string>,
 ): InterpretedTurn | undefined {
   if (!slots.tour_scheduled_at) return undefined;
-  const normalized = message.toLowerCase();
+  // Mismo fix que detectOptOutPhrase (Fix 8): iOS/Android autocorrect produce
+  // apóstrofos curvos (U+2019) — sin normalizarlos, "can’t"/"won’t" no matchean
+  // el apóstrofo ASCII de los regex de abajo y el mensaje cae en silencio a
+  // buildPostTourAcknowledgement, sin handoffReason ni aviso al staff.
+  const normalized = normalizeSmartQuotes(message).toLowerCase();
   if (/^(?:here|telegram|in this chat|this chat)$/i.test(message.trim())) {
     return {
       reply: "Absolutely — I’ll keep the confirmation and any updates right here in Telegram.",
@@ -3779,7 +3783,7 @@ async function notifyStaffOfHandoff(input: {
     const reasonText = input.reason === 'explicit_request'
       ? 'asked to speak with a person'
       : input.reason === 'follow_up_needed'
-        ? 'needs a follow-up our assistant cannot complete on its own'
+        ? 'reached a point our assistant could not resolve on its own'
         : 'ran into a problem our assistant could not resolve on its own';
     const env = getEnv();
     const link = `${env.WEB_URL}/conversations?conversationId=${input.conversationId}`;

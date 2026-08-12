@@ -556,6 +556,19 @@ describe('chatbot conversation identity', () => {
     expect(rescheduleTurn?.handoffReason).toBe('follow_up_needed');
   });
 
+  it('recognizes a cancellation even with a curly autocorrect apostrophe (same bug class as Fix 8)', () => {
+    // iOS/macOS autocorrect turns "can't" into "can’t" (U+2019, not the ASCII
+    // apostrophe the regex expects) — without normalizing it first, this fell
+    // through silently to buildPostTourAcknowledgement: no handoffReason, no
+    // notification, exactly the failure mode this feature exists to prevent.
+    const cancelTurn = buildPostTourContextTurn('I can’t make it', {
+      tour_scheduled_at: '2026-08-03T21:00:00.000Z',
+    });
+    expect(cancelTurn?.next_state).toBe('handoff');
+    expect(cancelTurn?.handoffReason).toBe('follow_up_needed');
+    expect(cancelTurn?.slots).toEqual({ post_tour_action: 'cancel' });
+  });
+
   it('answers an incidental property question and signals that qualification should resume', () => {
     expect(buildFocusedPropertyAnswer('Does it include parking?', {
       id: 'unit-1', name: 'Apt 305', propertyName: 'Cedar Court', city: 'Vancouver',
