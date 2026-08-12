@@ -14,11 +14,13 @@ import { z } from 'zod';
 import type { ChatChannel } from '@property-manager/adapters';
 import { getAdapters } from '../config/adapters.js';
 import { prisma } from '../config/db.js';
-import { requireAuth, requireUser } from '../auth/context.js';
+import { requireAuth, requireRole, requireUser } from '../auth/context.js';
 import {
   buildStaffOverrideMatchReason,
+  claimConversation,
   getReplyAddressFromConversation,
   handleInboundMessage,
+  resumeBotFromHandoff,
 } from '../services/chatbot.service.js';
 import { createConversationEvent } from '../services/conversation-events.service.js';
 import { createManualShowingFromConversation } from '../services/scheduling.service.js';
@@ -192,10 +194,6 @@ const internalNoteSchema = z.object({
   note: z.string().trim().min(1).max(1000),
 });
 
-const handoffSchema = z.object({
-  reason: z.string().trim().max(500).optional(),
-});
-
 chatRouter.post('/conversations/:id/showing', requireAuth, async (req, res, next) => {
   try {
     const user = requireUser(req);
@@ -279,45 +277,39 @@ chatRouter.post('/conversations/:id/notes', requireAuth, async (req, res, next) 
   }
 });
 
-chatRouter.post('/conversations/:id/handoff', requireAuth, async (req, res, next) => {
+// "Take control" / "Return to bot" (Tarea 7): reemplazan la vieja acción de
+// solo-pausar — ya no existe un "handoff manual" separado de tomar control.
+chatRouter.post('/conversations/:id/claim', requireAuth, requireRole('property_manager', 'broker'), async (req, res, next) => {
   try {
     const user = requireUser(req);
-    const parsed = handoffSchema.safeParse(req.body);
-    if (!parsed.success) {
-      res.status(400).json({ error: 'Invalid handoff reason' });
-      return;
-    }
-
-    const conversation = await prisma.chatConversation.findFirst({
-      where: { id: req.params.id, tenantId: user.tenantId },
-      select: { id: true, leadId: true },
-    });
-    if (!conversation) {
-      res.status(404).json({ error: 'Conversation not found' });
-      return;
-    }
-
-    const event = await createConversationEvent({
+    const result = await claimConversation({
       tenantId: user.tenantId,
-      conversationId: conversation.id,
-      leadId: conversation.leadId,
-      actorUserId: user.userId,
-      type: 'handoff.requested',
-      payload: { reason: parsed.data.reason },
+      conversationId: req.params.id,
+      userId: user.userId,
     });
-
-    await prisma.chatConversation.update({
-      where: { id: conversation.id },
-      data: { state: 'handoff', updatedAt: new Date() },
-    });
-    if (conversation.leadId) {
-      await prisma.lead.update({
-        where: { id: conversation.leadId },
-        data: { operationalStatus: 'needs_handoff' },
-      });
+    if (!result.ok) {
+      res.status(result.status).json({ error: result.error });
+      return;
     }
+    res.status(200).json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
 
-    res.status(201).json({ event });
+chatRouter.post('/conversations/:id/resume', requireAuth, requireRole('property_manager', 'broker'), async (req, res, next) => {
+  try {
+    const user = requireUser(req);
+    const result = await resumeBotFromHandoff({
+      tenantId: user.tenantId,
+      conversationId: req.params.id,
+      actorUserId: user.userId,
+    });
+    if (!result.ok) {
+      res.status(result.status).json({ error: result.error });
+      return;
+    }
+    res.status(200).json({ ok: true });
   } catch (err) {
     next(err);
   }

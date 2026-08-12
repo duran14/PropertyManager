@@ -1,5 +1,5 @@
 ﻿import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { GlmAdapter } from '@property-manager/adapters';
+import type { GlmAdapter, GlmReasoningRequest } from '@property-manager/adapters';
 import {
   buildGlmFallback,
   buildFastQualificationTurn,
@@ -54,6 +54,8 @@ import {
   shouldSkipContextualSlotHeuristics,
   detectOptOutPhrase,
   triggerHandoff,
+  claimConversation,
+  resumeBotFromHandoff,
 } from './chatbot.service.js';
 import type { AvailableUnit, ConversationState, InterpretedTurn } from './chatbot.service.js';
 import type { ConversationTurn } from './rental-conversation.types.js';
@@ -2566,5 +2568,202 @@ describe('triggerHandoff', () => {
     expect(notifiedEmails).toEqual([broker.email, pm.email].sort());
     expect(notifiedEmails).not.toContain(bookkeeper.email);
     expect(notifiedEmails).not.toContain(inactivePm.email);
+  });
+});
+
+describe('claimConversation', () => {
+  const TENANT_ID = 'tenant_test_chatbot_service_claim';
+
+  async function cleanup() {
+    const conversations = await prisma.chatConversation.findMany({
+      where: { tenantId: TENANT_ID },
+      select: { id: true },
+    });
+    const conversationIds = conversations.map((c) => c.id);
+    if (conversationIds.length > 0) {
+      await prisma.chatMessage.deleteMany({ where: { conversationId: { in: conversationIds } } });
+    }
+    await prisma.conversationEvent.deleteMany({ where: { tenantId: TENANT_ID } });
+    await prisma.chatConversation.deleteMany({ where: { tenantId: TENANT_ID } });
+    await prisma.lead.deleteMany({ where: { tenantId: TENANT_ID } });
+    await prisma.user.deleteMany({ where: { tenantId: TENANT_ID } });
+  }
+
+  beforeEach(async () => {
+    await cleanup();
+    await prisma.tenant.upsert({
+      where: { id: TENANT_ID }, update: {}, create: { id: TENANT_ID, name: 'Claim Test', province: 'BC' },
+    });
+  });
+  afterEach(cleanup);
+
+  it('marca la conversación como tomada y crea el evento', async () => {
+    const staffUser = await prisma.user.create({
+      data: {
+        tenantId: TENANT_ID, email: `claim-1-${TENANT_ID}@test.ca`, passwordHash: 'x',
+        firstName: 'Pat', lastName: 'Manager', role: 'property_manager',
+      },
+    });
+    const conversation = await prisma.chatConversation.create({
+      data: { tenantId: TENANT_ID, externalId: 'web:claim-1', channel: 'web', state: 'proposing_tour', handoffReason: 'explicit_request' },
+    });
+
+    const result = await claimConversation({ tenantId: TENANT_ID, conversationId: conversation.id, userId: staffUser.id });
+
+    expect(result).toEqual({ ok: true });
+    const row = await prisma.chatConversation.findUniqueOrThrow({ where: { id: conversation.id } });
+    expect(row.claimedByUserId).toBe(staffUser.id);
+    expect(row.claimedAt).not.toBeNull();
+
+    const events = await prisma.conversationEvent.findMany({ where: { tenantId: TENANT_ID, conversationId: conversation.id, type: 'handoff.claimed' } });
+    expect(events).toHaveLength(1);
+  });
+
+  it('devuelve 409 si ya la tomó alguien más — dos intentos simultáneos dejan exactamente un dueño', async () => {
+    const [staffA, staffB] = await Promise.all([
+      prisma.user.create({ data: { tenantId: TENANT_ID, email: `claim-a-${TENANT_ID}@test.ca`, passwordHash: 'x', firstName: 'A', lastName: 'A', role: 'property_manager' } }),
+      prisma.user.create({ data: { tenantId: TENANT_ID, email: `claim-b-${TENANT_ID}@test.ca`, passwordHash: 'x', firstName: 'B', lastName: 'B', role: 'broker' } }),
+    ]);
+    const conversation = await prisma.chatConversation.create({
+      data: { tenantId: TENANT_ID, externalId: 'web:claim-race', channel: 'web', state: 'proposing_tour', handoffReason: 'explicit_request' },
+    });
+
+    const [resultA, resultB] = await Promise.all([
+      claimConversation({ tenantId: TENANT_ID, conversationId: conversation.id, userId: staffA.id }),
+      claimConversation({ tenantId: TENANT_ID, conversationId: conversation.id, userId: staffB.id }),
+    ]);
+
+    const outcomes = [resultA, resultB];
+    expect(outcomes.filter((o) => o.ok)).toHaveLength(1);
+    expect(outcomes.filter((o) => !o.ok && o.status === 409)).toHaveLength(1);
+
+    const row = await prisma.chatConversation.findUniqueOrThrow({ where: { id: conversation.id } });
+    expect([staffA.id, staffB.id]).toContain(row.claimedByUserId);
+  });
+
+  it('devuelve 404 si la conversación no existe', async () => {
+    const result = await claimConversation({ tenantId: TENANT_ID, conversationId: 'no_existe', userId: 'user_1' });
+    expect(result).toEqual({ ok: false, status: 404, error: 'not_found' });
+  });
+});
+
+describe('resumeBotFromHandoff', () => {
+  const TENANT_ID = 'tenant_test_chatbot_service_resume';
+
+  async function cleanup() {
+    const conversations = await prisma.chatConversation.findMany({
+      where: { tenantId: TENANT_ID },
+      select: { id: true },
+    });
+    const conversationIds = conversations.map((c) => c.id);
+    if (conversationIds.length > 0) {
+      await prisma.chatMessage.deleteMany({ where: { conversationId: { in: conversationIds } } });
+    }
+    await prisma.conversationEvent.deleteMany({ where: { tenantId: TENANT_ID } });
+    await prisma.chatConversation.deleteMany({ where: { tenantId: TENANT_ID } });
+    await prisma.lead.deleteMany({ where: { tenantId: TENANT_ID } });
+    await prisma.user.deleteMany({ where: { tenantId: TENANT_ID } });
+  }
+
+  beforeEach(async () => {
+    await cleanup();
+    await prisma.tenant.upsert({
+      where: { id: TENANT_ID }, update: {}, create: { id: TENANT_ID, name: 'Resume Test', province: 'BC' },
+    });
+  });
+  afterEach(async () => {
+    // El spy sobre getAdapters().messaging apunta al singleton cacheado por
+    // proceso: sin restaurarlo aquí, se quedaría espiando entre pruebas.
+    vi.restoreAllMocks();
+    await cleanup();
+  });
+
+  it('usa el historial completo, incluidos los mensajes de staff, y limpia claim + handoff', async () => {
+    const staffUser = await prisma.user.create({
+      data: { tenantId: TENANT_ID, email: `resume-1-${TENANT_ID}@test.ca`, passwordHash: 'x', firstName: 'Pat', lastName: 'Manager', role: 'property_manager' },
+    });
+    const lead = await prisma.lead.create({
+      data: { tenantId: TENANT_ID, name: 'Ana', phone: '+16045550111', status: 'contacted', source: 'web' },
+    });
+    const conversation = await prisma.chatConversation.create({
+      data: {
+        tenantId: TENANT_ID, externalId: 'web:resume-1', channel: 'web', state: 'proposing_tour',
+        handoffReason: 'explicit_request', handoffNotifiedAt: new Date(),
+        claimedByUserId: staffUser.id, claimedAt: new Date(),
+        leadId: lead.id,
+        slots: { create: [{ key: 'transaction_intent', value: 'rent' }] },
+        messages: {
+          create: [
+            { role: 'user', content: 'I want to talk to someone' },
+            { role: 'staff', content: 'Hi, this is Pat — happy to help. What questions do you have?' },
+          ],
+        },
+      },
+    });
+
+    let capturedPrompt = '';
+    const reason = vi.fn(async (request: GlmReasoningRequest) => {
+      capturedPrompt = request.systemPrompt;
+      return { content: JSON.stringify({ intent: 'other', confidence: 'high', reply: 'Sure, happy to help further.', profile: { set: {}, clear: [] } }) };
+    });
+    vi.spyOn(await import('../config/adapters.js'), 'getAdapters').mockReturnValue({
+      glm: { name: 'glm', reason, extractReceipt: vi.fn() },
+      messaging: { web: { channel: 'web', send: vi.fn(async () => ({ messageId: 'm1' })), parseWebhook: vi.fn() } },
+    } as never);
+
+    const result = await resumeBotFromHandoff({ tenantId: TENANT_ID, conversationId: conversation.id, actorUserId: staffUser.id });
+
+    expect(result).toEqual({ ok: true });
+    expect(capturedPrompt).toContain('happy to help');
+
+    const row = await prisma.chatConversation.findUniqueOrThrow({ where: { id: conversation.id } });
+    expect(row.handoffReason).toBeNull();
+    expect(row.handoffNotifiedAt).toBeNull();
+    expect(row.claimedByUserId).toBeNull();
+    expect(row.claimedAt).toBeNull();
+
+    const messages = await prisma.chatMessage.findMany({ where: { conversationId: conversation.id }, orderBy: { createdAt: 'asc' } });
+    expect(messages).toHaveLength(3);
+    expect(messages.filter((m) => m.role === 'user')).toHaveLength(1);
+
+    const events = await prisma.conversationEvent.findMany({ where: { tenantId: TENANT_ID, conversationId: conversation.id, type: 'handoff.resumed' } });
+    expect(events).toHaveLength(1);
+  });
+
+  it('devuelve 404 si la conversación no existe', async () => {
+    const result = await resumeBotFromHandoff({ tenantId: TENANT_ID, conversationId: 'no_existe', actorUserId: 'user_1' });
+    expect(result).toEqual({ ok: false, status: 404, error: 'not_found' });
+  });
+
+  it('devuelve 409 si nadie ha tomado control', async () => {
+    const conversation = await prisma.chatConversation.create({
+      data: { tenantId: TENANT_ID, externalId: 'web:resume-2', channel: 'web', state: 'proposing_tour' },
+    });
+    const result = await resumeBotFromHandoff({ tenantId: TENANT_ID, conversationId: conversation.id, actorUserId: 'user_1' });
+    expect(result).toEqual({ ok: false, status: 409, error: 'not_claimed' });
+  });
+
+  it('sustituye scheduling por proposing_tour como estado de entrada', async () => {
+    const staffUser = await prisma.user.create({
+      data: { tenantId: TENANT_ID, email: `resume-3-${TENANT_ID}@test.ca`, passwordHash: 'x', firstName: 'Pat', lastName: 'Manager', role: 'property_manager' },
+    });
+    const conversation = await prisma.chatConversation.create({
+      data: {
+        tenantId: TENANT_ID, externalId: 'web:resume-3', channel: 'web', state: 'scheduling',
+        handoffReason: 'provider_failure', claimedByUserId: staffUser.id, claimedAt: new Date(),
+        slots: { create: [{ key: 'transaction_intent', value: 'rent' }] },
+      },
+    });
+
+    const reason = vi.fn(async () => ({
+      content: JSON.stringify({ intent: 'other', confidence: 'high', reply: 'ok', profile: { set: {}, clear: [] } }),
+    }));
+    vi.spyOn(await import('../config/adapters.js'), 'getAdapters').mockReturnValue({
+      glm: { name: 'glm', reason, extractReceipt: vi.fn() },
+      messaging: { web: { channel: 'web', send: vi.fn(async () => ({ messageId: 'm1' })), parseWebhook: vi.fn() } },
+    } as never);
+
+    const result = await resumeBotFromHandoff({ tenantId: TENANT_ID, conversationId: conversation.id, actorUserId: staffUser.id });
+    expect(result).toEqual({ ok: true });
   });
 });

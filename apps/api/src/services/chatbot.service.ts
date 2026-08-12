@@ -3776,3 +3776,154 @@ async function notifyStaffOfHandoff(input: {
     console.error(`[Handoff] No se pudo notificar la conversación ${input.conversationId}:`, error);
   }
 }
+
+/**
+ * "Take control": el único gesto que de verdad apaga al bot para esta
+ * conversación (Tarea 7 — ver el guard en handleInboundMessageUnlocked que
+ * lee `conversation.claimedByUserId`).
+ */
+export async function claimConversation(input: {
+  tenantId: string;
+  conversationId: string;
+  userId: string;
+}): Promise<{ ok: true } | { ok: false; status: 404 | 409; error: string }> {
+  const conversation = await prisma.chatConversation.findFirst({
+    where: { id: input.conversationId, tenantId: input.tenantId },
+    select: { id: true, leadId: true },
+  });
+  if (!conversation) return { ok: false, status: 404, error: 'not_found' };
+
+  // El where: { claimedByUserId: null } es la red de concurrencia: si dos
+  // miembros del staff presionan "Take control" casi al mismo tiempo, esta
+  // actualización condicional garantiza que solo uno tenga éxito, sin
+  // necesitar una unique nueva — el mismo principio de "las condiciones de
+  // la base son la red" aplicado a un UPDATE en vez de un INSERT.
+  const result = await prisma.chatConversation.updateMany({
+    where: { id: input.conversationId, tenantId: input.tenantId, claimedByUserId: null },
+    data: { claimedByUserId: input.userId, claimedAt: new Date() },
+  });
+  if (result.count === 0) return { ok: false, status: 409, error: 'already_claimed' };
+
+  const user = await prisma.user.findUnique({ where: { id: input.userId }, select: { firstName: true, lastName: true } });
+  await createConversationEvent({
+    tenantId: input.tenantId,
+    conversationId: input.conversationId,
+    leadId: conversation.leadId,
+    actorUserId: input.userId,
+    type: 'handoff.claimed',
+    payload: { claimedByName: user ? `${user.firstName} ${user.lastName}` : undefined },
+  });
+
+  return { ok: true };
+}
+
+const RESUME_SYNTHETIC_PROMPT =
+  '[System: a staff member has re-enabled automated assistance for this ' +
+  'conversation. Review the full conversation so far — including any ' +
+  'replies from staff — and continue helping the lead from wherever the ' +
+  'conversation actually stands now, not from where you left off before ' +
+  'the pause.]';
+
+/**
+ * "Return to bot": limpia el claim y el handoff, y le pide al modelo un
+ * turno sintético para que retome la conversación con contexto completo
+ * (incluidos los mensajes de staff durante la pausa) en vez de reanudar a
+ * ciegas desde el último turno del bot.
+ */
+export async function resumeBotFromHandoff(input: {
+  tenantId: string;
+  conversationId: string;
+  actorUserId: string;
+}): Promise<{ ok: true } | { ok: false; status: 404 | 409; error: string }> {
+  const conversation = await prisma.chatConversation.findFirst({
+    where: { id: input.conversationId, tenantId: input.tenantId },
+    include: { messages: { orderBy: { createdAt: 'desc' }, take: 20 }, slots: true },
+  });
+  if (!conversation) return { ok: false, status: 404, error: 'not_found' };
+  if (!conversation.claimedByUserId) return { ok: false, status: 409, error: 'not_claimed' };
+
+  const existingSlots: Record<string, string> = {};
+  for (const slot of conversation.slots) existingSlots[slot.key] = slot.value;
+
+  const isOwnershipConversation =
+    existingSlots.transaction_intent === 'buy' || existingSlots.transaction_intent === 'sell';
+  const history = prepareConversationHistory(conversation.messages, false);
+  const { getAdapters } = await import('../config/adapters.js');
+  const adapters = getAdapters();
+  const tenantName = await getTenantName(input.tenantId);
+
+  // 'scheduling' depende de que input.body sea un número de opción elegido
+  // por el lead — no aplica al prompt sintético. proposing_tour es neutral
+  // y ya rutea por el modelo para cualquier transaction_intent conocido.
+  // Ya no se lee handoffPreState (retirado en la Tarea 6): como el bot
+  // nunca dejó de correr mientras nadie tomaba control, conversation.state
+  // sigue siendo el estado real y vivo de la conversación.
+  const currentDbState = conversation.state as ConversationState;
+  const landingState: ConversationState = currentDbState === 'scheduling' ? 'proposing_tour' : currentDbState;
+
+  const turn = isOwnershipConversation
+    ? await callOwnershipGlm(adapters.glm, {
+      currentState: landingState,
+      tenantId: input.tenantId,
+      userMessage: RESUME_SYNTHETIC_PROMPT,
+      history,
+      existingSlots,
+    })
+    : await callGlm(adapters.glm, {
+      currentState: landingState,
+      tenantId: input.tenantId,
+      userMessage: RESUME_SYNTHETIC_PROMPT,
+      history,
+      existingSlots,
+      availableUnits: await getAvailableUnits(input.tenantId, existingSlots),
+      providerOutageFallback: buildGlmFallback(landingState, tenantName, RESUME_SYNTHETIC_PROMPT, existingSlots),
+    });
+
+  const newState = turn.next_state ?? landingState;
+
+  await prisma.chatConversation.update({
+    where: { id: conversation.id },
+    data: {
+      state: newState,
+      handoffReason: null,
+      handoffNotifiedAt: null,
+      claimedByUserId: null,
+      claimedAt: null,
+    },
+  });
+
+  const assistantMessage = await prisma.chatMessage.create({
+    data: { conversationId: conversation.id, role: 'assistant', content: turn.reply, deliveryStatus: 'pending' },
+  });
+
+  const to = getReplyAddressFromConversation(conversation.externalId);
+  const messagingAdapter = adapters.messaging[conversation.channel as ChatChannel];
+  try {
+    const deliveredMessageIds = await sendHumanLike(to, turn.reply, conversation.channel, messagingAdapter);
+    await prisma.chatMessage.update({
+      where: { id: assistantMessage.id },
+      data: { deliveryStatus: 'sent', deliveryError: null, deliveryNextAttemptAt: null, deliveryAttempts: 1, providerMessageIds: deliveredMessageIds },
+    });
+  } catch (error) {
+    await prisma.chatMessage.update({
+      where: { id: assistantMessage.id },
+      data: {
+        deliveryStatus: 'failed',
+        deliveryError: error instanceof Error ? error.message.slice(0, 1000) : 'Unknown delivery error',
+        deliveryAttempts: 1,
+        deliveryNextAttemptAt: nextDeliveryRetryAt(1),
+      },
+    });
+  }
+
+  await createConversationEvent({
+    tenantId: input.tenantId,
+    conversationId: conversation.id,
+    leadId: conversation.leadId,
+    actorUserId: input.actorUserId,
+    type: 'handoff.resumed',
+    payload: {},
+  });
+
+  return { ok: true };
+}
