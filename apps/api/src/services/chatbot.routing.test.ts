@@ -3,6 +3,7 @@ import {
   WebChatMockAdapter,
   type GlmAdapter,
   type GlmReasoningRequest,
+  type MessagingAdapter,
 } from '@property-manager/adapters';
 import { prisma } from '../config/db.js';
 import { handleInboundMessage } from './chatbot.service.js';
@@ -398,5 +399,40 @@ describe('chatbot routing integration (handleInboundMessage)', () => {
     );
 
     expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('no responde ni llama a GLM cuando la conversación está en handoff', async () => {
+    // Fase 1.2: `handoff` ya se usa en tres lugares (booking exitoso, sin
+    // calendario conectado, pausa manual del staff) pero nada verificaba
+    // ese estado antes de este guard — el bot seguía auto-respondiendo.
+    const conversation = await prisma.chatConversation.create({
+      data: {
+        tenantId: TENANT_ID,
+        externalId: 'web:handoff-guard-1',
+        channel: 'web',
+        state: 'handoff',
+        handoffReason: 'manual',
+      },
+    });
+
+    const reason = vi.fn();
+    const glm = { name: 'glm', reason, extractReceipt: vi.fn() } as unknown as GlmAdapter;
+    const send = vi.fn(async () => ({ messageId: 'm1' }));
+    const messagingSpy = { channel: 'web', send, parseWebhook: vi.fn() } as unknown as MessagingAdapter;
+
+    const reply = await handleInboundMessage(
+      { tenantId: TENANT_ID, from: 'web:handoff-guard-1', body: 'hello?', channel: 'web' },
+      { glm, messaging: messagingSpy },
+    );
+
+    expect(reason).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+    expect(reply.replyText).toBe('');
+    expect(reply.newState).toBe('handoff');
+
+    const messages = await prisma.chatMessage.findMany({ where: { conversationId: conversation.id } });
+    expect(messages).toHaveLength(1);
+    expect(messages[0]!.role).toBe('user');
+    expect(messages[0]!.content).toBe('hello?');
   });
 });

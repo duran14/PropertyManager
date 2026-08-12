@@ -811,6 +811,17 @@ async function handleInboundMessageUnlocked(
     });
   }
 
+  // Fase 1.2: si la conversación está pausada para un humano, el bot no
+  // responde. El mensaje del lead ya quedó guardado arriba — el staff lo
+  // ve como cualquier otro — pero no se llama a GLM ni al motor
+  // determinístico, y no se envía nada por el canal del lead. Se usa
+  // `conversation.state` (el valor recién leído del `upsert` de arriba),
+  // no una variable derivada, porque este guard debe correr antes de
+  // cualquier lógica de /start o de la máquina de estados normal.
+  if (conversation.state === 'handoff') {
+    return { replyText: '', newState: 'handoff', leadCreated: false, handoff: true };
+  }
+
   // /start (Telegram) significa "empezar de cero": resetear estado y slots
   // para que el bot vuelva a saludar y calificar desde el principio, sin
   // heredar datos de una conversación anterior del mismo chat.
