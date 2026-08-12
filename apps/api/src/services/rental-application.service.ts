@@ -16,6 +16,7 @@ import {
   createLocalDocumentStorage,
   decodeBase64Payload,
 } from './document-storage.service.js';
+import { notifyStaffTargets, resolveStaffNotifyTargets } from './staff-notify.service.js';
 
 const DAY = 24 * 60 * 60 * 1000;
 const TOKEN_TTL_MS = 14 * DAY;
@@ -53,39 +54,6 @@ export async function getPublicRentalApplication(token: string) {
       tenant: { select: { name: true } },
     },
   });
-}
-
-export interface NotifiableStaff {
-  id: string;
-  email: string;
-  notificationChannel: string | null;
-  notificationAddress: string | null;
-}
-
-/**
- * A quién avisarle que llegó una aplicación, en orden de cercanía al
- * showing: el broker que lo atendió, si no el dueño del lead, y si no
- * todos los property managers del tenant. Un id que ya no corresponde a
- * ningún usuario (staff dado de baja) cae al siguiente nivel en vez de
- * dejar la notificación sin destinatario.
- */
-export function resolveApplicationNotifyTargets(input: {
-  brokerUserId: string | null;
-  assignedUserId: string | null;
-  staff: NotifiableStaff[];
-  propertyManagerIds: string[];
-}): NotifiableStaff[] {
-  const byId = new Map(input.staff.map((member) => [member.id, member]));
-
-  const broker = input.brokerUserId ? byId.get(input.brokerUserId) : undefined;
-  if (broker) return [broker];
-
-  const assignee = input.assignedUserId ? byId.get(input.assignedUserId) : undefined;
-  if (assignee) return [assignee];
-
-  return input.propertyManagerIds
-    .map((id) => byId.get(id))
-    .filter((member): member is NotifiableStaff => member !== undefined);
 }
 
 export type CompleteShowingResult =
@@ -288,7 +256,7 @@ async function notifyStaffOfApplication(
       where: { tenantId, isActive: true },
       select: { id: true, email: true, role: true, notificationChannel: true, notificationAddress: true },
     });
-    const targets = resolveApplicationNotifyTargets({
+    const targets = resolveStaffNotifyTargets({
       brokerUserId: application.showing.brokerUserId,
       assignedUserId: application.lead.assignedUserId,
       staff: staff.map((member) => ({
@@ -300,40 +268,12 @@ async function notifyStaffOfApplication(
       propertyManagerIds: staff.filter((member) => member.role === 'property_manager').map((member) => member.id),
     });
 
-    const body = `New rental application received from ${application.applicantFullName ?? 'a prospect'}.`;
-
-    for (const target of targets) {
-      // Email y chat son independientes: que falle uno no debe impedir el otro.
-      try {
-        await deps.messaging.email.send({
-          to: target.email,
-          body,
-          channel: 'email',
-          subject: 'New rental application',
-        });
-      } catch (error) {
-        console.error(`[RentalApplication] Email a ${target.id} falló:`, error);
-      }
-
-      // Se excluye 'web' porque WebChatMockAdapter es un mock permanente que
-      // reporta éxito sin entregar nada (el mismo bug que se corrigió en
-      // Fase 1B, aquí en el otro extremo del flujo), y 'email' porque ya se
-      // envía arriba por ese canal — mandarlo también por "chat" duplicaría
-      // el correo.
-      if (
-        target.notificationChannel &&
-        target.notificationAddress &&
-        target.notificationChannel !== 'web' &&
-        target.notificationChannel !== 'email'
-      ) {
-        try {
-          const channel = target.notificationChannel as ChatChannel;
-          await deps.messaging[channel].send({ to: target.notificationAddress, body, channel });
-        } catch (error) {
-          console.error(`[RentalApplication] Chat a ${target.id} falló:`, error);
-        }
-      }
-    }
+    await notifyStaffTargets({
+      targets,
+      subject: 'New rental application',
+      body: `New rental application received from ${application.applicantFullName ?? 'a prospect'}.`,
+      messaging: deps.messaging,
+    });
   } catch (error) {
     console.error(`[RentalApplication] No se pudo notificar la aplicación ${applicationId}:`, error);
   }
