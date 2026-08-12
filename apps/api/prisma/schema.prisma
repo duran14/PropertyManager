@@ -590,7 +590,7 @@ model ChatConversation {
   leadId     String?
   lead       Lead?               @relation(fields: [leadId], references: [id])
   // Fase 1.2: por qué está pausada la conversación. Null cuando no lo está.
-  handoffReason      String?   // explicit_request | provider_failure | manual
+  handoffReason      String?   // explicit_request | provider_failure | manual | follow_up_needed
   handoffNotifiedAt  DateTime?
   // Quién tomó control de la conversación. Nulo mientras nadie lo ha
   // hecho — el bot sigue respondiendo con normalidad; no se apaga solo

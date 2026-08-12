@@ -3690,11 +3690,12 @@ export async function triggerHandoff(input: {
   preState: ConversationState;
 }): Promise<{ acknowledgement: string }> {
   // Se lee el estado actual de handoffNotifiedAt ANTES de tocar la fila:
-  // en producción el guard de pausa (Tarea 3) impide que este disparador se
-  // vuelva a invocar mientras la conversación siga en 'handoff', pero un
-  // llamador directo (reintento, doble webhook) sí podría invocar esta
-  // función dos veces dentro del mismo episodio — sin esta lectura previa
-  // se le mandaría al staff dos avisos idénticos por el mismo evento.
+  // el bot ya no se calla solo por handoffReason, así que este disparador
+  // SÍ puede invocarse varias veces en la misma conversación antes de que
+  // alguien la reclame (Tarea 7) — p. ej. el lead vuelve a pedir un
+  // humano en un turno posterior mientras nadie ha tomado control todavía.
+  // Esta guarda evita reenviar el mismo aviso al staff en cada turno
+  // mientras la escalación original sigue sin resolverse.
   const existing = await prisma.chatConversation.findUnique({
     where: { id: input.conversation.id },
     select: { handoffNotifiedAt: true },

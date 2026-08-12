@@ -549,6 +549,10 @@ describe('chatbot routing integration (handleInboundMessage)', () => {
 
     expect(reason).not.toHaveBeenCalled();
     expect(reply.replyText).toBe('');
+    // El guard usa `conversation.state` real, no un 'handoff' hardcodeado:
+    // esta conversación nunca llegó a 'handoff', solo fue reclamada desde
+    // 'proposing_tour'.
+    expect(reply.newState).toBe('proposing_tour');
   });
 
   it('un intent handoff explícito pausa el bot y notifica al staff', async () => {

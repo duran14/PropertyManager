@@ -2501,4 +2501,70 @@ describe('triggerHandoff', () => {
     });
     expect(events).toHaveLength(2);
   });
+
+  it('transmite a todo el staff activo (PM + broker), no a la cascada vieja del dueño del lead', async () => {
+    // Este roster está diseñado para que la cascada VIEJA
+    // (resolveStaffNotifyTargets: broker fijo -> dueño del lead -> todos los
+    // PM) y la transmisión NUEVA (todo activo con rol property_manager o
+    // broker) produzcan resultados DISTINTOS — a diferencia de los otros
+    // tres tests de este describe, que solo siembran un PM y por eso no
+    // distinguen entre ambos mecanismos.
+    await prisma.tenant.upsert({
+      where: { id: TENANT_ID }, update: {}, create: { id: TENANT_ID, name: 'Handoff Test', province: 'BC' },
+    });
+    const pm = await prisma.user.create({
+      data: {
+        tenantId: TENANT_ID, email: `pm-broadcast-${TENANT_ID}@test.ca`, passwordHash: 'x',
+        firstName: 'Pat', lastName: 'Manager', role: 'property_manager',
+      },
+    });
+    const broker = await prisma.user.create({
+      data: {
+        tenantId: TENANT_ID, email: `broker-broadcast-${TENANT_ID}@test.ca`, passwordHash: 'x',
+        firstName: 'Bea', lastName: 'Broker', role: 'broker',
+      },
+    });
+    // No debe notificarse: rol fuera de property_manager/broker.
+    const bookkeeper = await prisma.user.create({
+      data: {
+        tenantId: TENANT_ID, email: `bookkeeper-broadcast-${TENANT_ID}@test.ca`, passwordHash: 'x',
+        firstName: 'Bob', lastName: 'Books', role: 'bookkeeper',
+      },
+    });
+    // No debe notificarse: isActive false.
+    const inactivePm = await prisma.user.create({
+      data: {
+        tenantId: TENANT_ID, email: `inactive-pm-broadcast-${TENANT_ID}@test.ca`, passwordHash: 'x',
+        firstName: 'Ivy', lastName: 'Idle', role: 'property_manager', isActive: false,
+      },
+    });
+    // El lead está asignado al bookkeeper: bajo la cascada vieja, el "dueño
+    // del lead" ganaba sobre cualquier otro criterio (sin filtrar por rol) y
+    // se notificaba SOLO a él. La transmisión nueva ignora assignedUserId
+    // por completo.
+    const lead = await prisma.lead.create({
+      data: {
+        tenantId: TENANT_ID, name: 'Ana', phone: '+16045550199', status: 'contacted', source: 'web',
+        assignedUserId: bookkeeper.id,
+      },
+    });
+    const conversation = await prisma.chatConversation.create({
+      data: { tenantId: TENANT_ID, externalId: 'web:trigger-broadcast', channel: 'web', state: 'proposing_tour', leadId: lead.id },
+    });
+
+    const { getAdapters } = await import('../config/adapters.js');
+    const emailSpy = vi.spyOn(getAdapters().messaging.email, 'send');
+
+    await triggerHandoff({
+      tenantId: TENANT_ID,
+      conversation: { id: conversation.id, leadId: lead.id },
+      reason: 'explicit_request',
+      preState: 'proposing_tour',
+    });
+
+    const notifiedEmails = emailSpy.mock.calls.map(([call]) => (call as { to: string }).to).sort();
+    expect(notifiedEmails).toEqual([broker.email, pm.email].sort());
+    expect(notifiedEmails).not.toContain(bookkeeper.email);
+    expect(notifiedEmails).not.toContain(inactivePm.email);
+  });
 });
