@@ -148,6 +148,12 @@ chatRouter.get('/conversations/:id', requireAuth, async (req, res, next) => {
           take: 20,
           include: { actorUser: { select: { firstName: true, lastName: true } } },
         },
+        // Tarea 9: la franja de "alguien está manejando esto" en el panel
+        // muestra el nombre, no el id crudo — sin este include el frontend
+        // solo tendría claimedByUserId (los demás campos de handoff ya
+        // vienen por default: son columnas escalares y este `include` no
+        // trae un `select` que las recorte).
+        claimedByUser: { select: { firstName: true, lastName: true } },
       },
     });
     if (!conversation) {

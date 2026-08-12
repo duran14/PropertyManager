@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   buildConversationActivity,
@@ -16,6 +17,7 @@ import {
   stageSuggestedReply,
 } from '@property-manager/core/showing-messages';
 import { apiFetch, ApiError } from '../lib/apiClient';
+import { useAuth } from '../auth/AuthContext';
 import { Icon } from '../components/Icon';
 import type { LeadStatus } from '../lib/types';
 
@@ -50,6 +52,12 @@ interface Conversation {
   showings?: ShowingSummary[];
   events?: ConversationEventSummary[];
   updatedAt: string;
+  // Fase 1.2: hand-off humano — el bot no se apaga solo por handoffReason,
+  // sigue respondiendo hasta que claimedByUserId queda puesto (Tareas 6-9).
+  handoffReason?: string | null;
+  handoffNotifiedAt?: string | null;
+  claimedByUserId?: string | null;
+  claimedByUser?: { firstName: string; lastName: string } | null;
 }
 
 interface ConversationEventSummary {
@@ -219,6 +227,8 @@ function canRescheduleShowing(status: ShowingSummary['status']): boolean {
 
 export function ConversationsPage() {
   const queryClient = useQueryClient();
+  const { user } = useAuth();
+  const [searchParams] = useSearchParams();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [reply, setReply] = useState('');
   const [pendingSuggestedReply, setPendingSuggestedReply] = useState<string | null>(null);
@@ -226,7 +236,21 @@ export function ConversationsPage() {
   const [showingDuration, setShowingDuration] = useState(30);
   const [activityCategory, setActivityCategory] = useState<ConversationActivityCategory>('all');
   const [internalNote, setInternalNote] = useState('');
-  const [handoffReason, setHandoffReason] = useState('');
+
+  // Deep link desde la notificación de handoff (ver notifyStaffOfHandoff en
+  // chatbot.service.ts, que arma `/conversations?conversationId=...`): al
+  // montar, si el link trae una conversación, seleccionarla de una vez.
+  useEffect(() => {
+    const linkedId = searchParams.get('conversationId');
+    if (linkedId) {
+      setSelectedId(linkedId);
+    }
+    // Solo al montar — no se debe re-seleccionar si el staff navega a otra
+    // conversación después y el parámetro sigue en la URL.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const canManageHandoff = user?.role === 'property_manager' || user?.role === 'broker';
 
   const { data, isLoading } = useQuery<{ conversations: Conversation[] }>({
     queryKey: ['conversations'],
@@ -376,18 +400,23 @@ export function ConversationsPage() {
     },
   });
 
-  const handoffMutation = useMutation({
-    mutationFn: ({ id, reason }: { id: string; reason?: string }) =>
-      apiFetch(`/chat/conversations/${id}/handoff`, {
-        method: 'POST',
-        body: JSON.stringify({ reason }),
-      }),
+  // "Take control" / "Return to bot" (Tarea 7): la vieja ruta de solo-pausar
+  // ya no existe — ver nota en Step 3 del plan de la Tarea 9.
+  const claimMutation = useMutation({
+    mutationFn: (id: string) => apiFetch(`/chat/conversations/${id}/claim`, { method: 'POST' }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['conversation', selectedId] });
       queryClient.invalidateQueries({ queryKey: ['conversations'] });
       queryClient.invalidateQueries({ queryKey: ['leads'] });
-      setHandoffReason('');
-      setActivityCategory('staff');
+    },
+  });
+
+  const resumeMutation = useMutation({
+    mutationFn: (id: string) => apiFetch(`/chat/conversations/${id}/resume`, { method: 'POST' }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['conversation', selectedId] });
+      queryClient.invalidateQueries({ queryKey: ['conversations'] });
+      queryClient.invalidateQueries({ queryKey: ['leads'] });
     },
   });
 
@@ -600,6 +629,79 @@ export function ConversationsPage() {
                 </div>
               </div>
 
+              {selected.handoffReason && (
+                // Franja de tres estados (Tarea 9): sin handoffReason no se
+                // renderiza nada (caso ya cubierto arriba por el `&&`); acá
+                // solo quedan los otros dos — esperando que alguien tome
+                // control, o ya tomada por alguien.
+                <div
+                  role="alert"
+                  className={`border-b px-4 py-3 text-sm ${
+                    selected.claimedByUserId
+                      ? 'border-blue-100 bg-blue-50 text-blue-900'
+                      : 'border-amber-100 bg-amber-50 text-amber-900'
+                  }`}
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span>
+                      {selected.claimedByUserId
+                        ? `👤 ${
+                            selected.claimedByUser
+                              ? `${selected.claimedByUser.firstName} ${selected.claimedByUser.lastName}`
+                              : selected.claimedByUserId
+                          } is handling this conversation.`
+                        : '🔔 Needs a human — the bot is still responding while it waits.'}
+                    </span>
+                    {selected.claimedByUserId ? (
+                      <button
+                        type="button"
+                        onClick={() => resumeMutation.mutate(selected.id)}
+                        disabled={!canManageHandoff || resumeMutation.isPending}
+                        title={
+                          canManageHandoff
+                            ? undefined
+                            : 'Only property managers or brokers can return control to the bot.'
+                        }
+                        className="inline-flex items-center gap-1 rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                      >
+                        Return to bot
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => claimMutation.mutate(selected.id)}
+                        disabled={!canManageHandoff || claimMutation.isPending}
+                        title={
+                          canManageHandoff
+                            ? undefined
+                            : 'Only property managers or brokers can take control.'
+                        }
+                        className="inline-flex items-center gap-1 rounded-md bg-amber-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-700 disabled:opacity-50"
+                      >
+                        <Icon name="hitl" size={14} />
+                        Take control
+                      </button>
+                    )}
+                  </div>
+                  {claimMutation.isError && (
+                    <p className="mt-2 text-xs text-red-600">
+                      {claimMutation.error instanceof ApiError &&
+                      claimMutation.error.message === 'already_claimed'
+                        ? 'Someone else already took control of this conversation.'
+                        : 'Could not take control. Please try again.'}
+                    </p>
+                  )}
+                  {resumeMutation.isError && (
+                    <p className="mt-2 text-xs text-red-600">
+                      {resumeMutation.error instanceof ApiError &&
+                      resumeMutation.error.message === 'not_claimed'
+                        ? 'Nobody had taken control of this conversation.'
+                        : 'Could not return control to the bot. Please try again.'}
+                    </p>
+                  )}
+                </div>
+              )}
+
               <div className="border-b border-slate-100 bg-slate-50 px-4 py-3">
                 <div className="text-[11px] font-medium uppercase text-slate-400">
                   Conversation timeline
@@ -797,65 +899,33 @@ export function ConversationsPage() {
               )}
 
               <div className="border-b border-slate-100 bg-white px-4 py-3">
-                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                  <div>
-                    <label
-                      htmlFor="internal-note"
-                      className="text-[11px] font-medium uppercase text-slate-400"
-                    >
-                      Internal note
-                    </label>
-                    <textarea
-                      id="internal-note"
-                      value={internalNote}
-                      onChange={(event) => setInternalNote(event.target.value)}
-                      rows={3}
-                      placeholder="Add staff-only context..."
-                      className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-violet-500"
-                    />
-                    <button
-                      type="button"
-                      onClick={() =>
-                        internalNote.trim() &&
-                        addNoteMutation.mutate({ id: selected.id, note: internalNote.trim() })
-                      }
-                      disabled={!internalNote.trim() || addNoteMutation.isPending}
-                      className="mt-2 inline-flex items-center gap-1 rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
-                    >
-                      <Icon name="document" size={14} />
-                      Add note
-                    </button>
-                  </div>
-                  <div>
-                    <label
-                      htmlFor="handoff-reason"
-                      className="text-[11px] font-medium uppercase text-slate-400"
-                    >
-                      Human handoff
-                    </label>
-                    <textarea
-                      id="handoff-reason"
-                      value={handoffReason}
-                      onChange={(event) => setHandoffReason(event.target.value)}
-                      rows={3}
-                      placeholder="Reason for staff follow-up..."
-                      className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-violet-500"
-                    />
-                    <button
-                      type="button"
-                      onClick={() =>
-                        handoffMutation.mutate({
-                          id: selected.id,
-                          reason: handoffReason.trim() || undefined,
-                        })
-                      }
-                      disabled={handoffMutation.isPending}
-                      className="mt-2 inline-flex items-center gap-1 rounded-md bg-amber-600 px-3 py-2 text-sm font-medium text-white hover:bg-amber-700 disabled:opacity-50"
-                    >
-                      <Icon name="hitl" size={14} />
-                      Request handoff
-                    </button>
-                  </div>
+                <div className="max-w-md">
+                  <label
+                    htmlFor="internal-note"
+                    className="text-[11px] font-medium uppercase text-slate-400"
+                  >
+                    Internal note
+                  </label>
+                  <textarea
+                    id="internal-note"
+                    value={internalNote}
+                    onChange={(event) => setInternalNote(event.target.value)}
+                    rows={3}
+                    placeholder="Add staff-only context..."
+                    className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-violet-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={() =>
+                      internalNote.trim() &&
+                      addNoteMutation.mutate({ id: selected.id, note: internalNote.trim() })
+                    }
+                    disabled={!internalNote.trim() || addNoteMutation.isPending}
+                    className="mt-2 inline-flex items-center gap-1 rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
+                  >
+                    <Icon name="document" size={14} />
+                    Add note
+                  </button>
                 </div>
               </div>
 

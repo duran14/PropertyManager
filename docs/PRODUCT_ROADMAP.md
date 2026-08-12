@@ -60,13 +60,20 @@
   - Ingesta de mensajes entrantes (`page_messaging`) y vinculación con la entidad `Lead`.
   - Procesar respuestas mediante el motor de IA con contexto de la propiedad asociada al anuncio.
 
-### 1.2 Hand-off de IA a Humano
+### 1.2 Hand-off de IA a Humano ✅ Entregado
 
-- **Trigger:** cuando el intent del usuario sea `REQUEST_HUMAN` o la confianza del modelo sea baja.
+- **Trigger:** el intent explícito del usuario (`explicit_request`), un punto que el modelo no pudo resolver solo (`follow_up_needed`), o un fallo del proveedor de IA (`provider_failure`, red de seguridad).
 - **Acción:**
-  - Cambiar el estado del chat en DB a `human_takeover: true`.
-  - Pausar respuestas automáticas del bot.
-  - Disparar una notificación instantánea al manager (Telegram Bot Webhook / Push / WhatsApp API) con el enlace directo al chat.
+  - Marca `handoffReason` / `handoffNotifiedAt` en `ChatConversation` — a diferencia del diseño original de esta sección, el bot **no se apaga** solo por eso: sigue respondiendo con normalidad hasta que un miembro del staff toma control explícitamente (ver más abajo). El diseño original se corrigió hacia adelante, no se revirtió.
+  - Notifica una vez a todo el staff con rol `property_manager`/`broker` (mismo canal que el resto del asistente), con un enlace directo a la conversación (`/conversations?conversationId=...`).
+  - El panel de staff (`ConversationsPage`) muestra una franja de tres estados — sin hand-off / esperando que alguien tome control / ya tomada por alguien — con botones explícitos **"Take control"** / **"Return to bot"**, restringidos a `property_manager`/`broker`.
+
+> Quedó fuera de esta entrega: confianza baja del modelo como disparador de
+> hand-off (hoy solo dispara el intent explícito, un punto sin resolver, o
+> el fallo del proveedor — nunca un score de confianza); y re-notificar al
+> staff si llegan mensajes nuevos mientras la conversación sigue sin que
+> nadie tome control (el aviso se manda una sola vez, al momento del
+> hand-off inicial, para no saturar al staff con la misma escalación).
 
 ### 1.3 Asignación de Showings y Sync de Calendario ✅ Entregado
 
