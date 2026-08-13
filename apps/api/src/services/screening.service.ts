@@ -31,6 +31,35 @@ const COMPLETED_AT_FIELD: Record<ScreeningCheckKind, 'creditCheckCompletedAt' | 
 };
 
 /**
+ * Estados desde los que un checkeo TODAVÍA puede recibir un resultado
+ * terminal. Sirve de guard en `persistTerminalResult`: una vez que el
+ * checkeo llegó a 'passed'/'flagged'/'failed', ninguna cadena de jobs
+ * rezagada puede pisarlo (ver más abajo).
+ */
+const OPEN_STATUSES = ['requested', 'pending'] as const;
+
+/**
+ * El adapter de screening real (Playwright contra FrontLobby/Sterling) aún
+ * no existe: `createAdapters` construye SIEMPRE `ScreeningMockAdapter`. Ese
+ * mock devuelve veredictos con pinta de reales ("Score 740, no
+ * collections"), y si esto se despliega tal cual, un manager podría arrendar
+ * creyendo que un dato inventado es un buró de crédito de verdad.
+ *
+ * Por eso todo resultado COMPLETADO (passed/flagged) producido por el mock
+ * se marca con este prefijo, tanto en el summary que se guarda como en el
+ * aviso al staff. El status del enum NO cambia — lo que cambia es que el
+ * texto ya no se puede confundir con un resultado real. Un 'failed' no se
+ * marca: ahí no hay ningún veredicto fabricado que pueda engañar a nadie,
+ * solo el motivo por el que no se pudo completar.
+ */
+const SIMULATED_PREFIX = '[SIMULATED] ';
+
+async function isSimulatedScreening(): Promise<boolean> {
+  const { getAdapters } = await import('../config/adapters.js');
+  return getAdapters().screening.name === 'screening_mock';
+}
+
+/**
  * Al enviarse la aplicación, dispara ambos checkeos si (y solo si) el
  * prospecto dio los dos consentimientos requeridos. Sin consentimiento no
  * hay nada que hacer — no es un error, es el caso normal cuando el
@@ -176,6 +205,45 @@ export async function markScreeningTimedOut(
   });
 }
 
+/**
+ * Simétrica de `markScreeningTimedOut`, pero para la etapa de SOLICITUD:
+ * `screeningRequestQueue` agotó sus 3 intentos sin lograr dejar el checkeo
+ * encaminado (el adapter reventó en los tres, o el enqueue del sondeo que
+ * viene después falló siempre). Sin esto, el checkeo se queda en
+ * 'requested'/'pending' para siempre y nadie se entera — el mismo
+ * silent-failure que el sondeo agotado ya evita.
+ *
+ * El motivo es distinto y honesto: aquí el resultado no "no llegó", es que
+ * nunca se llegó a pedir. Reutiliza `persistTerminalResult` — el único
+ * punto de escritura de resultado terminal — igual que el timeout de sondeo.
+ */
+export async function markScreeningRequestFailed(
+  applicationId: string,
+  tenantId: string,
+  kind: ScreeningCheckKind,
+): Promise<void> {
+  await persistTerminalResult(applicationId, tenantId, kind, {
+    status: 'failed',
+    reason: 'Could not submit the screening request after multiple attempts',
+  });
+}
+
+/**
+ * ÚNICO punto de escritura de un resultado terminal de screening (real, por
+ * timeout, o por agotamiento de reintentos). Dos guards en el `where` de
+ * ambas ramas, por eso `updateMany` y no `update`:
+ *
+ *  - `tenantId`: aislamiento de tenant en la ESCRITURA, igual que ya lo
+ *    tienen las lecturas de este archivo. `update` por `id` a secas escribe
+ *    en la fila sin importar de quién sea.
+ *  - estado todavía abierto ('requested'/'pending'): si dos cadenas de
+ *    jobs llegan a coexistir para el mismo `kind` (la rama de idempotencia
+ *    de `runScreeningRequest` reencola el sondeo en cada reintento, y un job
+ *    "stalled" puede revivir), el cierre tardío de una cadena vieja pisaría
+ *    el veredicto real que ya persistió la otra — y encima notificaría al
+ *    staff lo contrario de lo que pasó. Con el guard, la escritura tardía
+ *    afecta 0 filas y no se notifica nada.
+ */
 async function persistTerminalResult(
   applicationId: string,
   tenantId: string,
@@ -187,14 +255,18 @@ async function persistTerminalResult(
     // Un fallo del adapter (login fallido, timeout, portal caído) SIEMPRE se
     // traduce en 'failed' con aviso al staff, nunca en un resultado
     // inventado ni en silencio (no-negociable del proyecto).
-    await prisma.rentalApplication.update({
-      where: { id: applicationId },
+    const { count } = await prisma.rentalApplication.updateMany({
+      where: { id: applicationId, tenantId, [STATUS_FIELD[kind]]: { in: OPEN_STATUSES } },
       data: {
         [STATUS_FIELD[kind]]: 'failed',
         [SUMMARY_FIELD[kind]]: result.reason,
         [COMPLETED_AT_FIELD[kind]]: new Date(),
       },
     });
+    if (count === 0) {
+      console.warn(`[Screening] Resultado tardío ignorado (${kind} de ${applicationId} ya estaba cerrado)`);
+      return;
+    }
     await notifyScreeningResult(applicationId, tenantId, kind, 'failed');
     return;
   }
@@ -212,15 +284,23 @@ async function persistTerminalResult(
     contentType: result.reportMimeType,
   });
 
-  await prisma.rentalApplication.update({
-    where: { id: applicationId },
+  const summary = (await isSimulatedScreening())
+    ? `${SIMULATED_PREFIX}${result.summary}`
+    : result.summary;
+
+  const { count } = await prisma.rentalApplication.updateMany({
+    where: { id: applicationId, tenantId, [STATUS_FIELD[kind]]: { in: OPEN_STATUSES } },
     data: {
       [STATUS_FIELD[kind]]: result.verdict,
-      [SUMMARY_FIELD[kind]]: result.summary,
+      [SUMMARY_FIELD[kind]]: summary,
       [REPORT_KEY_FIELD[kind]]: stored.storageKey,
       [COMPLETED_AT_FIELD[kind]]: new Date(),
     },
   });
+  if (count === 0) {
+    console.warn(`[Screening] Veredicto tardío ignorado (${kind} de ${applicationId} ya estaba cerrado)`);
+    return;
+  }
   await notifyScreeningResult(applicationId, tenantId, kind, result.verdict);
 }
 
@@ -235,8 +315,8 @@ async function notifyScreeningResult(
   outcome: 'passed' | 'flagged' | 'failed',
 ): Promise<void> {
   try {
-    const application = await prisma.rentalApplication.findUniqueOrThrow({
-      where: { id: applicationId },
+    const application = await prisma.rentalApplication.findFirstOrThrow({
+      where: { id: applicationId, tenantId },
       include: { showing: { select: { brokerUserId: true } }, lead: { select: { assignedUserId: true, name: true } } },
     });
     const staff = await prisma.user.findMany({
@@ -257,11 +337,16 @@ async function notifyScreeningResult(
         ? 'came back flagged for review'
         : 'came back clear';
     const link = `${getEnv().WEB_URL}/showings`;
-    const body = `${checkLabel} for ${application.lead.name ?? 'a lead'} ${outcomeText}.\n\n${link}`;
+    // Misma marca que el summary persistido: si el veredicto lo fabricó el
+    // mock, el correo/mensaje al staff tampoco puede parecer real. Solo los
+    // veredictos (passed/flagged) se marcan — un 'failed' no afirma nada
+    // sobre el solicitante.
+    const prefix = outcome !== 'failed' && (await isSimulatedScreening()) ? SIMULATED_PREFIX : '';
+    const body = `${prefix}${checkLabel} for ${application.lead.name ?? 'a lead'} ${outcomeText}.\n\n${link}`;
 
     const { getAdapters } = await import('../config/adapters.js');
     await notifyStaffTargets({
-      targets, subject: `${checkLabel} result ready`, body, messaging: getAdapters().messaging,
+      targets, subject: `${prefix}${checkLabel} result ready`, body, messaging: getAdapters().messaging,
     });
   } catch (error) {
     console.error(`[Screening] No se pudo notificar el resultado de ${applicationId}:`, error);

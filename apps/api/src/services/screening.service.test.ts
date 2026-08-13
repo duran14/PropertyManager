@@ -220,3 +220,92 @@ describe('triggerScreeningIfConsented — fallo al encolar', () => {
     addSpy.mockRestore();
   });
 });
+
+// Finding 1 del review final: el adapter real (Playwright) todavía no
+// existe — `createAdapters` construye SIEMPRE el mock. Un veredicto
+// fabricado ("Score 740, no collections") no puede llegar al manager
+// indistinguible de uno real: se marca como simulado en el summary
+// persistido y en el aviso al staff. El status del enum NO cambia.
+describe('marca de resultado simulado', () => {
+  it('prefija el summary persistido de un veredicto del mock', async () => {
+    const { applicationId } = await seed();
+    await runScreeningRequest(applicationId, TENANT_ID, 'credit');
+    const midway = await prisma.rentalApplication.findUniqueOrThrow({ where: { id: applicationId } });
+
+    await pollScreeningResult(applicationId, TENANT_ID, 'credit', midway.creditCheckProviderRef!);
+
+    const row = await prisma.rentalApplication.findUniqueOrThrow({ where: { id: applicationId } });
+    expect(row.creditCheckStatus).toBe('passed'); // el enum sigue igual
+    expect(row.creditCheckSummary).toMatch(/^\[SIMULATED\] /);
+    expect(row.creditCheckSummary).toContain('Score 740');
+  });
+
+  it('marca también el aviso al staff', async () => {
+    const { applicationId } = await seed();
+    await runScreeningRequest(applicationId, TENANT_ID, 'credit');
+    const midway = await prisma.rentalApplication.findUniqueOrThrow({ where: { id: applicationId } });
+
+    const { getAdapters } = await import('../config/adapters.js');
+    const emailSpy = vi.spyOn(getAdapters().messaging.email, 'send');
+
+    await pollScreeningResult(applicationId, TENANT_ID, 'credit', midway.creditCheckProviderRef!);
+
+    expect(emailSpy).toHaveBeenCalled();
+    const sent = emailSpy.mock.calls[0]![0];
+    expect(sent.body).toContain('[SIMULATED]');
+    expect(sent.subject).toContain('[SIMULATED]');
+  });
+
+  it('no marca un fallo: ahí no hay veredicto fabricado que confundir', async () => {
+    const { applicationId } = await seed();
+    await runScreeningRequest(applicationId, TENANT_ID, 'credit');
+    const midway = await prisma.rentalApplication.findUniqueOrThrow({ where: { id: applicationId } });
+
+    const { getAdapters } = await import('../config/adapters.js');
+    vi.spyOn(getAdapters().screening, 'pollResult').mockResolvedValue({
+      status: 'failed', reason: 'Portal login failed',
+    });
+
+    await pollScreeningResult(applicationId, TENANT_ID, 'credit', midway.creditCheckProviderRef!);
+
+    const row = await prisma.rentalApplication.findUniqueOrThrow({ where: { id: applicationId } });
+    expect(row.creditCheckSummary).toBe('Portal login failed');
+  });
+});
+
+// Finding 4 del review final: `persistTerminalResult` es el único punto de
+// escritura de un resultado terminal, y tiene que ser a prueba de cadenas
+// de jobs duplicadas y de fugas entre tenants.
+describe('persistTerminalResult — guards de estado y tenant', () => {
+  it('un cierre tardío no pisa un veredicto ya persistido ni notifica de nuevo', async () => {
+    const { applicationId } = await seed();
+    await runScreeningRequest(applicationId, TENANT_ID, 'credit');
+    const midway = await prisma.rentalApplication.findUniqueOrThrow({ where: { id: applicationId } });
+    await pollScreeningResult(applicationId, TENANT_ID, 'credit', midway.creditCheckProviderRef!);
+
+    const settled = await prisma.rentalApplication.findUniqueOrThrow({ where: { id: applicationId } });
+    expect(settled.creditCheckStatus).toBe('passed');
+
+    const { getAdapters } = await import('../config/adapters.js');
+    const emailSpy = vi.spyOn(getAdapters().messaging.email, 'send');
+
+    // Cadena vieja que llega tarde: el timeout de sondeo de otro job.
+    await markScreeningTimedOut(applicationId, TENANT_ID, 'credit');
+
+    const after = await prisma.rentalApplication.findUniqueOrThrow({ where: { id: applicationId } });
+    expect(after.creditCheckStatus).toBe('passed');
+    expect(after.creditCheckSummary).toBe(settled.creditCheckSummary);
+    expect(emailSpy).not.toHaveBeenCalled();
+  });
+
+  it('no escribe el resultado si el tenantId no corresponde a la solicitud', async () => {
+    const { applicationId } = await seed();
+    await runScreeningRequest(applicationId, TENANT_ID, 'credit');
+
+    await markScreeningTimedOut(applicationId, 'tenant_ajeno', 'credit');
+
+    const row = await prisma.rentalApplication.findUniqueOrThrow({ where: { id: applicationId } });
+    expect(row.creditCheckStatus).toBe('pending');
+    expect(row.creditCheckSummary).toBeNull();
+  });
+});
