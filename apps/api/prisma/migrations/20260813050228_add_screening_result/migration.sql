@@ -1,0 +1,18 @@
+-- AlterTable
+ALTER TABLE "rental_applications" ADD COLUMN     "creditCheckCompletedAt" TIMESTAMP(3),
+ADD COLUMN     "creditCheckProviderRef" TEXT,
+ADD COLUMN     "creditCheckReportKey" TEXT,
+ADD COLUMN     "creditCheckRequestedAt" TIMESTAMP(3),
+ADD COLUMN     "creditCheckStatus" TEXT,
+ADD COLUMN     "creditCheckSummary" TEXT,
+ADD COLUMN     "criminalCheckCompletedAt" TIMESTAMP(3),
+ADD COLUMN     "criminalCheckProviderRef" TEXT,
+ADD COLUMN     "criminalCheckReportKey" TEXT,
+ADD COLUMN     "criminalCheckRequestedAt" TIMESTAMP(3),
+ADD COLUMN     "criminalCheckStatus" TEXT,
+ADD COLUMN     "criminalCheckSummary" TEXT,
+ADD COLUMN     "currentAddress" TEXT,
+ADD COLUMN     "currentCity" TEXT,
+ADD COLUMN     "currentPostalCode" TEXT,
+ADD COLUMN     "currentProvince" TEXT,
+ADD COLUMN     "dateOfBirth" TIMESTAMP(3);

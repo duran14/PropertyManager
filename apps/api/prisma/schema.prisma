@@ -445,7 +445,7 @@ model AuditEntry {
 model IntegrationConfig {
   id                    String    @id @default(cuid())
   tenantId              String
-  provider              String // buildium | qbo | twilio | plaid | stripe
+  provider              String // buildium | qbo | twilio | plaid | stripe | frontlobby_portal | sterling_portal
   // Credenciales cifradas con INTEGRATION_ENCRYPTION_KEY (simétrico AES).
   encryptedCredentials  String
   // Tokens OAuth (refresh) cuando aplique, también cifrados.
@@ -901,6 +901,31 @@ model RentalApplication {
   employerName         String?
   references           String?
   idDocumentStorageKey String?
+
+  // Fase 2.2: identidad requerida para el screening de crédito/antecedentes
+  // — sin esto ni FrontLobby ni Sterling pueden identificar a la persona.
+  dateOfBirth       DateTime?
+  currentAddress    String?
+  currentCity       String?
+  currentProvince   String?
+  currentPostalCode String?
+
+  // Resultado del checkeo de crédito (FrontLobby). Cada checkeo tiene su
+  // propio ciclo de vida — pueden completarse en momentos distintos.
+  creditCheckStatus      String? // requested | pending | passed | flagged | failed
+  creditCheckSummary     String?
+  creditCheckReportKey   String?
+  creditCheckProviderRef String?
+  creditCheckRequestedAt DateTime?
+  creditCheckCompletedAt DateTime?
+
+  // Resultado del checkeo de antecedentes penales (Sterling, CPIC).
+  criminalCheckStatus      String?
+  criminalCheckSummary     String?
+  criminalCheckReportKey   String?
+  criminalCheckProviderRef String?
+  criminalCheckRequestedAt DateTime?
+  criminalCheckCompletedAt DateTime?
 
   applicantFullName    String?
   // Los tres consentimientos se guardan como timestamps individuales (no un
