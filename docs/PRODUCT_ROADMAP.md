@@ -167,9 +167,18 @@
       (estado, resumen, link de descarga del reporte completo) visible en la
       tarjeta de la aplicación dentro de Showings.
 
-- **Nivel 3 — PDF parser / OCR (pendiente):** extracción de datos clave
-  mediante visión/OCR si el manager sube el reporte manualmente en PDF. No
-  implementado.
+- **Nivel 3 — PDF parser / OCR (ENTREGADO):** el staff puede subir manualmente
+  un reporte en PDF de cualquier proveedor de screening (crédito o
+  antecedentes) desde la tarjeta de la aplicación en Showings; el sistema
+  extrae veredicto y resumen mediante GLM (visión/OCR), sin depender de la
+  automation de un proveedor específico ni de la decisión de proveedor de
+  antecedentes penales (Sterling) aún pendiente.
+  - Backend: `GlmAdapter.extractScreeningReport` (OCR genérico) +
+    `POST /leads/applications/:applicationId/screening/:kind/upload-report`
+    (ruta autenticada, roles `property_manager`/`broker`), que persiste
+    veredicto/resumen/reporte igual que los otros niveles.
+  - UI: botón "Upload report manually" en `ScreeningBlock` (Showings), junto
+    a la descarga del reporte y la aprobación de cargo.
 
 ---
 
