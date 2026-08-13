@@ -4,6 +4,7 @@ import type {
   GlmReasoningRequest,
   GlmReasoningResponse,
   OcrResult,
+  ScreeningReportExtraction,
 } from '../contracts.js';
 
 export class GlmRealAdapter implements GlmAdapter {
@@ -132,6 +133,49 @@ export class GlmRealAdapter implements GlmAdapter {
       choices?: Array<{ message?: { content?: string } }>;
     };
     return JSON.parse(body.choices?.[0]?.message?.content ?? '{}') as CreditReportExtraction;
+  }
+
+  async extractScreeningReport(input: {
+    mimeType: string;
+    base64: string;
+    filename?: string;
+    kind: 'credit' | 'criminal';
+  }): Promise<ScreeningReportExtraction> {
+    const kindLabel = input.kind === 'credit' ? 'credit report' : 'criminal background check';
+    const response = await fetch(`${this.config.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${this.config.apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: this.config.ocrModel,
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'text',
+                text: `This is a tenant ${kindLabel} PDF for a rental applicant. Read it and summarize the key findings in 2-4 sentences. Based on the content, decide a verdict: "passed" if the report shows no significant concerns (good credit standing / no criminal record found), "flagged" if it shows concerns worth human review (poor credit standing, collections, evictions / a criminal record found). If you cannot determine either from the document, use null. Respond as JSON: {"verdict": "passed"|"flagged"|null, "summaryText": string, "confidence": number between 0 and 1}.`,
+              },
+              {
+                type: 'image_url',
+                image_url: { url: `data:${input.mimeType};base64,${input.base64}` },
+              },
+            ],
+          },
+        ],
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`GLM screening report OCR request failed: ${response.status}`);
+    }
+
+    const body = (await response.json()) as {
+      choices?: Array<{ message?: { content?: string } }>;
+    };
+    return JSON.parse(body.choices?.[0]?.message?.content ?? '{}') as ScreeningReportExtraction;
   }
 }
 

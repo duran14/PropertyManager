@@ -16,6 +16,7 @@ import type {
   GlmReasoningRequest,
   GlmReasoningResponse,
   OcrResult,
+  ScreeningReportExtraction,
 } from '../contracts.js';
 
 export class GlmMockAdapter implements GlmAdapter {
@@ -373,6 +374,22 @@ export class GlmMockAdapter implements GlmAdapter {
     return {
       score: 675,
       aiSummaryText: 'The applicant has a credit score of 675, which is categorized as good. No outstanding balances on most tradelines.',
+      confidence: 0.9,
+    };
+  }
+
+  async extractScreeningReport(input: {
+    mimeType: string;
+    base64: string;
+    filename?: string;
+    kind: 'credit' | 'criminal';
+  }): Promise<ScreeningReportExtraction> {
+    const flagged = (input.filename ?? '').toLowerCase().includes('flagged');
+    return {
+      verdict: flagged ? 'flagged' : 'passed',
+      summaryText: flagged
+        ? `Manual ${input.kind} report indicates concerns worth review.`
+        : `Manual ${input.kind} report shows no significant concerns.`,
       confidence: 0.9,
     };
   }

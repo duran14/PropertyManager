@@ -229,6 +229,15 @@ export interface CreditReportExtraction {
   confidence: number;
 }
 
+export interface ScreeningReportExtraction {
+  /** null si el modelo no pudo determinar un veredicto del documento. */
+  verdict: 'passed' | 'flagged' | null;
+  /** Resumen en texto plano de lo que dice el reporte (2-4 oraciones). */
+  summaryText: string;
+  /** Confidence global de la extracción (0..1). */
+  confidence: number;
+}
+
 export interface GlmAdapter {
   readonly name: 'glm';
   reason(request: GlmReasoningRequest): Promise<GlmReasoningResponse>;
@@ -236,6 +245,8 @@ export interface GlmAdapter {
   extractReceipt(input: { mimeType: string; base64: string; filename?: string }): Promise<OcrResult>;
   /** OCR de un reporte de crédito (PDF) — score + texto del resumen de IA. */
   extractCreditReport(input: { mimeType: string; base64: string; filename?: string }): Promise<CreditReportExtraction>;
+  /** OCR/visión genérico de un reporte de screening (crédito o antecedentes), de CUALQUIER proveedor. */
+  extractScreeningReport(input: { mimeType: string; base64: string; filename?: string; kind: 'credit' | 'criminal' }): Promise<ScreeningReportExtraction>;
 }
 
 // =============================================================================
