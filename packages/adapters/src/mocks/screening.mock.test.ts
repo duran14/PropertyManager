@@ -3,11 +3,14 @@ import { ScreeningMockAdapter } from './screening.mock.js';
 
 const APPLICANT = {
   fullName: 'Ana Prospect',
+  firstName: 'Ana',
+  lastName: 'Prospect',
   dateOfBirth: '1990-05-15',
   currentAddress: '123 Test St',
   currentCity: 'Vancouver',
   currentProvince: 'British Columbia',
   currentPostalCode: 'V6B 1A1',
+  currentAddressStartDate: '2020-01-01',
 };
 
 describe('ScreeningMockAdapter', () => {

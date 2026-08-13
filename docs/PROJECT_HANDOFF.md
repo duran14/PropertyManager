@@ -320,6 +320,8 @@ Required local services:
 - Postgres from Docker on port `5433`
 - Redis from Docker on port `6380`
 
+Deployment requirement (FrontLobby real adapter, `packages/adapters/src/real/front-lobby.real.ts`): the production environment must run `pnpm --filter @property-manager/adapters exec playwright install chromium --with-deps` as part of the build/deploy so the Chromium binary Playwright needs is present.
+
 Key environment variables currently relevant:
 
 - `DATABASE_URL`

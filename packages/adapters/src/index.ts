@@ -18,3 +18,4 @@ export * from './real/twilio.real.js';
 export * from './real/resend-email.real.js';
 export * from './real/messenger-payload.js';
 export * from './real/messenger.real.js';
+export * from './real/front-lobby.real.js';

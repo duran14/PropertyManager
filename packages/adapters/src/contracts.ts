@@ -475,11 +475,14 @@ export interface CalendarAdapter {
 
 export interface ScreeningApplicantInput {
   fullName: string;
+  firstName: string; // FrontLobby pide nombre y apellido por separado
+  lastName: string;
   dateOfBirth: string; // ISO date (YYYY-MM-DD)
   currentAddress: string;
   currentCity: string;
   currentProvince: string;
   currentPostalCode: string;
+  currentAddressStartDate: string; // ISO date (YYYY-MM-DD)
   email?: string;
   phone?: string;
 }
