@@ -928,6 +928,15 @@ model RentalApplication {
   criminalCheckCompletedAt DateTime?
 
   applicantFullName    String?
+  // Fase 2.2 (adapter real de FrontLobby): el formulario real de FrontLobby
+  // pide nombre y apellido por separado, no un campo único. applicantFullName
+  // se sigue guardando (concatenación de los dos) para no romper a quien ya
+  // lo consume (notificaciones al staff, ScreeningMockAdapter).
+  applicantFirstName   String?
+  applicantLastName    String?
+  // FrontLobby exige "¿desde cuándo vives en esa dirección?" — dato que el
+  // resto del sistema nunca pidió hasta ahora.
+  currentAddressStartDateAt DateTime?
   // Los tres consentimientos se guardan como timestamps individuales (no un
   // solo boolean): para un dato de cumplimiento importa cuándo se otorgó
   // cada autorización por separado, no solo que "aceptó".
