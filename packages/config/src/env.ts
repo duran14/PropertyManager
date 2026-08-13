@@ -195,3 +195,37 @@ export function isIntegrationConfigured(env: Env, key: IntegrationKey): boolean 
       return Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET);
   }
 }
+
+/**
+ * Nombres exactos de las variables de entorno que `isIntegrationConfigured`
+ * lee para decidir si una integración está configurada. Es la fuente única
+ * de verdad que usa `apps/api/vitest.config.ts` para forzarlas a estar
+ * vacías durante los tests, sin importar lo que el shell/IDE del
+ * desarrollador tenga exportado.
+ *
+ * IMPORTANTE: si agregas una integración nueva a `IntegrationKey` y a
+ * `isIntegrationConfigured`, agrega también sus variables aquí.
+ */
+export const INTEGRATION_CREDENTIAL_ENV_KEYS = [
+  'BUILDIUM_CLIENT_ID',
+  'BUILDIUM_CLIENT_SECRET',
+  'QBO_CLIENT_ID',
+  'QBO_CLIENT_SECRET',
+  'TWILIO_ACCOUNT_SID',
+  'TWILIO_AUTH_TOKEN',
+  'PLAID_CLIENT_ID',
+  'PLAID_SECRET',
+  'STRIPE_SECRET_KEY',
+  'ZAI_API_KEY',
+  'AUTOENHANCE_API_KEY',
+  'SHOWMOJO_API_TOKEN',
+  'DOCUSIGN_INTEGRATION_KEY',
+  'DOCUSIGN_USER_ID',
+  'TELEGRAM_BOT_TOKEN',
+  'MESSENGER_PAGE_ACCESS_TOKEN',
+  'MESSENGER_APP_SECRET',
+  'RESEND_API_KEY',
+  'RESEND_FROM_EMAIL',
+  'GOOGLE_CLIENT_ID',
+  'GOOGLE_CLIENT_SECRET',
+] as const satisfies readonly (keyof Env)[];
