@@ -125,10 +125,11 @@
 
 **Objetivo:** Automatizar el seguimiento tras el showing y consultar el historial crediticio y penal del candidato, reduciendo la intervención manual.
 
-### 2.1 Post-Showing Form Trigger
+### 2.1 Post-Showing Form Trigger ✅ Entregado
 
-- **Trigger:** transcurridas 2 horas desde la finalización del evento `showing` en el calendario.
+- **Trigger automático:** transcurridas 2 horas desde la finalización del evento `showing` en el calendario (sondeo cada 15 minutos).
 - **Acción:** enviar un mensaje con un enlace seguro (`/apply/[showing_id]`) con token temporal, conteniendo el formulario de solicitud formal de arrendamiento (ingresos, referencias, identificación, autorización firmada).
+- **Alternativa manual:** el botón de "Completar showing" sigue disponible en la interfaz de showings como opción de override, permitiendo disparar la invitación de solicitud de renta de inmediato si el manager lo prefiere.
 
 ### 2.2 Tenant Screening Engine
 
