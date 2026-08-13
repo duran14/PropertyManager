@@ -132,17 +132,21 @@ showingsRouter.get('/:id/application', requireAuth, async (req, res, next) => {
         consentPoliceCheckAt: true,
         submittedAt: true,
         createdAt: true,
-        // Fase 2.2: identidad y resultado del screening de crédito/antecedentes.
-        // Van explícitos en este `select` (igual que el resto de campos de
-        // arriba) — sin esto, Prisma seguiría devolviéndolos por default en
+        // Fase 2.2: resultado del screening de crédito/antecedentes. Va
+        // explícito en este `select` (igual que el resto de campos de
+        // arriba) — sin esto, Prisma seguiría devolviéndolo por default en
         // una llamada sin `select`, pero como esta ruta ya usa `select`
         // explícito, cualquier columna nueva del modelo queda excluida hasta
         // que se agregue aquí a mano.
-        dateOfBirth: true,
-        currentAddress: true,
-        currentCity: true,
-        currentProvince: true,
-        currentPostalCode: true,
+        //
+        // Los campos de IDENTIDAD del solicitante (dateOfBirth,
+        // currentAddress/City/Province/PostalCode) NO se proyectan aquí a
+        // propósito: fecha de nacimiento + dirección completa es el payload
+        // exacto de un robo de identidad, esta ruta solo pide `requireAuth`
+        // (sin chequeo de rol), y ningún componente del frontend los
+        // renderiza. Solo los consume el adapter de screening, del lado del
+        // servidor (screening.service.ts). Si algún día la UI necesita
+        // mostrarlos, que sea con su propio guard de rol.
         creditCheckStatus: true,
         creditCheckSummary: true,
         creditCheckReportKey: true,

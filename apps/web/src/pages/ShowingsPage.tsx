@@ -41,12 +41,10 @@ interface ApplicationDetail {
   consentPoliceCheckAt: string | null;
   submittedAt: string | null;
   createdAt: string;
-  // Fase 2.2: identidad y resultado del screening de crédito/antecedentes.
-  dateOfBirth?: string | null;
-  currentAddress?: string | null;
-  currentCity?: string | null;
-  currentProvince?: string | null;
-  currentPostalCode?: string | null;
+  // Fase 2.2: resultado del screening de crédito/antecedentes. La identidad
+  // del solicitante (fecha de nacimiento, dirección actual) NO viaja al
+  // navegador: ningún componente la muestra y el endpoint dejó de
+  // proyectarla (ver GET /showings/:id/application).
   creditCheckStatus?: string | null;
   creditCheckSummary?: string | null;
   creditCheckReportKey?: string | null;
