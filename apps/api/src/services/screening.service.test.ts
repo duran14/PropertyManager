@@ -1,5 +1,9 @@
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { prisma } from '../config/db.js';
+import { getEnv } from '../config/env.js';
+import { buildDocumentStorageKey } from './document-storage.service.js';
 import {
   approveScreening,
   markScreeningTimedOut,
@@ -396,6 +400,123 @@ describe('recordManualScreeningReport', () => {
     const result = await recordManualScreeningReport(applicationId, 'tenant_otro', 'credit', upload);
 
     expect(result).toEqual({ ok: false, status: 404, error: expect.any(String) });
+  });
+
+  // Hallazgo 1 (revisión final): `GlmRealAdapter.extractScreeningReport` hace
+  // `JSON.parse(content ?? '{}')` sin validar el shape en runtime. Si el
+  // modelo devuelve `{}`, `verdict` es `undefined` (no `null`) y `confidence`
+  // es `undefined` (no un número) — un guard `=== null` / `< MIN` deja pasar
+  // ambos casos en silencio por la semántica de comparación con `undefined`/
+  // `NaN`. La whitelist positiva debe rechazar esto explícitamente.
+  it('rechaza con 400 el resultado de un JSON.parse(\'{}\') (verdict y confidence undefined)', async () => {
+    const { applicationId } = await seed();
+    const upload = { mimeType: 'application/pdf', base64: Buffer.from('empty response').toString('base64'), filename: 'empty.pdf' };
+    vi.spyOn((await import('../config/adapters.js')).getAdapters().glm, 'extractScreeningReport')
+      .mockResolvedValueOnce({ verdict: undefined as any, summaryText: '', confidence: undefined as any });
+
+    const result = await recordManualScreeningReport(applicationId, TENANT_ID, 'credit', upload);
+
+    expect(result).toEqual({ ok: false, status: 400, error: expect.stringContaining('verdict') });
+    const row = await prisma.rentalApplication.findUniqueOrThrow({ where: { id: applicationId } });
+    expect(row.creditCheckStatus).toBeNull();
+  });
+
+  it('rechaza con 400 un verdict fuera de la whitelist ("unknown"), aunque la confidence sea alta', async () => {
+    const { applicationId } = await seed();
+    const upload = { mimeType: 'application/pdf', base64: Buffer.from('odd verdict').toString('base64'), filename: 'odd.pdf' };
+    vi.spyOn((await import('../config/adapters.js')).getAdapters().glm, 'extractScreeningReport')
+      .mockResolvedValueOnce({ verdict: 'unknown' as any, summaryText: 'Not sure', confidence: 0.95 });
+
+    const result = await recordManualScreeningReport(applicationId, TENANT_ID, 'credit', upload);
+
+    expect(result).toEqual({ ok: false, status: 400, error: expect.stringContaining('verdict') });
+    const row = await prisma.rentalApplication.findUniqueOrThrow({ where: { id: applicationId } });
+    expect(row.creditCheckStatus).toBeNull();
+  });
+
+  // Hallazgo 2 (revisión final): `buildDocumentStorageKey({ documentId:
+  // `${applicationId}-${kind}` })` es la MISMA fórmula que usa
+  // `persistTerminalResult` (pipeline automático) para el mismo
+  // applicationId/kind. `storage.putObject` hace `fs.writeFile` sin
+  // condición, así que sin un sufijo distinto ambas rutas escriben al mismo
+  // archivo en disco. Escenario: crédito queda 'pending' (sondeo automático
+  // en curso) → carga manual guarda un PDF y deja el checkeo 'flagged' →
+  // minutos después el sondeo automático resuelve 'passed' y su
+  // `persistTerminalResult` pisa el archivo en disco con el reporte
+  // automático, aunque su guard de OPEN_STATUSES ya no encuentre la fila
+  // (status ya no es 'pending') y por lo tanto NO toque la BD. El resultado:
+  // la fila dice 'flagged' con el resumen manual, pero el archivo servido es
+  // el del sondeo automático.
+  it('no permite que el pipeline automático pise en disco el reporte de una carga manual previa', async () => {
+    const { applicationId } = await seed();
+
+    // El sondeo automático de crédito queda en curso.
+    await runScreeningRequest(applicationId, TENANT_ID, 'credit');
+    const midway = await prisma.rentalApplication.findUniqueOrThrow({ where: { id: applicationId } });
+    expect(midway.creditCheckStatus).toBe('pending');
+
+    // El staff sube un reporte manual mientras el sondeo sigue 'pending'.
+    const manualUpload = { mimeType: 'application/pdf', base64: Buffer.from('manual pdf bytes').toString('base64'), filename: 'report.pdf' };
+    vi.spyOn((await import('../config/adapters.js')).getAdapters().glm, 'extractScreeningReport')
+      .mockResolvedValueOnce({ verdict: 'flagged', summaryText: 'Manual report shows collections.', confidence: 0.9 });
+    const manualResult = await recordManualScreeningReport(applicationId, TENANT_ID, 'credit', manualUpload);
+    expect(manualResult).toEqual({ ok: true, verdict: 'flagged' });
+
+    const afterManual = await prisma.rentalApplication.findUniqueOrThrow({ where: { id: applicationId } });
+    const manualKey = afterManual.creditCheckReportKey!;
+    expect(manualKey).not.toBeNull();
+
+    const automaticKey = buildDocumentStorageKey({ tenantId: TENANT_ID, documentId: `${applicationId}-credit`, filename: 'credit-report.pdf' });
+    expect(manualKey).not.toBe(automaticKey);
+
+    const env = getEnv();
+    const manualFilePath = path.resolve(env.DOCUMENT_STORAGE_DIR, manualKey);
+    const originalManualBytes = await fs.readFile(manualFilePath);
+    expect(originalManualBytes.toString()).toBe('manual pdf bytes');
+
+    // Minutos después, el sondeo automático (rezagado) resuelve — su
+    // `persistTerminalResult` escribe en disco usando la clave SIN sufijo.
+    await pollScreeningResult(applicationId, TENANT_ID, 'credit', midway.creditCheckProviderRef!);
+
+    // La BD no se pisó: el guard de OPEN_STATUSES ya no encuentra la fila
+    // ('flagged' no está en OPEN_STATUSES).
+    const afterAutomatic = await prisma.rentalApplication.findUniqueOrThrow({ where: { id: applicationId } });
+    expect(afterAutomatic.creditCheckStatus).toBe('flagged');
+    expect(afterAutomatic.creditCheckReportKey).toBe(manualKey);
+
+    // Y el archivo del reporte manual sigue intacto en disco — el pipeline
+    // automático escribió en una clave distinta, no la pisó.
+    const manualBytesAfter = await fs.readFile(manualFilePath);
+    expect(manualBytesAfter.toString()).toBe('manual pdf bytes');
+  });
+
+  // Hallazgo 3 (revisión final): `GlmMockAdapter.extractScreeningReport`
+  // fabrica `verdict: 'passed'`/confidence 0.9 SIN mirar el contenido real
+  // del documento — decide solo por el filename. Es alcanzable por DEFAULT
+  // (cualquier entorno sin `ZAI_API_KEY`), y sin marca el staff no puede
+  // distinguir un veredicto fabricado de uno que sí leyó el PDF. Mismo
+  // patrón que `SIMULATED_PREFIX` ya cubre en `persistTerminalResult`.
+  it('marca el summary con [SIMULATED] cuando el adapter de GLM resuelto es el mock', async () => {
+    const { applicationId } = await seed();
+    const upload = { mimeType: 'application/pdf', base64: Buffer.from('fake pdf bytes').toString('base64'), filename: 'report.pdf' };
+    const { getAdapters } = await import('../config/adapters.js');
+    const adapters = getAdapters();
+    const originalMockMode = adapters.mockModes.glm;
+    vi.spyOn(adapters.glm, 'extractScreeningReport')
+      .mockResolvedValueOnce({ verdict: 'passed', summaryText: 'Manual credit report shows no significant concerns.', confidence: 0.9 });
+    adapters.mockModes.glm = true;
+
+    try {
+      const result = await recordManualScreeningReport(applicationId, TENANT_ID, 'credit', upload);
+
+      expect(result).toEqual({ ok: true, verdict: 'passed' });
+      const row = await prisma.rentalApplication.findUniqueOrThrow({ where: { id: applicationId } });
+      expect(row.creditCheckStatus).toBe('passed'); // el enum sigue igual
+      expect(row.creditCheckSummary).toMatch(/^\[SIMULATED\] /);
+      expect(row.creditCheckSummary).not.toMatch(/^\[AUTOMATED\]/);
+    } finally {
+      adapters.mockModes.glm = originalMockMode;
+    }
   });
 });
 
