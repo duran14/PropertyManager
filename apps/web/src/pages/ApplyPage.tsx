@@ -68,6 +68,11 @@ export function ApplyPage() {
       employerName: form.get('employerName') || null,
       references: form.get('references') || null,
       applicantFullName: String(form.get('applicantFullName') ?? ''),
+      dateOfBirth: String(form.get('dateOfBirth') ?? ''),
+      currentAddress: String(form.get('currentAddress') ?? ''),
+      currentCity: String(form.get('currentCity') ?? ''),
+      currentProvince: String(form.get('currentProvince') ?? ''),
+      currentPostalCode: String(form.get('currentPostalCode') ?? ''),
       consentApplication: form.get('consentApplication') === 'on',
       consentCreditCheck: form.get('consentCreditCheck') === 'on',
       consentPoliceCheck: form.get('consentPoliceCheck') === 'on',
@@ -159,6 +164,22 @@ export function ApplyPage() {
           <span className="text-sm font-medium text-slate-700">Full legal name (acts as your signature)</span>
           <input name="applicantFullName" type="text" required className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2" />
         </label>
+
+        <label className="block">
+          <span className="text-sm font-medium text-slate-700">Date of birth</span>
+          <input name="dateOfBirth" type="date" required className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2" />
+        </label>
+
+        <label className="block">
+          <span className="text-sm font-medium text-slate-700">Current address</span>
+          <input name="currentAddress" type="text" required placeholder="Street address" className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2" />
+        </label>
+
+        <div className="grid grid-cols-3 gap-2">
+          <input name="currentCity" type="text" required placeholder="City" className="mt-1 rounded-md border border-slate-300 px-3 py-2" />
+          <input name="currentProvince" type="text" required placeholder="Province" className="mt-1 rounded-md border border-slate-300 px-3 py-2" />
+          <input name="currentPostalCode" type="text" required placeholder="Postal code" className="mt-1 rounded-md border border-slate-300 px-3 py-2" />
+        </div>
 
         {error && (
           <p role="alert" aria-live="polite" className="text-sm text-red-600">

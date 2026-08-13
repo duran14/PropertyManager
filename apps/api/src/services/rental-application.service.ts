@@ -146,6 +146,15 @@ export interface SubmitApplicationInput {
   employerName?: string | null;
   references?: string | null;
   applicantFullName: string;
+  // Requeridos (a diferencia de los campos financieros/laborales de arriba):
+  // el screening de crédito/antecedentes (Task 4) no puede correr sin
+  // identidad — fecha de nacimiento y dirección actual son insumo mínimo
+  // para que el adapter de screening pueda hacer match del solicitante.
+  dateOfBirth: string; // ISO date
+  currentAddress: string;
+  currentCity: string;
+  currentProvince: string;
+  currentPostalCode: string;
   consentApplication: boolean;
   consentCreditCheck: boolean;
   consentPoliceCheck: boolean;
@@ -183,6 +192,12 @@ export async function submitRentalApplication(
   }
   if (!input.applicantFullName.trim()) {
     return { ok: false, status: 400, error: 'applicantFullName is required' };
+  }
+  if (!input.dateOfBirth.trim()) {
+    return { ok: false, status: 400, error: 'dateOfBirth is required' };
+  }
+  if (!input.currentAddress.trim() || !input.currentCity.trim() || !input.currentProvince.trim() || !input.currentPostalCode.trim()) {
+    return { ok: false, status: 400, error: 'A complete current address is required' };
   }
   if (!input.idDocumentBase64 || !input.idDocumentFilename || !input.idDocumentMimeType) {
     return { ok: false, status: 400, error: 'A photo ID document is required' };
@@ -223,6 +238,11 @@ export async function submitRentalApplication(
       employerName: input.employerName ?? null,
       references: input.references ?? null,
       applicantFullName: input.applicantFullName.trim(),
+      dateOfBirth: new Date(input.dateOfBirth),
+      currentAddress: input.currentAddress.trim(),
+      currentCity: input.currentCity.trim(),
+      currentProvince: input.currentProvince.trim(),
+      currentPostalCode: input.currentPostalCode.trim(),
       idDocumentStorageKey,
       consentApplicationAt: now,
       consentCreditCheckAt: now,

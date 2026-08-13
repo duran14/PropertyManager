@@ -287,6 +287,13 @@ function validSubmission() {
     employerName: 'Acme Corp',
     references: 'Jane Doe — previous landlord — 604-555-0111',
     applicantFullName: 'Carlos Duran',
+    // Task 5: requeridos para que el screening de crédito/antecedentes
+    // tenga con qué hacer match del solicitante.
+    dateOfBirth: '1990-05-15',
+    currentAddress: '123 Test St',
+    currentCity: 'Vancouver',
+    currentProvince: 'British Columbia',
+    currentPostalCode: 'V6B 1A1',
     consentApplication: true,
     consentCreditCheck: true,
     consentPoliceCheck: true,
@@ -347,6 +354,43 @@ describe('submitRentalApplication', () => {
     if (result.ok) throw new Error('expected rejection');
     expect(result.status).toBe(400);
     expect(result.error).toContain(missing);
+  });
+
+  it('rechaza el envío sin fecha de nacimiento o dirección', async () => {
+    const { token } = await seedInvitedApplication();
+    const { messaging } = fakeMessaging();
+
+    const result = await submitRentalApplication(
+      token,
+      { ...validSubmission(), dateOfBirth: '' },
+      { messaging },
+    );
+
+    expect(result).toEqual({ ok: false, status: 400, error: expect.stringContaining('dateOfBirth') });
+  });
+
+  it('guarda fecha de nacimiento y dirección al enviar', async () => {
+    const { token } = await seedInvitedApplication();
+    const { messaging } = fakeMessaging();
+
+    const result = await submitRentalApplication(
+      token,
+      {
+        ...validSubmission(),
+        dateOfBirth: '1990-05-15',
+        currentAddress: '456 Main St',
+        currentCity: 'Burnaby',
+        currentProvince: 'British Columbia',
+        currentPostalCode: 'V5H 1A1',
+      },
+      { messaging },
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const row = await prisma.rentalApplication.findUniqueOrThrow({ where: { id: result.applicationId } });
+    expect(row.dateOfBirth?.toISOString().slice(0, 10)).toBe('1990-05-15');
+    expect(row.currentAddress).toBe('456 Main St');
   });
 
   it('rejects a submission without a name', async () => {
