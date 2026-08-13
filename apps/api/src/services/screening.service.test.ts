@@ -388,4 +388,98 @@ describe('runScreeningRequest — forceMock cierra la ventana de carrera mock/re
     expect(row.creditCheckStatus).toBe('pending');
     expect(row.creditCheckProviderRef).toMatch(/^mock_credit_/);
   });
+
+  it('propaga forceMock al job de sondeo cuando runCheck deja el checkeo pending', async () => {
+    const { applicationId } = await seed();
+
+    const { screeningPollQueue } = await import('../jobs/queues.js');
+    const addSpy = vi.spyOn(screeningPollQueue, 'add');
+
+    await runScreeningRequest(applicationId, TENANT_ID, 'credit', true);
+
+    expect(addSpy).toHaveBeenCalledWith(
+      'poll-screening-result',
+      expect.objectContaining({ forceMock: true }),
+      expect.anything(),
+    );
+  });
+
+  it('propaga forceMock al reencolar el sondeo en la rama de idempotencia (providerRef ya existente)', async () => {
+    const { applicationId } = await seed();
+    await runScreeningRequest(applicationId, TENANT_ID, 'credit', true);
+
+    const { screeningPollQueue } = await import('../jobs/queues.js');
+    const addSpy = vi.spyOn(screeningPollQueue, 'add');
+
+    await runScreeningRequest(applicationId, TENANT_ID, 'credit', true);
+
+    expect(addSpy).toHaveBeenCalledWith(
+      'poll-screening-result',
+      expect.objectContaining({ forceMock: true }),
+      expect.anything(),
+    );
+  });
+});
+
+// Finding (extensión de Task 5): la misma ventana de carrera que `forceMock`
+// cierra en `runScreeningRequest` seguía abierta en el SONDEO. Este job se
+// encola con `delay: 15 * 60_000` — una ventana mucho más larga que la del
+// envío inicial — así que si el checkeo se disparó como mock y en esos 15
+// minutos se guardan credenciales reales de FrontLobby, `pollScreeningResult`
+// re-resolvía el adapter real y llamaba `pollResult('credit', 'mock_credit_N')`
+// — una referencia que el adapter real no puede interpretar.
+describe('pollScreeningResult — forceMock cierra la ventana de carrera mock/real', () => {
+  it('con forceMock, sigue usando el mock para sondear aunque se hayan guardado credenciales reales después del envío, y no vuelve a consultar la bóveda', async () => {
+    const { applicationId } = await seed();
+    await runScreeningRequest(applicationId, TENANT_ID, 'credit', true);
+    const midway = await prisma.rentalApplication.findUniqueOrThrow({ where: { id: applicationId } });
+
+    // Credenciales reales llegan DESPUÉS del envío, dentro de la ventana de
+    // 15 minutos del sondeo.
+    await saveIntegrationCredentials({ tenantId: TENANT_ID, provider: 'frontlobby_portal', username: 'u', password: 'p' });
+
+    const credentialsSpy = vi.spyOn(integrationVaultService, 'getIntegrationCredentials');
+
+    const { done } = await pollScreeningResult(
+      applicationId, TENANT_ID, 'credit', midway.creditCheckProviderRef!, true,
+    );
+
+    // Nunca se re-resolvió el adapter contra la bóveda — si lo hubiera
+    // hecho, habría encontrado las credenciales reales recién guardadas y
+    // habría intentado construir FrontLobbyScreeningAdapter (Playwright
+    // real) en vez de sondear el mock con una referencia mock_credit_N.
+    expect(credentialsSpy).not.toHaveBeenCalled();
+
+    expect(done).toBe(true);
+    const row = await prisma.rentalApplication.findUniqueOrThrow({ where: { id: applicationId } });
+    expect(row.creditCheckStatus).toBe('passed');
+  });
+
+  it('el summary persistido sigue marcado [SIMULATED] aunque haya credenciales reales al momento del sondeo', async () => {
+    const { applicationId } = await seed();
+    await runScreeningRequest(applicationId, TENANT_ID, 'credit', true);
+    const midway = await prisma.rentalApplication.findUniqueOrThrow({ where: { id: applicationId } });
+
+    await saveIntegrationCredentials({ tenantId: TENANT_ID, provider: 'frontlobby_portal', username: 'u', password: 'p' });
+
+    await pollScreeningResult(applicationId, TENANT_ID, 'credit', midway.creditCheckProviderRef!, true);
+
+    const row = await prisma.rentalApplication.findUniqueOrThrow({ where: { id: applicationId } });
+    // Si `persistTerminalResult` hubiera vuelto a resolver el adapter para
+    // decidir el prefijo, habría encontrado credenciales reales y guardado
+    // el veredicto del mock SIN el prefijo — indistinguible de uno real.
+    expect(row.creditCheckSummary).toMatch(/^\[SIMULATED\] /);
+  });
+
+  it('sin forceMock, sigue resolviendo el adapter contra la bóveda como hoy (comportamiento sin cambios)', async () => {
+    const { applicationId } = await seed();
+    await runScreeningRequest(applicationId, TENANT_ID, 'criminal');
+    const midway = await prisma.rentalApplication.findUniqueOrThrow({ where: { id: applicationId } });
+
+    const { done } = await pollScreeningResult(applicationId, TENANT_ID, 'criminal', midway.criminalCheckProviderRef!);
+
+    expect(done).toBe(true);
+    const row = await prisma.rentalApplication.findUniqueOrThrow({ where: { id: applicationId } });
+    expect(row.criminalCheckStatus).toBe('passed');
+  });
 });

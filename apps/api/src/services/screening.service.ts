@@ -149,7 +149,7 @@ export async function triggerScreeningIfConsented(applicationId: string, tenantI
       await persistTerminalResult(applicationId, tenantId, kind, {
         status: 'failed',
         reason: 'Could not schedule the screening check',
-      });
+      }, false); // isSimulated: ignorado en la rama 'failed', no hay prefijo que decidir.
     }),
   );
 
@@ -236,7 +236,7 @@ export async function approveScreening(
     await persistTerminalResult(applicationId, tenantId, kind, {
       status: 'failed',
       reason: 'Could not schedule the screening check',
-    });
+    }, false); // isSimulated: ignorado en la rama 'failed', no hay prefijo que decidir.
   }
   return { ok: true };
 }
@@ -279,9 +279,13 @@ export async function runScreeningRequest(
   // referencia que ya existe.
   const existingProviderRef = application[PROVIDER_REF_FIELD[kind]];
   if (existingProviderRef) {
+    // No se puede volver a resolver el adapter aquí (no se llama runCheck,
+    // por idempotencia), así que la única fuente de verdad de si ESTE
+    // providerRef es del mock es el `forceMock` con el que corrió el intento
+    // que lo generó -- se propaga tal cual al job de sondeo.
     await screeningPollQueue.add(
       'poll-screening-result',
-      { tenantId, applicationId, kind, providerRef: existingProviderRef },
+      { tenantId, applicationId, kind, providerRef: existingProviderRef, forceMock },
       { delay: 15 * 60_000 },
     );
     return;
@@ -290,6 +294,7 @@ export async function runScreeningRequest(
   const adapter = forceMock
     ? (await import('../config/adapters.js')).getAdapters().screening
     : await getScreeningAdapter(tenantId, kind);
+  const isSimulated = adapter.name === 'screening_mock';
   const result = await adapter.runCheck(kind, {
     fullName: application.applicantFullName ?? '',
     firstName: application.applicantFirstName ?? '',
@@ -307,34 +312,49 @@ export async function runScreeningRequest(
       where: { id: applicationId },
       data: { [STATUS_FIELD[kind]]: 'pending', [PROVIDER_REF_FIELD[kind]]: result.providerRef },
     });
+    // `isSimulated` (no el `forceMock` recibido) es lo que se propaga: es la
+    // decisión REAL que se acaba de tomar resolviendo el adapter arriba, y
+    // cubre también el camino de `approveScreening` (que no manda
+    // `forceMock`) cuando ese adapter resulta ser el mock igual.
     await screeningPollQueue.add(
       'poll-screening-result',
-      { tenantId, applicationId, kind, providerRef: result.providerRef },
+      { tenantId, applicationId, kind, providerRef: result.providerRef, forceMock: isSimulated },
       { delay: 15 * 60_000 },
     );
     return;
   }
 
-  await persistTerminalResult(applicationId, tenantId, kind, result);
+  await persistTerminalResult(applicationId, tenantId, kind, result, isSimulated);
 }
 
 /**
  * Sondea el resultado de un envío 'pending'. Devuelve `done: false`
  * mientras el proveedor sigue procesando — el worker vuelve a intentar
  * según el backoff de `screeningPollQueue` (Step 6 en worker.ts).
+ *
+ * `forceMock`: mismo cierre de ventana de carrera que en `runScreeningRequest`
+ * (ver el comentario ahí), pero para el sondeo. Este job se encola con
+ * `delay: 15 * 60_000` -- 15 minutos, una ventana mucho más larga que la del
+ * envío inicial -- así que sin esto, credenciales reales de FrontLobby
+ * guardadas mientras el sondeo espera harían que se re-resuelva el adapter
+ * real y se le pase una referencia `mock_*` que no puede interpretar.
  */
 export async function pollScreeningResult(
   applicationId: string,
   tenantId: string,
   kind: ScreeningCheckKind,
   providerRef: string,
+  forceMock: boolean = false,
 ): Promise<{ done: boolean }> {
-  const adapter = await getScreeningAdapter(tenantId, kind);
+  const adapter = forceMock
+    ? (await import('../config/adapters.js')).getAdapters().screening
+    : await getScreeningAdapter(tenantId, kind);
+  const isSimulated = adapter.name === 'screening_mock';
   const result = await adapter.pollResult(kind, providerRef);
 
   if (result.status === 'pending') return { done: false };
 
-  await persistTerminalResult(applicationId, tenantId, kind, result);
+  await persistTerminalResult(applicationId, tenantId, kind, result, isSimulated);
   return { done: true };
 }
 
@@ -354,7 +374,7 @@ export async function markScreeningTimedOut(
   await persistTerminalResult(applicationId, tenantId, kind, {
     status: 'failed',
     reason: 'Screening result did not arrive after multiple attempts',
-  });
+  }, false); // isSimulated: ignorado en la rama 'failed', no hay prefijo que decidir.
 }
 
 /**
@@ -377,7 +397,7 @@ export async function markScreeningRequestFailed(
   await persistTerminalResult(applicationId, tenantId, kind, {
     status: 'failed',
     reason: 'Could not submit the screening request after multiple attempts',
-  });
+  }, false); // isSimulated: ignorado en la rama 'failed', no hay prefijo que decidir.
 }
 
 /**
@@ -395,6 +415,14 @@ export async function markScreeningRequestFailed(
  *    el veredicto real que ya persistió la otra — y encima notificaría al
  *    staff lo contrario de lo que pasó. Con el guard, la escritura tardía
  *    afecta 0 filas y no se notifica nada.
+ *
+ * `isSimulated`: quien llama ya tomó (o heredó) la decisión de si este
+ * resultado vino del mock -- se usa tal cual para el prefijo `[SIMULATED]`
+ * de abajo, en vez de volver a resolver el adapter contra la bóveda aquí.
+ * Re-resolver en este punto tiene la misma ventana de carrera que
+ * `runScreeningRequest`/`pollScreeningResult` ya cierran: si se guardan
+ * credenciales reales entre el envío/sondeo y este cierre, un veredicto que
+ * en realidad vino del mock se guardaría sin el prefijo.
  */
 async function persistTerminalResult(
   applicationId: string,
@@ -402,6 +430,7 @@ async function persistTerminalResult(
   kind: ScreeningCheckKind,
   result: { status: 'completed'; verdict: 'passed' | 'flagged'; summary: string; reportBase64: string; reportMimeType: string }
     | { status: 'failed'; reason: string },
+  isSimulated: boolean,
 ): Promise<void> {
   if (result.status === 'failed') {
     // Un fallo del adapter (login fallido, timeout, portal caído) SIEMPRE se
@@ -436,7 +465,7 @@ async function persistTerminalResult(
     contentType: result.reportMimeType,
   });
 
-  const summary = (await isMockScreening(tenantId, kind))
+  const summary = isSimulated
     ? `${SIMULATED_PREFIX}${result.summary}`
     : result.summary;
 
@@ -453,7 +482,7 @@ async function persistTerminalResult(
     console.warn(`[Screening] Veredicto tardío ignorado (${kind} de ${applicationId} ya estaba cerrado)`);
     return;
   }
-  await notifyScreeningResult(applicationId, tenantId, kind, result.verdict);
+  await notifyScreeningResult(applicationId, tenantId, kind, result.verdict, isSimulated);
 }
 
 /**
@@ -465,6 +494,7 @@ async function notifyScreeningResult(
   tenantId: string,
   kind: ScreeningCheckKind,
   outcome: 'passed' | 'flagged' | 'failed',
+  isSimulated: boolean = false,
 ): Promise<void> {
   try {
     const application = await prisma.rentalApplication.findFirstOrThrow({
@@ -493,7 +523,7 @@ async function notifyScreeningResult(
     // mock, el correo/mensaje al staff tampoco puede parecer real. Solo los
     // veredictos (passed/flagged) se marcan — un 'failed' no afirma nada
     // sobre el solicitante.
-    const prefix = outcome !== 'failed' && (await isMockScreening(tenantId, kind)) ? SIMULATED_PREFIX : '';
+    const prefix = outcome !== 'failed' && isSimulated ? SIMULATED_PREFIX : '';
     const body = `${prefix}${checkLabel} for ${application.lead.name ?? 'a lead'} ${outcomeText}.\n\n${link}`;
 
     const { getAdapters } = await import('../config/adapters.js');

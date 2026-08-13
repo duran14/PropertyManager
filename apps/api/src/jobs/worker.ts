@@ -223,7 +223,7 @@ export function startWorkers(): void {
     QUEUE_NAMES.screeningPoll,
     async (job) => {
       const { done } = await pollScreeningResult(
-        job.data.applicationId, job.data.tenantId, job.data.kind, job.data.providerRef,
+        job.data.applicationId, job.data.tenantId, job.data.kind, job.data.providerRef, job.data.forceMock ?? false,
       );
       if (!done) {
         // BullMQ ya reintenta según defaultJobOptions.attempts/backoff de la

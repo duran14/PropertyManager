@@ -143,6 +143,8 @@ export interface ScreeningPollJobData {
   applicationId: string;
   kind: ScreeningCheckKind;
   providerRef: string;
+  /** true cuando el checkeo que generó este providerRef corrió contra el mock -- pollScreeningResult debe seguir sondeando el mock en vez de re-resolver el adapter contra la bóveda. Este job se encola con `delay: 15 * 60_000`, una ventana mucho más larga que la del envío inicial, así que sin esto unas credenciales reales guardadas mientras el sondeo espera harían que se re-resuelva el adapter real y se le pase una referencia mock_*, que no puede interpretar. */
+  forceMock?: boolean;
 }
 
 export const screeningPollQueue = new Queue<ScreeningPollJobData, unknown, string>(
