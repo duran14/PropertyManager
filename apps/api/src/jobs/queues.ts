@@ -121,6 +121,8 @@ export interface ScreeningRequestJobData {
   tenantId: string;
   applicationId: string;
   kind: ScreeningCheckKind;
+  /** true cuando el trigger automático (mock) ya decidió el adapter -- runScreeningRequest debe honrar esa decisión en vez de re-resolverla contra la bóveda, para no correr real por una carrera con credenciales guardadas después. La ruta approveScreening no manda este flag: ahí SÍ se re-resuelve, porque la resolución ocurre justo al momento de la aprobación humana. */
+  forceMock?: boolean;
 }
 
 export const screeningRequestQueue = new Queue<ScreeningRequestJobData, unknown, string>(

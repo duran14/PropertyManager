@@ -7,6 +7,7 @@ import {
   runScreeningRequest,
   triggerScreeningIfConsented,
 } from './screening.service.js';
+import * as integrationVaultService from './integration-vault.service.js';
 import { saveIntegrationCredentials } from './integration-vault.service.js';
 
 const TENANT_ID = 'tenant_test_screening_service';
@@ -348,5 +349,43 @@ describe('approveScreening', () => {
     const { applicationId } = await seed();
     const result = await approveScreening(applicationId, TENANT_ID, 'credit');
     expect(result).toEqual({ ok: false, reason: 'Not awaiting approval' });
+  });
+});
+
+// Finding del review de Task 5: `triggerScreeningIfConsented` decide UNA VEZ
+// si el checkeo es mock o real, y encola sin delay cuando es mock. Si un
+// property_manager guarda credenciales reales de FrontLobby justo en la
+// ventana entre ese enqueue y la ejecución del job, una segunda resolución
+// del adapter en `runScreeningRequest` correría el checkeo REAL — con cargo
+// de $18.99 — sin haber pasado nunca por 'awaiting_approval'/
+// `approveScreening`. `forceMock` cierra esa ventana: el trigger automático
+// manda `forceMock: true` en el job, y `runScreeningRequest` lo honra sin
+// volver a consultar la bóveda.
+describe('runScreeningRequest — forceMock cierra la ventana de carrera mock/real', () => {
+  it('con forceMock, sigue usando el mock aunque se hayan guardado credenciales reales después del enqueue, y no vuelve a consultar la bóveda', async () => {
+    const { applicationId } = await seed();
+
+    // El trigger automático corre SIN credenciales: decide mock y encolaría
+    // { forceMock: true } (probado por separado en el describe de arriba).
+    // Simulamos la carrera guardando las credenciales reales DESPUÉS de esa
+    // decisión, pero ANTES de que el job realmente corra.
+    await saveIntegrationCredentials({ tenantId: TENANT_ID, provider: 'frontlobby_portal', username: 'u', password: 'p' });
+
+    const credentialsSpy = vi.spyOn(integrationVaultService, 'getIntegrationCredentials');
+
+    await runScreeningRequest(applicationId, TENANT_ID, 'credit', true);
+
+    // Nunca se re-resolvió el adapter contra la bóveda — si lo hubiera
+    // hecho, habría encontrado las credenciales reales recién guardadas y
+    // habría intentado construir FrontLobbyScreeningAdapter (Playwright
+    // real) en vez del mock.
+    expect(credentialsSpy).not.toHaveBeenCalled();
+
+    const row = await prisma.rentalApplication.findUniqueOrThrow({ where: { id: applicationId } });
+    // El mock siempre responde 'pending' con una referencia mock_credit_N —
+    // si hubiera corrido real, esto sería un providerRef de FrontLobby o el
+    // checkeo habría fallado al intentar una navegación de Playwright real.
+    expect(row.creditCheckStatus).toBe('pending');
+    expect(row.creditCheckProviderRef).toMatch(/^mock_credit_/);
   });
 });

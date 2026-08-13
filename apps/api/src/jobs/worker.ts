@@ -206,7 +206,7 @@ export function startWorkers(): void {
   const screeningRequestWorker = new Worker<ScreeningRequestJobData>(
     QUEUE_NAMES.screeningRequest,
     async (job) => {
-      await runScreeningRequest(job.data.applicationId, job.data.tenantId, job.data.kind);
+      await runScreeningRequest(job.data.applicationId, job.data.tenantId, job.data.kind, job.data.forceMock ?? false);
     },
     { connection: redis },
   );

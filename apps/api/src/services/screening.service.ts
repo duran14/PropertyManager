@@ -133,7 +133,12 @@ export async function triggerScreeningIfConsented(applicationId: string, tenantI
   // `approveScreening`.
   const kindsToEnqueue = kinds.filter((_, index) => initialStatusByKind[index] === 'requested');
   const enqueued = await Promise.allSettled(
-    kindsToEnqueue.map((kind) => screeningRequestQueue.add('run-screening-request', { tenantId, applicationId, kind })),
+    kindsToEnqueue.map((kind) =>
+      // forceMock: true — esta decisión ya se tomó como mock arriba; el job
+      // debe honrarla en vez de volver a resolver el adapter cuando corra
+      // (ver el comentario de `forceMock` en `runScreeningRequest`).
+      screeningRequestQueue.add('run-screening-request', { tenantId, applicationId, kind, forceMock: true }),
+    ),
   );
 
   await Promise.all(
@@ -222,11 +227,25 @@ export async function approveScreening(
  * Envía la solicitud al adapter de screening. Casi siempre vuelve
  * 'pending' (mecanismo de navegador asíncrono) y agenda el primer sondeo;
  * si el adapter resuelve de inmediato, persiste el resultado terminal.
+ *
+ * `forceMock`: cierra una ventana de carrera entre `triggerScreeningIfConsented`
+ * (que decide UNA VEZ si el checkeo es mock o real, y encola sin delay
+ * cuando es mock) y este job, que puede correr más tarde. Si un
+ * property_manager guarda credenciales reales de FrontLobby justo en esa
+ * ventana, una segunda resolución del adapter aquí correría el checkeo
+ * REAL — con cargo de $18.99 — sin haber pasado nunca por
+ * 'awaiting_approval'/`approveScreening`. Cuando el trigger automático ya
+ * decidió mock, `forceMock: true` viaja en el job y este código usa
+ * SIEMPRE el mock, sin volver a consultar la bóveda. `approveScreening` no
+ * manda este flag: ahí la resolución ocurre justo al momento de la
+ * aprobación humana, con las credenciales vigentes en ese instante — no
+ * hay ventana que cerrar.
  */
 export async function runScreeningRequest(
   applicationId: string,
   tenantId: string,
   kind: ScreeningCheckKind,
+  forceMock: boolean = false,
 ): Promise<void> {
   const application = await prisma.rentalApplication.findFirstOrThrow({
     where: { id: applicationId, tenantId },
@@ -250,7 +269,9 @@ export async function runScreeningRequest(
     return;
   }
 
-  const adapter = await getScreeningAdapter(tenantId, kind);
+  const adapter = forceMock
+    ? (await import('../config/adapters.js')).getAdapters().screening
+    : await getScreeningAdapter(tenantId, kind);
   const result = await adapter.runCheck(kind, {
     fullName: application.applicantFullName ?? '',
     firstName: application.applicantFirstName ?? '',
