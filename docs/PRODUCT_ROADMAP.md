@@ -136,23 +136,36 @@
   proveedores de screening (ej. TransUnion SmartMove, Certn, SingleKey). No
   implementado — el pipeline actual corre sobre un `ScreeningMockAdapter`
   (spec Sección 5), intencional mientras no exista una cuenta con API real.
-- **Nivel 2 — browser automation (entregado, detrás de mock):**
-  - Modelo de datos completo en `RentalApplication` (identidad requerida +
-    estado/resumen/reporte por tipo de checkeo, crédito y antecedentes),
-    bóveda de credenciales cifradas (`IntegrationConfig`, rutas
-    `GET`/`POST /integrations`) y pipeline de jobs BullMQ que dispara el
-    screening al enviar la solicitud de renta y persiste el resultado.
-  - UI: pantalla de Integrations para cargar usuario/contraseña de
-    FrontLobby (crédito) y Sterling (antecedentes); resultado del checkeo
-    (estado, resumen, link de descarga del reporte completo) visible en la
-    tarjeta de la aplicación dentro de Showings.
-  - **Bloqueado:** la automatización real del portal (Playwright contra
-    FrontLobby/Sterling, en vez del mock) no puede implementarse ni probarse
-    hasta que exista una cuenta real en cada portal. Cuando se consiga:
-    recolectar URL de login, selector/flujo de la consulta, formato en que
-    cada portal entrega el resultado (HTML embebido vs. PDF descargable) y
-    credenciales de una cuenta de pruebas para grabar el flujo con
-    Playwright.
+
+- **Nivel 2 — browser automation (ENTREGADO, con split real/mock):**
+  - **Checkeo de crédito (FrontLobby) — REAL:**
+    - Automation real con Playwright: ejecución genuina de consultas contra
+      la cuenta de FrontLobby de la agencia.
+    - Charging de $18.99 por consulta: requiere aprobación manual explícita
+      de un miembro del staff (botón de aprobación en Showings). Nada se
+      ejecuta sin confirmación humana.
+    - Notificación al staff: tras cada consulta completada (exitosa o
+      fallida), se envía notificación al canal de staff.
+    - **Nota pendiente de confirmar en primera corrida real:** Los valores
+      exactos de la columna Status en `/tenant-screening/reports` y el
+      selector de descarga del reporte completo quedan por validar en la
+      primera ejecución real en producción.
+  
+  - **Checkeo de antecedentes penales (Sterling) — MOCK (hasta Sterling):**
+    - Permanece en mock hasta que se establezca una cuenta real con Sterling.
+    - Modelo de datos y UI ya preparados para ambas integraciones.
+  
+  - **Infraestructura compartida:**
+    - Modelo de datos completo en `RentalApplication` (identidad requerida +
+      estado/resumen/reporte por tipo de checkeo, crédito y antecedentes),
+      bóveda de credenciales cifradas (`IntegrationConfig`, rutas
+      `GET`/`POST /integrations`) y pipeline de jobs BullMQ que dispara el
+      screening al enviar la solicitud de renta y persiste el resultado.
+    - UI: pantalla de Integrations para cargar usuario/contraseña de
+      FrontLobby (crédito) y Sterling (antecedentes); resultado del checkeo
+      (estado, resumen, link de descarga del reporte completo) visible en la
+      tarjeta de la aplicación dentro de Showings.
+
 - **Nivel 3 — PDF parser / OCR (pendiente):** extracción de datos clave
   mediante visión/OCR si el manager sube el reporte manualmente en PDF. No
   implementado.
