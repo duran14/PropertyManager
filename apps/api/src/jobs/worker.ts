@@ -19,7 +19,38 @@ import { processBankNotification } from '../services/sentinel.service.js';
 import { getAdapters } from '../config/adapters.js';
 import { prisma } from '../config/db.js';
 import { runWeeklyReengagement } from '../services/remarketing.service.js';
-import { pollScreeningResult, runScreeningRequest } from '../services/screening.service.js';
+import { markScreeningTimedOut, pollScreeningResult, runScreeningRequest } from '../services/screening.service.js';
+
+/**
+ * Lógica pura detrás del listener 'failed' del worker de sondeo — separada
+ * de `startWorkers()` para poder probarla con un job-like de mentiras, sin
+ * levantar un Worker de BullMQ real. `job` puede venir `undefined` en el
+ * caso raro en que BullMQ dispara 'failed' sin un job asociado.
+ *
+ * BullMQ emite 'failed' en CADA intento fallido, no solo en el último —
+ * por eso hace falta este chequeo: mientras `attemptsMade` no alcance
+ * `opts.attempts`, todavía va a haber un reintento (el camino normal
+ * mientras el resultado sigue 'pending'). Cuando SÍ lo alcanza, este fue el
+ * último intento — no hay reintento siguiente, así que si nadie actúa aquí
+ * el checkeo se queda en 'pending' para siempre y nadie se entera: el
+ * silent-failure exacto que la constraint global 1 del proyecto prohíbe.
+ */
+export async function handleScreeningPollFailure(
+  job: { id?: string; data: ScreeningPollJobData; attemptsMade: number; opts: { attempts?: number } } | undefined,
+  err: Error,
+): Promise<void> {
+  console.error(`[Screening] Job de sondeo falló/sigue pendiente (${job?.id}):`, err.message);
+  if (!job) return;
+
+  const maxAttempts = job.opts.attempts ?? 0;
+  if (job.attemptsMade < maxAttempts) return; // todavía va a reintentar — camino normal.
+
+  try {
+    await markScreeningTimedOut(job.data.applicationId, job.data.tenantId, job.data.kind);
+  } catch (timeoutErr) {
+    console.error(`[Screening] No se pudo cerrar el sondeo agotado (${job.id}):`, timeoutErr);
+  }
+}
 
 export function startWorkers(): void {
   // Worker de reconciliación diaria.
@@ -132,9 +163,7 @@ export function startWorkers(): void {
     console.error(`[Screening] Job de solicitud falló (${job?.id}):`, err.message);
   });
   screeningPollWorker.on('failed', (job, err) => {
-    // Nivel debug: un intento "fallido" mientras el resultado sigue pending
-    // es el camino normal (ver comentario arriba), no una alarma real.
-    console.error(`[Screening] Job de sondeo falló/sigue pendiente (${job?.id}):`, err.message);
+    void handleScreeningPollFailure(job, err);
   });
 
   console.log('  ⚙️  Workers arrancados (Financial Sentinel: reconciliación + e-Transfer; Remarketing: reactivación semanal; Screening: crédito + antecedentes)');

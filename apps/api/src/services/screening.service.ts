@@ -54,8 +54,29 @@ export async function triggerScreeningIfConsented(applicationId: string, tenantI
     },
   });
 
-  await screeningRequestQueue.add('run-screening-request', { tenantId, applicationId, kind: 'credit' });
-  await screeningRequestQueue.add('run-screening-request', { tenantId, applicationId, kind: 'criminal' });
+  // Promise.allSettled, NO dos `await` secuenciales: con `await` secuencial,
+  // si el enqueue de 'credit' revienta, 'criminal' nunca llega a intentarse
+  // — y el update de arriba ya dejó ambos como 'requested' en la BD. Cada
+  // kind se resuelve de forma independiente; el que falle al encolarse se
+  // cierra como 'failed' de inmediato en vez de quedar 'requested' sin
+  // ningún job detrás (el mismo estado atorado y silencioso que el sondeo
+  // agotado evita más abajo).
+  const kinds: ScreeningCheckKind[] = ['credit', 'criminal'];
+  const enqueued = await Promise.allSettled(
+    kinds.map((kind) => screeningRequestQueue.add('run-screening-request', { tenantId, applicationId, kind })),
+  );
+
+  await Promise.all(
+    enqueued.map(async (settled, index) => {
+      if (settled.status === 'fulfilled') return;
+      const kind = kinds[index];
+      console.error(`[Screening] No se pudo encolar el checkeo de ${kind} para ${applicationId}:`, settled.reason);
+      await persistTerminalResult(applicationId, tenantId, kind, {
+        status: 'failed',
+        reason: 'Could not schedule the screening check',
+      });
+    }),
+  );
 }
 
 /**
@@ -71,6 +92,24 @@ export async function runScreeningRequest(
   const application = await prisma.rentalApplication.findFirstOrThrow({
     where: { id: applicationId, tenantId },
   });
+
+  // Idempotencia: `screeningRequestQueue` reintenta el job completo hasta 3
+  // veces (defaultJobOptions.attempts en queues.ts). Si `runCheck` ya tuvo
+  // éxito en un intento anterior — quedó un providerRef guardado — y lo que
+  // falló fue el paso siguiente (el update de abajo o el enqueue del
+  // sondeo), un reintento NO puede volver a llamar `runCheck`: eso
+  // dispararía una SEGUNDA solicitud real al buró de crédito/antecedentes
+  // para el mismo solicitante. Basta con re-agendar el sondeo con la
+  // referencia que ya existe.
+  const existingProviderRef = application[PROVIDER_REF_FIELD[kind]];
+  if (existingProviderRef) {
+    await screeningPollQueue.add(
+      'poll-screening-result',
+      { tenantId, applicationId, kind, providerRef: existingProviderRef },
+      { delay: 15 * 60_000 },
+    );
+    return;
+  }
 
   const { getAdapters } = await import('../config/adapters.js');
   const result = await getAdapters().screening.runCheck(kind, {
@@ -116,6 +155,25 @@ export async function pollScreeningResult(
 
   await persistTerminalResult(applicationId, tenantId, kind, result);
   return { done: true };
+}
+
+/**
+ * Se llama cuando `screeningPollQueue` agota sus reintentos (10 intentos,
+ * ~2.5h a backoff fijo de 15 min — ver queues.ts) sin que el proveedor haya
+ * dado un resultado terminal. Reutiliza `persistTerminalResult` — la MISMA
+ * vía que cualquier otro resultado 'failed' del adapter — para no tener dos
+ * formas distintas de "cómo se marca un checkeo como fallido" que puedan
+ * divergir entre sí.
+ */
+export async function markScreeningTimedOut(
+  applicationId: string,
+  tenantId: string,
+  kind: ScreeningCheckKind,
+): Promise<void> {
+  await persistTerminalResult(applicationId, tenantId, kind, {
+    status: 'failed',
+    reason: 'Screening result did not arrive after multiple attempts',
+  });
 }
 
 async function persistTerminalResult(

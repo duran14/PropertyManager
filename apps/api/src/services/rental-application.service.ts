@@ -234,7 +234,20 @@ export async function submitRentalApplication(
   }
 
   await notifyStaffOfApplication(application.id, application.tenantId, deps);
-  await triggerScreeningIfConsented(application.id, application.tenantId);
+
+  // Best-effort, igual que notifyStaffOfApplication arriba: la aplicación ya
+  // quedó guardada (status 'submitted', ID document persistido) unas líneas
+  // más arriba. Un throw aquí (o, peor, un hang si Redis está caído: con
+  // maxRetriesPerRequest: null en config/redis.ts, queue.add() no rechaza,
+  // se queda esperando) convertiría un submit exitoso en un 500 — o algo
+  // aún peor — para el prospecto, que además reintentaría y chocaría con el
+  // guard `count === 0` de arriba (409, "ya enviada"), cuando en realidad sí
+  // se envió.
+  try {
+    await triggerScreeningIfConsented(application.id, application.tenantId);
+  } catch (error) {
+    console.error(`[RentalApplication] No se pudo disparar el screening de ${application.id}:`, error);
+  }
 
   return { ok: true, applicationId: application.id };
 }

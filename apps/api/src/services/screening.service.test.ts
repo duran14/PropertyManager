@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { prisma } from '../config/db.js';
-import { pollScreeningResult, runScreeningRequest, triggerScreeningIfConsented } from './screening.service.js';
+import {
+  markScreeningTimedOut,
+  pollScreeningResult,
+  runScreeningRequest,
+  triggerScreeningIfConsented,
+} from './screening.service.js';
 
 const TENANT_ID = 'tenant_test_screening_service';
 
@@ -144,5 +149,74 @@ describe('pollScreeningResult', () => {
     const row = await prisma.rentalApplication.findUniqueOrThrow({ where: { id: applicationId } });
     expect(row.creditCheckStatus).toBe('failed');
     expect(row.creditCheckSummary).toContain('Portal login failed');
+  });
+});
+
+// Finding 1 (review de Tarea 4): un sondeo que agota sus reintentos sin
+// resultado del proveedor no puede quedar 'pending' para siempre.
+// `markScreeningTimedOut` es la función que el worker llama al detectar el
+// agotamiento (ver worker.screening.test.ts para la lógica de detección).
+describe('markScreeningTimedOut', () => {
+  it('cierra el checkeo como failed con un resumen de timeout y notifica al staff', async () => {
+    const { applicationId } = await seed();
+    await runScreeningRequest(applicationId, TENANT_ID, 'credit');
+
+    const { getAdapters } = await import('../config/adapters.js');
+    const emailSpy = vi.spyOn(getAdapters().messaging.email, 'send');
+
+    await markScreeningTimedOut(applicationId, TENANT_ID, 'credit');
+
+    const row = await prisma.rentalApplication.findUniqueOrThrow({ where: { id: applicationId } });
+    expect(row.creditCheckStatus).toBe('failed');
+    expect(row.creditCheckSummary).toMatch(/did not arrive/i);
+    expect(row.creditCheckCompletedAt).not.toBeNull();
+    expect(emailSpy).toHaveBeenCalled();
+  });
+});
+
+// Finding 4: un reintento de BullMQ (attempts: 3 en screeningRequestQueue)
+// no debe volver a llamar runCheck si ya se envió con éxito — eso
+// dispararía una segunda solicitud real al proveedor.
+describe('runScreeningRequest — idempotencia', () => {
+  it('si ya existe un providerRef, no repite runCheck y solo reencola el sondeo', async () => {
+    const { applicationId } = await seed();
+    await runScreeningRequest(applicationId, TENANT_ID, 'credit');
+    const midway = await prisma.rentalApplication.findUniqueOrThrow({ where: { id: applicationId } });
+    const firstProviderRef = midway.creditCheckProviderRef;
+    expect(firstProviderRef).toMatch(/^mock_credit_/);
+
+    const { getAdapters } = await import('../config/adapters.js');
+    const runCheckSpy = vi.spyOn(getAdapters().screening, 'runCheck');
+
+    await runScreeningRequest(applicationId, TENANT_ID, 'credit');
+
+    expect(runCheckSpy).not.toHaveBeenCalled();
+    const row = await prisma.rentalApplication.findUniqueOrThrow({ where: { id: applicationId } });
+    expect(row.creditCheckProviderRef).toBe(firstProviderRef);
+    expect(row.creditCheckStatus).toBe('pending');
+  });
+});
+
+// Finding 3: los dos enqueues de triggerScreeningIfConsented son
+// independientes — el fallo de uno no debe dejar al otro (ni a sí mismo)
+// como 'requested' sin ningún job detrás.
+describe('triggerScreeningIfConsented — fallo al encolar', () => {
+  it('si un enqueue falla, ese checkeo se cierra failed sin bloquear al otro', async () => {
+    const { applicationId } = await seed();
+
+    const { screeningRequestQueue } = await import('../jobs/queues.js');
+    type AddResult = Awaited<ReturnType<typeof screeningRequestQueue.add>>;
+    const addSpy = vi.spyOn(screeningRequestQueue, 'add')
+      .mockResolvedValueOnce({} as AddResult) // credit: encola bien
+      .mockRejectedValueOnce(new Error('Redis unavailable')); // criminal: revienta
+
+    await triggerScreeningIfConsented(applicationId, TENANT_ID);
+
+    const row = await prisma.rentalApplication.findUniqueOrThrow({ where: { id: applicationId } });
+    expect(row.creditCheckStatus).toBe('requested');
+    expect(row.criminalCheckStatus).toBe('failed');
+    expect(row.criminalCheckSummary).toContain('Could not schedule');
+
+    addSpy.mockRestore();
   });
 });
