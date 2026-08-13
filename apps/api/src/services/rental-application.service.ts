@@ -193,8 +193,16 @@ export async function submitRentalApplication(
   if (!input.applicantFullName.trim()) {
     return { ok: false, status: 400, error: 'applicantFullName is required' };
   }
-  if (!input.dateOfBirth.trim()) {
-    return { ok: false, status: 400, error: 'dateOfBirth is required' };
+  // El endpoint público no tiene auth: alguien puede pegarle al POST
+  // directo saltándose el `type="date"` del navegador. Sin validar que
+  // parsea, un string tipo "garbage" pasa el `.trim()` y explota más abajo
+  // en `new Date(...)` dentro del `updateMany` — Prisma revienta al
+  // serializar un Invalid Date, y como la ruta solo hace `next(err)`, eso
+  // se convierte en un 500 crudo en vez del 400 limpio que este bloque
+  // busca dar para input público inválido.
+  const parsedDateOfBirth = new Date(input.dateOfBirth);
+  if (!input.dateOfBirth.trim() || Number.isNaN(parsedDateOfBirth.getTime())) {
+    return { ok: false, status: 400, error: 'A valid dateOfBirth is required' };
   }
   if (!input.currentAddress.trim() || !input.currentCity.trim() || !input.currentProvince.trim() || !input.currentPostalCode.trim()) {
     return { ok: false, status: 400, error: 'A complete current address is required' };
@@ -238,7 +246,7 @@ export async function submitRentalApplication(
       employerName: input.employerName ?? null,
       references: input.references ?? null,
       applicantFullName: input.applicantFullName.trim(),
-      dateOfBirth: new Date(input.dateOfBirth),
+      dateOfBirth: parsedDateOfBirth,
       currentAddress: input.currentAddress.trim(),
       currentCity: input.currentCity.trim(),
       currentProvince: input.currentProvince.trim(),

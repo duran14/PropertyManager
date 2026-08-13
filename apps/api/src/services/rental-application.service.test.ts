@@ -369,6 +369,23 @@ describe('submitRentalApplication', () => {
     expect(result).toEqual({ ok: false, status: 400, error: expect.stringContaining('dateOfBirth') });
   });
 
+  // El endpoint público no tiene auth: un POST directo (sin pasar por el
+  // `type="date"` del formulario) puede mandar cualquier string. Un valor
+  // no vacío pero no parseable como fecha debe seguir dando 400, no un 500
+  // al reventar `new Date(...)` dentro del `updateMany` de Prisma.
+  it('rechaza el envío con una fecha de nacimiento no parseable', async () => {
+    const { token } = await seedInvitedApplication();
+    const { messaging } = fakeMessaging();
+
+    const result = await submitRentalApplication(
+      token,
+      { ...validSubmission(), dateOfBirth: 'garbage' },
+      { messaging },
+    );
+
+    expect(result).toEqual({ ok: false, status: 400, error: expect.stringContaining('dateOfBirth') });
+  });
+
   it('guarda fecha de nacimiento y dirección al enviar', async () => {
     const { token } = await seedInvitedApplication();
     const { messaging } = fakeMessaging();
