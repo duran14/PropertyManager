@@ -7,6 +7,7 @@
  */
 import { prisma } from '../config/db.js';
 import { decrypt, encrypt } from '../config/crypto.js';
+import { writeAudit } from './audit.service.js';
 
 export type ScreeningProvider = 'frontlobby_portal' | 'sterling_portal';
 
@@ -20,6 +21,11 @@ export async function saveIntegrationCredentials(input: {
   provider: ScreeningProvider;
   username: string;
   password: string;
+  // Quién guardó/reemplazó la credencial. Opcional porque el servicio no
+  // depende de auth, pero el router siempre lo manda (requireAuth garantiza
+  // req.user) — sin esto, plantar o pisar la contraseña de una agencia
+  // quedaba sin ningún rastro.
+  userId?: string;
 }): Promise<void> {
   const payload: VaultCredentials = { username: input.username, password: input.password };
   await prisma.integrationConfig.upsert({
@@ -31,6 +37,19 @@ export async function saveIntegrationCredentials(input: {
       encryptedCredentials: encrypt(JSON.stringify(payload)),
       status: 'pending',
     },
+  });
+
+  // Nunca se audita username/password, solo qué proveedor cambió y quién lo
+  // hizo — mismo patrón que calendar-connection.service.ts para credenciales
+  // de terceros.
+  await writeAudit({
+    tenantId: input.tenantId,
+    actorId: input.userId ?? 'system',
+    actorType: input.userId ? 'user' : 'system',
+    action: 'integration.credentials_saved',
+    entityType: 'integration_config',
+    entityId: input.provider,
+    payload: { provider: input.provider },
   });
 }
 

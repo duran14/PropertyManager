@@ -87,3 +87,27 @@ describe('listIntegrationStatuses', () => {
     ]);
   });
 });
+
+describe('saveIntegrationCredentials — audit trail', () => {
+  it('escribe exactamente una entrada de auditoría con el proveedor, sin datos de la credencial', async () => {
+    await saveIntegrationCredentials({
+      tenantId: TENANT_ID,
+      provider: 'frontlobby_portal',
+      username: 'agency@example.com',
+      password: 'super-secret-pw',
+      userId: 'user_test_vault_audit',
+    });
+
+    const entries = await prisma.auditEntry.findMany({
+      where: { tenantId: TENANT_ID, entityType: 'integration_config' },
+    });
+    expect(entries).toHaveLength(1);
+    expect(entries[0].action).toBe('integration.credentials_saved');
+    expect(entries[0].actorId).toBe('user_test_vault_audit');
+    expect(entries[0].payload).toEqual({ provider: 'frontlobby_portal' });
+
+    const serializedPayload = JSON.stringify(entries[0].payload);
+    expect(serializedPayload).not.toContain('agency@example.com');
+    expect(serializedPayload).not.toContain('super-secret-pw');
+  });
+});

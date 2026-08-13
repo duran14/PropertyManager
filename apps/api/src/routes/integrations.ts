@@ -43,7 +43,7 @@ integrationsRouter.post('/', requireAuth, requireRole('property_manager'), async
       res.status(400).json({ error: 'Invalid credentials payload' });
       return;
     }
-    await saveIntegrationCredentials({ tenantId: user.tenantId, ...parsed.data });
+    await saveIntegrationCredentials({ tenantId: user.tenantId, userId: user.userId, ...parsed.data });
     res.status(200).json({ ok: true });
   } catch (err) {
     next(err);

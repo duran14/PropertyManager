@@ -31,6 +31,22 @@ import { webhookConfigRouter } from './routes/webhook-config.js';
 import { googleCalendarRouter } from './routes/integrations.google-calendar.js';
 import { integrationsRouter } from './routes/integrations.js';
 
+/**
+ * body-parser marca los errores de JSON.parse con `type ===
+ * 'entity.parse.failed'` (verificado empíricamente contra la versión
+ * instalada). Es la única señal fiable para distinguirlos de cualquier otro
+ * error — el texto de err.message varía por versión de Node/V8 y no hay que
+ * confiar en su forma.
+ */
+function isJsonBodyParseError(err: unknown): boolean {
+  return (
+    typeof err === 'object' &&
+    err !== null &&
+    'type' in err &&
+    (err as { type?: unknown }).type === 'entity.parse.failed'
+  );
+}
+
 export function createApp(): express.Application {
   const env = getEnv();
   const app = express();
@@ -86,6 +102,15 @@ export function createApp(): express.Application {
   });
 
   app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    // express.json() (body-parser) falla el parseo ANTES de que cualquier
+    // route handler corra, y su err.message puede embeber un fragmento
+    // crudo del body — que para rutas como POST /integrations puede ser una
+    // contraseña en claro que el usuario acaba de escribir. Se corta acá,
+    // antes de la rama de abajo que hace echo de err.message en no-prod.
+    if (isJsonBodyParseError(err)) {
+      res.status(400).json({ error: 'Invalid JSON in request body' });
+      return;
+    }
     const message = err instanceof Error ? err.message : 'Internal error';
     if (env.NODE_ENV === 'production') {
       res.status(500).json({ error: 'Internal error' });
