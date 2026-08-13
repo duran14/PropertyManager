@@ -67,12 +67,14 @@ export function ApplyPage() {
       annualIncome: form.get('annualIncome') ? Number(form.get('annualIncome')) : null,
       employerName: form.get('employerName') || null,
       references: form.get('references') || null,
-      applicantFullName: String(form.get('applicantFullName') ?? ''),
+      applicantFirstName: String(form.get('applicantFirstName') ?? ''),
+      applicantLastName: String(form.get('applicantLastName') ?? ''),
       dateOfBirth: String(form.get('dateOfBirth') ?? ''),
       currentAddress: String(form.get('currentAddress') ?? ''),
       currentCity: String(form.get('currentCity') ?? ''),
       currentProvince: String(form.get('currentProvince') ?? ''),
       currentPostalCode: String(form.get('currentPostalCode') ?? ''),
+      currentAddressStartDate: String(form.get('currentAddressStartDate') ?? ''),
       consentApplication: form.get('consentApplication') === 'on',
       consentCreditCheck: form.get('consentCreditCheck') === 'on',
       consentPoliceCheck: form.get('consentPoliceCheck') === 'on',
@@ -162,7 +164,8 @@ export function ApplyPage() {
 
         <label className="block">
           <span className="text-sm font-medium text-slate-700">Full legal name (acts as your signature)</span>
-          <input name="applicantFullName" type="text" required className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2" />
+          <input name="applicantFirstName" type="text" required placeholder="First name" className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2" />
+          <input name="applicantLastName" type="text" required placeholder="Last name" className="mt-1 mt-2 w-full rounded-md border border-slate-300 px-3 py-2" />
         </label>
 
         <label className="block">
@@ -180,6 +183,11 @@ export function ApplyPage() {
           <input name="currentProvince" type="text" required placeholder="Province" className="mt-1 rounded-md border border-slate-300 px-3 py-2" />
           <input name="currentPostalCode" type="text" required placeholder="Postal code" className="mt-1 rounded-md border border-slate-300 px-3 py-2" />
         </div>
+
+        <label className="block">
+          <span className="text-sm font-medium text-slate-700">Date you moved into your current address</span>
+          <input name="currentAddressStartDate" type="date" required className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2" />
+        </label>
 
         {error && (
           <p role="alert" aria-live="polite" className="text-sm text-red-600">

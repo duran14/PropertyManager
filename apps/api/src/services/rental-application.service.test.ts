@@ -7,6 +7,7 @@ import {
   getPublicRentalApplication,
   hashApplicationToken,
   submitRentalApplication,
+  type SubmitApplicationInput,
 } from './rental-application.service.js';
 
 const TENANT_ID = 'tenant_test_rental_application';
@@ -281,12 +282,15 @@ describe('completeShowingAndInvite', () => {
   });
 });
 
-function validSubmission() {
+function validSubmission(overrides: Partial<SubmitApplicationInput> = {}): SubmitApplicationInput {
   return {
     annualIncome: 82000,
     employerName: 'Acme Corp',
     references: 'Jane Doe — previous landlord — 604-555-0111',
     applicantFullName: 'Carlos Duran',
+    // Fase 2.2: FrontLobby pide nombre y apellido por separado.
+    applicantFirstName: 'Carlos',
+    applicantLastName: 'Duran',
     // Task 5: requeridos para que el screening de crédito/antecedentes
     // tenga con qué hacer match del solicitante.
     dateOfBirth: '1990-05-15',
@@ -294,12 +298,14 @@ function validSubmission() {
     currentCity: 'Vancouver',
     currentProvince: 'British Columbia',
     currentPostalCode: 'V6B 1A1',
+    currentAddressStartDate: '2022-01-01',
     consentApplication: true,
     consentCreditCheck: true,
     consentPoliceCheck: true,
     idDocumentFilename: 'id.png',
     idDocumentMimeType: 'image/png',
     idDocumentBase64: Buffer.from('fake-image-bytes').toString('base64'),
+    ...overrides,
   };
 }
 
@@ -316,6 +322,30 @@ async function seedInvitedApplication() {
 describe('submitRentalApplication', () => {
   beforeEach(cleanup);
   afterEach(cleanup);
+
+  // Fase 2.2 (adapter real de FrontLobby): nombre y apellido separados en
+  // vez de un único `applicantFullName` de texto libre — FrontLobby los
+  // pide así en su formulario.
+  it('rechaza applicantFirstName vacío con 400', async () => {
+    const { token } = await seedInvitedApplication();
+    const result = await submitRentalApplication(token, validSubmission({ applicantFirstName: '' }), { messaging: fakeMessaging().messaging });
+    expect(result).toEqual({ ok: false, status: 400, error: expect.stringContaining('applicantFirstName') });
+  });
+
+  it('rechaza currentAddressStartDate no parseable con 400, no 500', async () => {
+    const { token } = await seedInvitedApplication();
+    const result = await submitRentalApplication(token, validSubmission({ currentAddressStartDate: 'garbage' }), { messaging: fakeMessaging().messaging });
+    expect(result).toEqual({ ok: false, status: 400, error: expect.stringContaining('currentAddressStartDate') });
+  });
+
+  it('guarda applicantFirstName/applicantLastName y deriva applicantFullName', async () => {
+    const { token, application } = await seedInvitedApplication();
+    await submitRentalApplication(token, validSubmission({ applicantFirstName: 'Ana', applicantLastName: 'García' }), { messaging: fakeMessaging().messaging });
+    const row = await prisma.rentalApplication.findUniqueOrThrow({ where: { id: application.id } });
+    expect(row.applicantFirstName).toBe('Ana');
+    expect(row.applicantLastName).toBe('García');
+    expect(row.applicantFullName).toBe('Ana García');
+  });
 
   it('stores every field and all three consent timestamps', async () => {
     const { token, application } = await seedInvitedApplication();
@@ -414,9 +444,12 @@ describe('submitRentalApplication', () => {
     const { token } = await seedInvitedApplication();
     const { messaging } = fakeMessaging();
 
+    // Fase 2.2: `applicantFullName` ya no se valida (se deriva de
+    // first+last) — el chequeo de "sin nombre" ahora vive en
+    // applicantFirstName/applicantLastName.
     const result = await submitRentalApplication(
       token,
-      { ...validSubmission(), applicantFullName: '   ' },
+      { ...validSubmission(), applicantFirstName: '   ' },
       { messaging },
     );
 

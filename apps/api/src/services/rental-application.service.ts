@@ -146,6 +146,12 @@ export interface SubmitApplicationInput {
   employerName?: string | null;
   references?: string | null;
   applicantFullName: string;
+  // Fase 2.2 (adapter real): FrontLobby pide nombre y apellido por
+  // separado. applicantFullName se sigue aceptando (derivado en el
+  // frontend o el propio caller) por si algún consumidor viejo todavía lo
+  // manda, pero ya no se usa para nada — se deriva de first+last aquí.
+  applicantFirstName: string;
+  applicantLastName: string;
   // Requeridos (a diferencia de los campos financieros/laborales de arriba):
   // el screening de crédito/antecedentes (Task 4) no puede correr sin
   // identidad — fecha de nacimiento y dirección actual son insumo mínimo
@@ -155,6 +161,7 @@ export interface SubmitApplicationInput {
   currentCity: string;
   currentProvince: string;
   currentPostalCode: string;
+  currentAddressStartDate: string; // ISO date
   consentApplication: boolean;
   consentCreditCheck: boolean;
   consentPoliceCheck: boolean;
@@ -218,8 +225,11 @@ export async function submitRentalApplication(
   if (missingConsents.length > 0) {
     return { ok: false, status: 400, error: `Missing required consent: ${missingConsents.join(', ')}` };
   }
-  if (!input.applicantFullName.trim()) {
-    return { ok: false, status: 400, error: 'applicantFullName is required' };
+  if (!input.applicantFirstName.trim()) {
+    return { ok: false, status: 400, error: 'applicantFirstName is required' };
+  }
+  if (!input.applicantLastName.trim()) {
+    return { ok: false, status: 400, error: 'applicantLastName is required' };
   }
   // El endpoint público no tiene auth: alguien puede pegarle al POST
   // directo saltándose el `type="date"` del navegador. Sin validar que
@@ -231,6 +241,12 @@ export async function submitRentalApplication(
   const parsedDateOfBirth = new Date(input.dateOfBirth);
   if (!input.dateOfBirth.trim() || Number.isNaN(parsedDateOfBirth.getTime())) {
     return { ok: false, status: 400, error: 'A valid dateOfBirth is required' };
+  }
+  // Mismo patrón que dateOfBirth arriba: input público sin auth, tiene que
+  // parsear como fecha real antes de llegar a Prisma.
+  const parsedAddressStartDate = new Date(input.currentAddressStartDate);
+  if (!input.currentAddressStartDate.trim() || Number.isNaN(parsedAddressStartDate.getTime())) {
+    return { ok: false, status: 400, error: 'A valid currentAddressStartDate is required' };
   }
   if (!input.currentAddress.trim() || !input.currentCity.trim() || !input.currentProvince.trim() || !input.currentPostalCode.trim()) {
     return { ok: false, status: 400, error: 'A complete current address is required' };
@@ -273,12 +289,15 @@ export async function submitRentalApplication(
       annualIncome: input.annualIncome ?? null,
       employerName: input.employerName ?? null,
       references: input.references ?? null,
-      applicantFullName: input.applicantFullName.trim(),
+      applicantFirstName: input.applicantFirstName.trim(),
+      applicantLastName: input.applicantLastName.trim(),
+      applicantFullName: `${input.applicantFirstName.trim()} ${input.applicantLastName.trim()}`,
       dateOfBirth: parsedDateOfBirth,
       currentAddress: input.currentAddress.trim(),
       currentCity: input.currentCity.trim(),
       currentProvince: input.currentProvince.trim(),
       currentPostalCode: input.currentPostalCode.trim(),
+      currentAddressStartDateAt: parsedAddressStartDate,
       idDocumentStorageKey,
       consentApplicationAt: now,
       consentCreditCheckAt: now,
