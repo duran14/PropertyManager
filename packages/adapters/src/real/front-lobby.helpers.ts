@@ -78,14 +78,27 @@ export function parseRowDate(rowText: string): Date | null {
 /**
  * True si `candidateDate` (normalmente el resultado ya truncado a día que
  * devuelve `parseRowDate`) cae en el mismo día calendario (UTC) que
- * `submittedAtIso`, o después. Se compara por día calendario, no por
- * timestamp exacto: `parseRowDate` casi siempre solo puede leer una fecha
- * sin hora de la fila de la tabla, y el reporte normalmente se genera
- * horas después del envío el MISMO día — comparar contra el timestamp
- * completo del envío (con hora) descartaría ese caso normal casi siempre,
- * porque medianoche UTC de un día es siempre anterior a cualquier hora
- * posterior de ese mismo día. Si `submittedAtIso` no parsea a una fecha
- * válida, devuelve `false` (no hay base para decidir "en o después").
+ * `submittedAtIso`, o después — con 24h de tolerancia hacia atrás sobre el
+ * piso de comparación. Se compara por día calendario, no por timestamp
+ * exacto: `parseRowDate` casi siempre solo puede leer una fecha sin hora
+ * de la fila de la tabla, y el reporte normalmente se genera horas
+ * después del envío el MISMO día — comparar contra el timestamp completo
+ * del envío (con hora) descartaría ese caso normal casi siempre.
+ *
+ * La tolerancia de 24h existe porque `parseRowDate` puede parsear su
+ * segundo patrón ("Aug 13, 2026") como medianoche LOCAL del proceso que
+ * corre el worker (comportamiento de `new Date(string)` en JS para fechas
+ * no-ISO), mientras que este truncado siempre usa UTC — en cualquier huso
+ * horario detrás de UTC (Europe/London, Europe/Berlin, Asia/Tokyo,
+ * Australia/Sydney, etc.) esas dos medianoches no coinciden y, sin esta
+ * tolerancia, una fila del MISMO día del envío nunca matchearía: el
+ * checkeo se quedaría en `pending` para siempre (agotando reintentos)
+ * aunque el reporte ya se haya generado y pagado. El costo de esta
+ * tolerancia — aceptar de más una fila del día calendario anterior — es
+ * mucho menor que no matchear nunca, y sigue descartando reportes viejos
+ * de semanas atrás (el motivo original de este filtro por fecha). Si
+ * `submittedAtIso` no parsea a una fecha válida, devuelve `false` (no hay
+ * base para decidir "en o después").
  */
 export function isOnOrAfterSubmittedDay(candidateDate: Date, submittedAtIso: string): boolean {
   const submittedAt = new Date(submittedAtIso);
@@ -95,7 +108,8 @@ export function isOnOrAfterSubmittedDay(candidateDate: Date, submittedAtIso: str
     submittedAt.getUTCMonth(),
     submittedAt.getUTCDate(),
   );
-  return candidateDate.getTime() >= submittedAtDayStart;
+  const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+  return candidateDate.getTime() >= submittedAtDayStart - ONE_DAY_MS;
 }
 
 /**

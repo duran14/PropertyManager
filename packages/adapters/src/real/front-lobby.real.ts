@@ -184,6 +184,16 @@ export class FrontLobbyScreeningAdapter implements ScreeningAdapter {
       if (!fullName.trim()) {
         return { status: 'failed', reason: 'providerRef does not contain a usable applicant full name' };
       }
+      // `submittedAtIso` es lo único que permite a `isOnOrAfterSubmittedDay`
+      // desambiguar filas más abajo — si viene vacío (providerRef
+      // malformado), ninguna fila podría matchear NUNCA (el checkeo se
+      // quedaría en `pending` hasta agotar reintentos, aunque el reporte
+      // real ya se haya generado y pagado). Se rechaza acá con el mismo
+      // tratamiento que el guard de `fullName` vacío, en vez de sondear en
+      // vano por horas.
+      if (!submittedAtIso.trim()) {
+        return { status: 'failed', reason: 'providerRef does not contain a usable submission timestamp' };
+      }
       return await this.withBrowser(async (page) => {
         await page.goto(`${FRONTLOBBY_BASE_URL}/tenant-screening/reports`);
         await page.fill('input[placeholder="Search for applicant or property"]', fullName);

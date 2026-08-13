@@ -85,14 +85,37 @@ describe('isOnOrAfterSubmittedDay', () => {
     expect(isOnOrAfterSubmittedDay(rowDate, '2026-08-13T15:00:00.000Z')).toBe(true);
   });
 
-  it('una fila de un día calendario anterior NO cuenta', () => {
+  it('una fila del día calendario anterior SÍ cuenta — tolerancia de 24h sobre el piso de comparación', () => {
+    // La tolerancia existe porque el segundo patrón de parseRowDate
+    // ("Aug 13, 2026") se parsea como medianoche LOCAL del proceso, no
+    // UTC — en un huso detrás de UTC, una fila del MISMO día del envío
+    // puede caer, en términos UTC, en el día calendario anterior. Sin
+    // tolerancia, esa fila (que sí es del envío correcto) nunca matchea.
     const rowDate = new Date('2026-08-12T00:00:00.000Z');
+    expect(isOnOrAfterSubmittedDay(rowDate, '2026-08-13T15:00:00.000Z')).toBe(true);
+  });
+
+  it('una fila de DOS días calendario antes (fuera de la tolerancia de 24h) NO cuenta', () => {
+    const rowDate = new Date('2026-08-11T00:00:00.000Z');
     expect(isOnOrAfterSubmittedDay(rowDate, '2026-08-13T15:00:00.000Z')).toBe(false);
   });
 
   it('un submittedAtIso que no parsea nunca cuenta como match (no se adivina)', () => {
     const rowDate = new Date('2026-08-13T00:00:00.000Z');
     expect(isOnOrAfterSubmittedDay(rowDate, 'not-a-date')).toBe(false);
+  });
+
+  it('regresión: una fila parseada DE VERDAD con el patrón "Aug 13, 2026" (parseado como medianoche LOCAL del proceso, no UTC) matchea el envío del mismo día calendario, sin importar el huso horario del host', () => {
+    // A diferencia de los tests de arriba, que construyen el Date a mano
+    // en UTC, este usa parseRowDate de verdad — así es como se reprodujo
+    // NUEVO-6: en Europe/London, Europe/Berlin, Asia/Tokyo,
+    // Australia/Sydney, etc. el Date resultante de "Aug 13, 2026" no cae
+    // en medianoche UTC del 13, y sin la tolerancia de 24h el match fallaba
+    // silenciosamente (el checkeo se quedaba en pending para siempre).
+    const submittedAtIso = '2026-08-13T15:00:00.000Z';
+    const rowDate = parseRowDate('Jane Prospect Aug 13, 2026 Complete');
+    expect(rowDate).not.toBeNull();
+    expect(isOnOrAfterSubmittedDay(rowDate!, submittedAtIso)).toBe(true);
   });
 });
 
