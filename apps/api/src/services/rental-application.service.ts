@@ -171,6 +171,34 @@ export type SubmitApplicationResult =
 // real una vez decodificado el base64).
 const MAX_ID_DOCUMENT_BASE64_LENGTH = 1_500_000;
 
+/**
+ * Tope de espera del disparo del screening dentro del request HTTP. Muy por
+ * debajo del timeout por default de Node (300s) — ver el comentario largo en
+ * `submitRentalApplication`.
+ */
+const SCREENING_TRIGGER_TIMEOUT_MS = 8_000;
+
+/**
+ * `Promise.race` contra un timeout, limpiando el temporizador al terminar
+ * para no dejar un handle vivo. El timer va `unref`eado: si la carrera la
+ * gana la operación, un temporizador pendiente nunca debe mantener despierto
+ * al proceso (ni colgar el runner de tests).
+ */
+async function raceWithTimeout<T>(operation: Promise<T>, timeoutMs: number): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(`Operation timed out after ${timeoutMs}ms`)), timeoutMs);
+        timer.unref();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 export async function submitRentalApplication(
   token: string,
   input: SubmitApplicationInput,
@@ -265,17 +293,26 @@ export async function submitRentalApplication(
 
   // Best-effort, igual que notifyStaffOfApplication arriba: la aplicación ya
   // quedó guardada (status 'submitted', ID document persistido) unas líneas
-  // más arriba. Un throw aquí (o, peor, un hang si Redis está caído: con
-  // maxRetriesPerRequest: null en config/redis.ts, queue.add() no rechaza,
-  // se queda esperando) convertiría un submit exitoso en un 500 — o algo
-  // aún peor — para el prospecto, que además reintentaría y chocaría con el
-  // guard `count === 0` de arriba (409, "ya enviada"), cuando en realidad sí
-  // se envió.
-  try {
-    await triggerScreeningIfConsented(application.id, application.tenantId);
-  } catch (error) {
+  // más arriba. Un throw aquí convertiría un submit exitoso en un 500 para
+  // el prospecto, que además reintentaría y chocaría con el guard
+  // `count === 0` de arriba (409, "ya enviada"), cuando en realidad sí se
+  // envió.
+  //
+  // El try/catch solo cubre el throw. El caso peor es un HANG: `config/redis.ts`
+  // configura ioredis con `maxRetriesPerRequest: null` (BullMQ lo exige) y sin
+  // desactivar `enableOfflineQueue` (default `true`), así que con Redis caído
+  // el `queue.add()` de adentro no resuelve NI rechaza — se queda en la cola
+  // offline de ioredis. Un catch no atrapa un hang: el POST público
+  // `/applications/:token` quedaría colgado hasta el timeout de Node (300s).
+  // Por eso la carrera contra un timeout corto: si gana el timeout, se trata
+  // igual que el catch (loguear y seguir). La operación de fondo se deja
+  // correr — el request HTTP simplemente deja de esperarla.
+  await raceWithTimeout(
+    triggerScreeningIfConsented(application.id, application.tenantId),
+    SCREENING_TRIGGER_TIMEOUT_MS,
+  ).catch((error: unknown) => {
     console.error(`[RentalApplication] No se pudo disparar el screening de ${application.id}:`, error);
-  }
+  });
 
   return { ok: true, applicationId: application.id };
 }
