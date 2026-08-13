@@ -19,7 +19,64 @@ import { processBankNotification } from '../services/sentinel.service.js';
 import { getAdapters } from '../config/adapters.js';
 import { prisma } from '../config/db.js';
 import { runWeeklyReengagement } from '../services/remarketing.service.js';
-import { markScreeningTimedOut, pollScreeningResult, runScreeningRequest } from '../services/screening.service.js';
+import {
+  markScreeningRequestFailed,
+  markScreeningTimedOut,
+  pollScreeningResult,
+  runScreeningRequest,
+} from '../services/screening.service.js';
+
+/** Forma mínima de un job de BullMQ que necesitan los handlers de 'failed'. */
+type FailedJobLike<TData> = {
+  id?: string;
+  data: TData;
+  attemptsMade: number;
+  opts: { attempts?: number };
+  /**
+   * Campo público de `Job` en BullMQ 5.x. Cuando el chequeo de jobs
+   * atascados supera `maxStalledCount`, el script Lua
+   * `moveStalledJobsToWait` NO falla el job ahí mismo: escribe el motivo en
+   * el hash del job (campo `defa` → `deferredFailure`) y lo devuelve a
+   * 'wait'. Al retomarlo, el worker ve ese campo y falla el job con un
+   * `UnrecoverableError`.
+   */
+  deferredFailure?: string;
+};
+
+/**
+ * ¿Este 'failed' fue el ÚLTIMO, o BullMQ todavía va a reintentar el job?
+ *
+ * BullMQ emite 'failed' en CADA intento fallido, no solo en el último, así
+ * que sin este chequeo cerraríamos el checkeo en el primer tropiezo. El
+ * criterio replica el que usa BullMQ internamente (`Job.shouldRetryJob` en
+ * bullmq 5.79.3): NO hay reintento cuando se agotaron los intentos O
+ * cuando el error es irrecuperable.
+ *
+ * Se decidió por el criterio general ("cualquier fallo sin reintento
+ * pendiente es un cierre") en vez de detectar el caso "stalled" en
+ * particular: un job atascado no es la única forma de terminar en 'failed'
+ * con `attemptsMade` todavía bajo — cualquier `UnrecoverableError` (el
+ * deferred failure del stalled, `maxStartedAttempts`) hace lo mismo, y
+ * todas dejan el checkeo colgado igual. Detectar solo "stalled" arreglaría
+ * un disparador y dejaría los otros abiertos, además de atarnos al texto
+ * exacto del mensaje de BullMQ.
+ */
+export function isFinalJobFailure(
+  job: { attemptsMade: number; opts: { attempts?: number }; deferredFailure?: string },
+  err: Error,
+): boolean {
+  // Camino normal: se consumieron todos los intentos configurados
+  // (`attemptsMade` ya viene incrementado cuando BullMQ emite 'failed').
+  if (job.attemptsMade >= (job.opts.attempts ?? 0)) return true;
+  // Irrecuperable: BullMQ no reintenta pase lo que pase (incluye el job
+  // atascado, que llega aquí como UnrecoverableError con el motivo diferido).
+  if (err.name === 'UnrecoverableError') return true;
+  if (job.deferredFailure) return true;
+  // Red de seguridad por si una versión distinta de BullMQ 5.x reporta el
+  // job atascado como un Error común en vez de UnrecoverableError.
+  if (/stalled more than allowable limit/i.test(err.message)) return true;
+  return false;
+}
 
 /**
  * Lógica pura detrás del listener 'failed' del worker de sondeo — separada
@@ -27,28 +84,48 @@ import { markScreeningTimedOut, pollScreeningResult, runScreeningRequest } from 
  * levantar un Worker de BullMQ real. `job` puede venir `undefined` en el
  * caso raro en que BullMQ dispara 'failed' sin un job asociado.
  *
- * BullMQ emite 'failed' en CADA intento fallido, no solo en el último —
- * por eso hace falta este chequeo: mientras `attemptsMade` no alcance
- * `opts.attempts`, todavía va a haber un reintento (el camino normal
- * mientras el resultado sigue 'pending'). Cuando SÍ lo alcanza, este fue el
- * último intento — no hay reintento siguiente, así que si nadie actúa aquí
- * el checkeo se queda en 'pending' para siempre y nadie se entera: el
- * silent-failure exacto que la constraint global 1 del proyecto prohíbe.
+ * Si nadie actúa cuando ya no habrá reintento, el checkeo se queda en
+ * 'pending' para siempre y nadie se entera: el silent-failure exacto que la
+ * constraint global 1 del proyecto prohíbe.
  */
 export async function handleScreeningPollFailure(
-  job: { id?: string; data: ScreeningPollJobData; attemptsMade: number; opts: { attempts?: number } } | undefined,
+  job: FailedJobLike<ScreeningPollJobData> | undefined,
   err: Error,
 ): Promise<void> {
   console.error(`[Screening] Job de sondeo falló/sigue pendiente (${job?.id}):`, err.message);
   if (!job) return;
-
-  const maxAttempts = job.opts.attempts ?? 0;
-  if (job.attemptsMade < maxAttempts) return; // todavía va a reintentar — camino normal.
+  if (!isFinalJobFailure(job, err)) return; // todavía va a reintentar — camino normal.
 
   try {
     await markScreeningTimedOut(job.data.applicationId, job.data.tenantId, job.data.kind);
   } catch (timeoutErr) {
     console.error(`[Screening] No se pudo cerrar el sondeo agotado (${job.id}):`, timeoutErr);
+  }
+}
+
+/**
+ * Simétrica de `handleScreeningPollFailure`, para la cola de SOLICITUD.
+ *
+ * Camino real de falla que esto cubre: `runCheck` devuelve 'pending', se
+ * guarda el providerRef, y el `screeningPollQueue.add()` que sigue revienta
+ * (Redis parpadeando). BullMQ reintenta el job completo; la rama de
+ * idempotencia de `runScreeningRequest` reencola el sondeo sin repetir
+ * `runCheck` — pero si Redis sigue caído, ese enqueue falla en los tres
+ * intentos y el checkeo se queda en 'pending' sin ningún job detrás. Lo
+ * mismo si el adapter revienta en los tres intentos: queda en 'requested'.
+ */
+export async function handleScreeningRequestFailure(
+  job: FailedJobLike<ScreeningRequestJobData> | undefined,
+  err: Error,
+): Promise<void> {
+  console.error(`[Screening] Job de solicitud falló (${job?.id}):`, err.message);
+  if (!job) return;
+  if (!isFinalJobFailure(job, err)) return;
+
+  try {
+    await markScreeningRequestFailed(job.data.applicationId, job.data.tenantId, job.data.kind);
+  } catch (closeErr) {
+    console.error(`[Screening] No se pudo cerrar la solicitud agotada (${job.id}):`, closeErr);
   }
 }
 
@@ -160,7 +237,7 @@ export function startWorkers(): void {
     console.error(`[Remarketing] Job falló (${job?.id}):`, err.message);
   });
   screeningRequestWorker.on('failed', (job, err) => {
-    console.error(`[Screening] Job de solicitud falló (${job?.id}):`, err.message);
+    void handleScreeningRequestFailure(job, err);
   });
   screeningPollWorker.on('failed', (job, err) => {
     void handleScreeningPollFailure(job, err);

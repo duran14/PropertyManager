@@ -7,7 +7,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { prisma } from '../config/db.js';
-import { handleScreeningPollFailure } from './worker.js';
+import { handleScreeningPollFailure, handleScreeningRequestFailure, isFinalJobFailure } from './worker.js';
 import { runScreeningRequest } from '../services/screening.service.js';
 
 const TENANT_ID = 'tenant_test_worker_screening_poll';
@@ -101,5 +101,106 @@ describe('handleScreeningPollFailure', () => {
 
   it('no revienta si BullMQ dispara "failed" sin un job asociado', async () => {
     await expect(handleScreeningPollFailure(undefined, new Error('boom'))).resolves.toBeUndefined();
+  });
+
+  // Finding 5 del review final: un job "stalled" llega a 'failed' con
+  // `attemptsMade` todavía bajo (BullMQ lo falla por irrecuperable, no por
+  // agotamiento), así que el guard viejo salía temprano y dejaba el checkeo
+  // en 'pending' para siempre.
+  it('cierra el checkeo cuando el job murió por stalled, aunque queden reintentos', async () => {
+    const { applicationId } = await seed();
+    await runScreeningRequest(applicationId, TENANT_ID, 'credit');
+
+    const stalledError = new Error('job stalled more than allowable limit');
+    stalledError.name = 'UnrecoverableError';
+
+    await handleScreeningPollFailure(
+      {
+        id: 'fake-job-stalled',
+        data: { tenantId: TENANT_ID, applicationId, kind: 'credit', providerRef: 'irrelevant' },
+        attemptsMade: 1,
+        opts: { attempts: 10 },
+        deferredFailure: 'job stalled more than allowable limit',
+      },
+      stalledError,
+    );
+
+    const row = await prisma.rentalApplication.findUniqueOrThrow({ where: { id: applicationId } });
+    expect(row.creditCheckStatus).toBe('failed');
+  });
+});
+
+describe('isFinalJobFailure', () => {
+  const opts = { attempts: 3 };
+
+  it('es final cuando se agotaron los intentos', () => {
+    expect(isFinalJobFailure({ attemptsMade: 3, opts }, new Error('boom'))).toBe(true);
+  });
+
+  it('no es final mientras queden intentos y el error sea normal', () => {
+    expect(isFinalJobFailure({ attemptsMade: 1, opts }, new Error('boom'))).toBe(false);
+  });
+
+  it('es final ante un UnrecoverableError aunque queden intentos', () => {
+    const err = new Error('job stalled more than allowable limit');
+    err.name = 'UnrecoverableError';
+    expect(isFinalJobFailure({ attemptsMade: 1, opts }, err)).toBe(true);
+  });
+
+  it('es final si el job trae un deferredFailure de BullMQ', () => {
+    expect(
+      isFinalJobFailure({ attemptsMade: 1, opts, deferredFailure: 'job stalled more than allowable limit' }, new Error('boom')),
+    ).toBe(true);
+  });
+
+  it('es final ante el mensaje de stalled aunque llegue como Error común', () => {
+    expect(isFinalJobFailure({ attemptsMade: 1, opts }, new Error('job stalled more than allowable limit'))).toBe(true);
+  });
+});
+
+// Finding 2 del review final: la cola de SOLICITUD no tenía manejador de
+// agotamiento — asimetría con la de sondeo. Sin él, tres intentos fallidos
+// dejan el checkeo en 'requested'/'pending' sin ningún job detrás.
+describe('handleScreeningRequestFailure', () => {
+  it('cierra el checkeo como failed cuando la solicitud agotó sus reintentos', async () => {
+    const { applicationId } = await seed();
+    await runScreeningRequest(applicationId, TENANT_ID, 'credit');
+
+    await handleScreeningRequestFailure(
+      {
+        id: 'fake-request-exhausted',
+        data: { tenantId: TENANT_ID, applicationId, kind: 'credit' },
+        attemptsMade: 3,
+        opts: { attempts: 3 },
+      },
+      new Error('Redis unavailable'),
+    );
+
+    const row = await prisma.rentalApplication.findUniqueOrThrow({ where: { id: applicationId } });
+    expect(row.creditCheckStatus).toBe('failed');
+    expect(row.creditCheckSummary).toMatch(/could not submit/i);
+    expect(row.creditCheckCompletedAt).not.toBeNull();
+  });
+
+  it('no toca el estado mientras todavía queden reintentos', async () => {
+    const { applicationId } = await seed();
+    await runScreeningRequest(applicationId, TENANT_ID, 'credit');
+
+    await handleScreeningRequestFailure(
+      {
+        id: 'fake-request-midway',
+        data: { tenantId: TENANT_ID, applicationId, kind: 'credit' },
+        attemptsMade: 1,
+        opts: { attempts: 3 },
+      },
+      new Error('Redis unavailable'),
+    );
+
+    const row = await prisma.rentalApplication.findUniqueOrThrow({ where: { id: applicationId } });
+    expect(row.creditCheckStatus).toBe('pending');
+  });
+
+  it('no revienta si BullMQ dispara "failed" sin un job asociado', async () => {
+    await expect(handleScreeningRequestFailure(undefined, new Error('boom'))).resolves.toBeUndefined();
   });
 });
