@@ -10,12 +10,15 @@
  * las reutilicen.
  */
 import { Queue, QueueEvents } from 'bullmq';
+import type { ScreeningCheckKind } from '@property-manager/adapters';
 import { redis } from '../config/redis.js';
 
 export const QUEUE_NAMES = {
   reconciliation: 'reconciliation',
   bankNotification: 'bank-notification',
   remarketing: 'remarketing',
+  screeningRequest: 'screening-request',
+  screeningPoll: 'screening-poll',
 } as const;
 
 /** Job de reconciliación diaria para un tenant. */
@@ -108,3 +111,47 @@ export async function scheduleWeeklyRemarketing(): Promise<void> {
 export const reconciliationEvents = new QueueEvents(QUEUE_NAMES.reconciliation, {
   connection: redis,
 });
+
+/**
+ * Fase 2.2 — screening de crédito/antecedentes en dos etapas: un job que
+ * envía la solicitud al proveedor (casi siempre asíncrono) y otro que
+ * sondea el resultado hasta que deja de estar 'pending'.
+ */
+export interface ScreeningRequestJobData {
+  tenantId: string;
+  applicationId: string;
+  kind: ScreeningCheckKind;
+}
+
+export const screeningRequestQueue = new Queue<ScreeningRequestJobData, unknown, string>(
+  QUEUE_NAMES.screeningRequest,
+  {
+    connection: redis,
+    defaultJobOptions: {
+      attempts: 3,
+      backoff: { type: 'exponential', delay: 30_000 },
+      removeOnComplete: { count: 20 },
+      removeOnFail: { count: 20 },
+    },
+  },
+);
+
+export interface ScreeningPollJobData {
+  tenantId: string;
+  applicationId: string;
+  kind: ScreeningCheckKind;
+  providerRef: string;
+}
+
+export const screeningPollQueue = new Queue<ScreeningPollJobData, unknown, string>(
+  QUEUE_NAMES.screeningPoll,
+  {
+    connection: redis,
+    defaultJobOptions: {
+      attempts: 10,
+      backoff: { type: 'fixed', delay: 15 * 60_000 },
+      removeOnComplete: { count: 20 },
+      removeOnFail: { count: 20 },
+    },
+  },
+);

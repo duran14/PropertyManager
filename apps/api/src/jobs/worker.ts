@@ -6,12 +6,20 @@
  */
 import { Worker } from 'bullmq';
 import { redis } from '../config/redis.js';
-import { QUEUE_NAMES, type BankNotificationJobData, type ReconciliationJobData, type RemarketingJobData } from './queues.js';
+import {
+  QUEUE_NAMES,
+  type BankNotificationJobData,
+  type ReconciliationJobData,
+  type RemarketingJobData,
+  type ScreeningPollJobData,
+  type ScreeningRequestJobData,
+} from './queues.js';
 import { runReconciliation } from '../services/reconciliation.service.js';
 import { processBankNotification } from '../services/sentinel.service.js';
 import { getAdapters } from '../config/adapters.js';
 import { prisma } from '../config/db.js';
 import { runWeeklyReengagement } from '../services/remarketing.service.js';
+import { pollScreeningResult, runScreeningRequest } from '../services/screening.service.js';
 
 export function startWorkers(): void {
   // Worker de reconciliación diaria.
@@ -85,6 +93,32 @@ export function startWorkers(): void {
     { connection: redis, concurrency: 1 },
   );
 
+  // Workers de screening (Fase 2.2): request envía al adapter, poll sondea
+  // hasta que el resultado deja de estar 'pending'.
+  const screeningRequestWorker = new Worker<ScreeningRequestJobData>(
+    QUEUE_NAMES.screeningRequest,
+    async (job) => {
+      await runScreeningRequest(job.data.applicationId, job.data.tenantId, job.data.kind);
+    },
+    { connection: redis },
+  );
+
+  const screeningPollWorker = new Worker<ScreeningPollJobData>(
+    QUEUE_NAMES.screeningPoll,
+    async (job) => {
+      const { done } = await pollScreeningResult(
+        job.data.applicationId, job.data.tenantId, job.data.kind, job.data.providerRef,
+      );
+      if (!done) {
+        // BullMQ ya reintenta según defaultJobOptions.attempts/backoff de la
+        // cola — lanzar aquí hace que el job se reintente con el backoff
+        // configurado (15 min fijos) en vez de completarse prematuramente.
+        throw new Error('Screening result still pending');
+      }
+    },
+    { connection: redis },
+  );
+
   reconciliationWorker.on('failed', (job, err) => {
     console.error(`[Sentinel] Job reconciliación falló (${job?.id}):`, err.message);
   });
@@ -94,6 +128,14 @@ export function startWorkers(): void {
   remarketingWorker.on('failed', (job, err) => {
     console.error(`[Remarketing] Job falló (${job?.id}):`, err.message);
   });
+  screeningRequestWorker.on('failed', (job, err) => {
+    console.error(`[Screening] Job de solicitud falló (${job?.id}):`, err.message);
+  });
+  screeningPollWorker.on('failed', (job, err) => {
+    // Nivel debug: un intento "fallido" mientras el resultado sigue pending
+    // es el camino normal (ver comentario arriba), no una alarma real.
+    console.error(`[Screening] Job de sondeo falló/sigue pendiente (${job?.id}):`, err.message);
+  });
 
-  console.log('  ⚙️  Workers arrancados (Financial Sentinel: reconciliación + e-Transfer; Remarketing: reactivación semanal)');
+  console.log('  ⚙️  Workers arrancados (Financial Sentinel: reconciliación + e-Transfer; Remarketing: reactivación semanal; Screening: crédito + antecedentes)');
 }

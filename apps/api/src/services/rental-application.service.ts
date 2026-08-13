@@ -17,6 +17,7 @@ import {
   decodeBase64Payload,
 } from './document-storage.service.js';
 import { notifyStaffTargets, resolveStaffNotifyTargets } from './staff-notify.service.js';
+import { triggerScreeningIfConsented } from './screening.service.js';
 
 const DAY = 24 * 60 * 60 * 1000;
 const TOKEN_TTL_MS = 14 * DAY;
@@ -233,6 +234,7 @@ export async function submitRentalApplication(
   }
 
   await notifyStaffOfApplication(application.id, application.tenantId, deps);
+  await triggerScreeningIfConsented(application.id, application.tenantId);
 
   return { ok: true, applicationId: application.id };
 }
