@@ -16,6 +16,7 @@ const NAV: NavItem[] = [
   { to: '/photos', label: 'AI Photos', icon: 'sparkles', roles: ['property_manager', 'broker'] },
   { to: '/leads', label: 'Leads', icon: 'leads', roles: ['property_manager', 'bookkeeper', 'broker'] },
   { to: '/showings', label: 'Showings', icon: 'showings', roles: ['property_manager', 'broker'] },
+  { to: '/integrations', label: 'Integrations', icon: 'integrations', roles: ['property_manager', 'broker'] },
   { to: '/conversations', label: 'Conversations', icon: 'chat', roles: ['property_manager', 'bookkeeper', 'broker'] },
   { to: '/sentinel', label: 'Financial Sentinel', icon: 'sentinel', roles: ['property_manager', 'bookkeeper', 'broker'] },
   { to: '/bills', label: 'Bills / OCR', icon: 'bills', roles: ['property_manager', 'bookkeeper', 'broker'] },

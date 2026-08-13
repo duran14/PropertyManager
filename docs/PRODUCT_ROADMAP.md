@@ -132,12 +132,30 @@
 
 ### 2.2 Tenant Screening Engine
 
-- **Mecanismo primario (API directa):** integración mediante API/webhooks con proveedores de screening (ej. TransUnion SmartMove, Certn, SingleKey).
-- **Mecanismo secundario (browser automation / fallback):**
-  - Script/worker asíncrono con Playwright / browser-use para portales cerrados.
-  - Autenticación con credenciales cifradas de la agencia (`vault.credentials`).
-  - Ingesta de datos del candidato → ejecución de consulta → extracción del status (`PASS` / `FLAGGED`) y score crediticio → captura de pantalla de la confirmación.
-- **Mecanismo terciario (PDF parser / OCR):** extracción de datos clave mediante visión/OCR si el manager sube el reporte manualmente en PDF.
+- **Nivel 1 — API directa (pendiente):** integración mediante API/webhooks con
+  proveedores de screening (ej. TransUnion SmartMove, Certn, SingleKey). No
+  implementado — el pipeline actual corre sobre un `ScreeningMockAdapter`
+  (spec Sección 5), intencional mientras no exista una cuenta con API real.
+- **Nivel 2 — browser automation (entregado, detrás de mock):**
+  - Modelo de datos completo en `RentalApplication` (identidad requerida +
+    estado/resumen/reporte por tipo de checkeo, crédito y antecedentes),
+    bóveda de credenciales cifradas (`IntegrationConfig`, rutas
+    `GET`/`POST /integrations`) y pipeline de jobs BullMQ que dispara el
+    screening al enviar la solicitud de renta y persiste el resultado.
+  - UI: pantalla de Integrations para cargar usuario/contraseña de
+    FrontLobby (crédito) y Sterling (antecedentes); resultado del checkeo
+    (estado, resumen, link de descarga del reporte completo) visible en la
+    tarjeta de la aplicación dentro de Showings.
+  - **Bloqueado:** la automatización real del portal (Playwright contra
+    FrontLobby/Sterling, en vez del mock) no puede implementarse ni probarse
+    hasta que exista una cuenta real en cada portal. Cuando se consiga:
+    recolectar URL de login, selector/flujo de la consulta, formato en que
+    cada portal entrega el resultado (HTML embebido vs. PDF descargable) y
+    credenciales de una cuenta de pruebas para grabar el flujo con
+    Playwright.
+- **Nivel 3 — PDF parser / OCR (pendiente):** extracción de datos clave
+  mediante visión/OCR si el manager sube el reporte manualmente en PDF. No
+  implementado.
 
 ---
 

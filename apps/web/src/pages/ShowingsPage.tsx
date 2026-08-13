@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { apiFetch, ApiError } from '../lib/apiClient';
+import { API_BASE, apiFetch, ApiError, getAccessToken } from '../lib/apiClient';
 import { useAuth } from '../auth/AuthContext';
 import { Icon, IconBadge } from '../components/Icon';
 import { CalendarSettingsCard } from '../components/CalendarSettingsCard';
@@ -41,7 +41,27 @@ interface ApplicationDetail {
   consentPoliceCheckAt: string | null;
   submittedAt: string | null;
   createdAt: string;
+  // Fase 2.2: identidad y resultado del screening de crédito/antecedentes.
+  dateOfBirth?: string | null;
+  currentAddress?: string | null;
+  currentCity?: string | null;
+  currentProvince?: string | null;
+  currentPostalCode?: string | null;
+  creditCheckStatus?: string | null;
+  creditCheckSummary?: string | null;
+  creditCheckReportKey?: string | null;
+  criminalCheckStatus?: string | null;
+  criminalCheckSummary?: string | null;
+  criminalCheckReportKey?: string | null;
 }
+
+const SCREENING_STATUS_META: Record<string, { label: string; color: string }> = {
+  requested: { label: 'Requested', color: 'bg-slate-100 text-slate-600' },
+  pending: { label: 'Pending', color: 'bg-slate-100 text-slate-600' },
+  passed: { label: 'Passed', color: 'bg-green-100 text-green-800' },
+  flagged: { label: 'Flagged', color: 'bg-amber-100 text-amber-800' },
+  failed: { label: 'Failed', color: 'bg-red-100 text-red-800' },
+};
 
 const STATUS_META: Record<string, { label: string; color: string }> = {
   scheduled: { label: 'Pending confirmation', color: 'bg-amber-100 text-amber-800' },
@@ -95,6 +115,86 @@ function ConsentRow({ label, at }: { label: string; at: string | null }) {
 }
 
 /**
+ * Bloque de resultado de un checkeo de screening (crédito o antecedentes).
+ *
+ * La descarga del reporte completo no puede ser un `<a href>` simple: la
+ * ruta que lo sirve requiere `requireAuth`, y el access token vive en
+ * memoria (apiClient.ts) mandado por header `Authorization: Bearer`, no por
+ * cookie — una navegación de anchor normal no lo incluiría y el request
+ * devolvería 401. En su lugar se hace un fetch autenticado, se arma un blob
+ * URL local y se abre en pestaña nueva.
+ */
+function ScreeningBlock({
+  label,
+  applicationId,
+  kind,
+  status,
+  summary,
+  reportKey,
+}: {
+  label: string;
+  applicationId: string;
+  kind: 'credit' | 'criminal';
+  status: string | null | undefined;
+  summary: string | null | undefined;
+  reportKey: string | null | undefined;
+}) {
+  const [downloadError, setDownloadError] = useState<string | null>(null);
+  const [isDownloading, setIsDownloading] = useState(false);
+  const meta = status ? SCREENING_STATUS_META[status] : null;
+  const showSummary = summary && status !== 'requested' && status !== 'pending';
+
+  async function handleDownload() {
+    setDownloadError(null);
+    setIsDownloading(true);
+    try {
+      const token = getAccessToken();
+      const res = await fetch(`${API_BASE}/leads/applications/${applicationId}/report/${kind}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        credentials: 'include',
+      });
+      if (!res.ok) {
+        setDownloadError('Could not download the report');
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      window.open(url, '_blank', 'noopener,noreferrer');
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch {
+      setDownloadError('Could not download the report');
+    } finally {
+      setIsDownloading(false);
+    }
+  }
+
+  return (
+    <div>
+      <div className="flex items-center justify-between">
+        <span>{label}</span>
+        {meta ? (
+          <span className={`inline-block rounded-full px-2 py-0.5 text-[10px] ${meta.color}`}>{meta.label}</span>
+        ) : (
+          <span className="text-slate-400">Not requested</span>
+        )}
+      </div>
+      {showSummary && <p className="mt-0.5 text-slate-600">{summary}</p>}
+      {reportKey && (
+        <button
+          type="button"
+          onClick={handleDownload}
+          disabled={isDownloading}
+          className="mt-0.5 text-teal-600 hover:underline disabled:opacity-50"
+        >
+          {isDownloading ? 'Opening report…' : 'Download full report'}
+        </button>
+      )}
+      {downloadError && <p className="mt-0.5 text-red-600">{downloadError}</p>}
+    </div>
+  );
+}
+
+/**
  * Panel de la aplicación de renta para un showing completado. Se monta como
  * su propio componente (en vez de llamar useQuery dentro del .map de
  * ShowingsPage) para no violar las reglas de hooks cuando la lista de
@@ -136,6 +236,24 @@ function CompletedApplicationPanel({ showingId }: { showingId: string }) {
       <div>Annual income: {app.annualIncome != null ? `$${app.annualIncome.toLocaleString('en-CA')}` : 'Not provided'}</div>
       <div>Employer: {app.employerName ?? 'Not provided'}</div>
       <div>References: {app.references ?? 'Not provided'}</div>
+      <div className="mt-1.5 space-y-1.5 rounded-md bg-slate-50 p-2">
+        <ScreeningBlock
+          label="Credit check"
+          applicationId={app.id}
+          kind="credit"
+          status={app.creditCheckStatus}
+          summary={app.creditCheckSummary}
+          reportKey={app.creditCheckReportKey}
+        />
+        <ScreeningBlock
+          label="Criminal record check"
+          applicationId={app.id}
+          kind="criminal"
+          status={app.criminalCheckStatus}
+          summary={app.criminalCheckSummary}
+          reportKey={app.criminalCheckReportKey}
+        />
+      </div>
       {app.idDocumentStorageKey && (
         // Hay un documento de identificación guardado, pero no existe
         // ninguna ruta en la app que sirva archivos de DOCUMENT_STORAGE_DIR

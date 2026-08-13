@@ -5,7 +5,7 @@
  * The access token stays in memory instead of localStorage to reduce XSS risk.
  */
 
-const API_BASE = import.meta.env.VITE_API_BASE ?? '/api';
+export const API_BASE = import.meta.env.VITE_API_BASE ?? '/api';
 
 let accessToken: string | null = null;
 

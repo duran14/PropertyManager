@@ -10,11 +10,14 @@
  *  PATCH /leads/:id/status            — actualiza estado del lead
  *  POST /leads/simulate-chat          — simula un mensaje entrante del chatbot (dev)
  */
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
 import { Router } from 'express';
 import { z } from 'zod';
 import type { ChatChannel } from '@property-manager/adapters';
 import { prisma } from '../config/db.js';
 import { getAdapters } from '../config/adapters.js';
+import { getEnv } from '../config/env.js';
 import { requireAuth, requireUser } from '../auth/context.js';
 import {
   createLeadFromUnitUrl,
@@ -659,6 +662,56 @@ leadsRouter.patch('/:id/status', requireAuth, async (req, res, next) => {
       });
     }
     res.status(204).end();
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Fase 2.2: descarga del reporte completo de screening (crédito o
+// antecedentes penales). El resumen (`{tipo}CheckSummary`) ya viaja en
+// GET /showings/:id/application para decidir rápido; esta ruta es para
+// cuando ese resumen no basta y hace falta el PDF completo del proveedor.
+leadsRouter.get('/applications/:applicationId/report/:kind', requireAuth, async (req, res, next) => {
+  try {
+    const user = requireUser(req);
+    const { applicationId, kind } = req.params;
+    if (kind !== 'credit' && kind !== 'criminal') {
+      res.status(400).json({ error: 'Invalid report kind' });
+      return;
+    }
+    // Aislamiento por tenant: la fila se busca filtrada por el tenantId del
+    // usuario autenticado ANTES de tocar el disco. Un usuario de otro tenant
+    // no puede pedir este reporte aunque adivinara el applicationId o el
+    // storageKey, porque la fila que los contiene ni siquiera se encuentra
+    // fuera de su tenantId.
+    const application = await prisma.rentalApplication.findFirst({
+      where: { id: applicationId, tenantId: user.tenantId },
+      select: { creditCheckReportKey: true, criminalCheckReportKey: true },
+    });
+    if (!application) {
+      res.status(404).json({ error: 'Application not found' });
+      return;
+    }
+    const key = kind === 'credit' ? application.creditCheckReportKey : application.criminalCheckReportKey;
+    if (!key) {
+      res.status(404).json({ error: 'Report not available' });
+      return;
+    }
+
+    const env = getEnv();
+    const root = path.resolve(env.DOCUMENT_STORAGE_DIR);
+    const target = path.resolve(root, key);
+    // Mismo guard de path traversal que ya usa createLocalDocumentStorage
+    // al escribir — se repite aquí porque este es un punto de lectura
+    // independiente, no una llamada a ese servicio.
+    if (!target.startsWith(root)) {
+      res.status(400).json({ error: 'Invalid report path' });
+      return;
+    }
+    const file = await fs.readFile(target);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="${kind}-report.pdf"`);
+    res.send(file);
   } catch (err) {
     next(err);
   }

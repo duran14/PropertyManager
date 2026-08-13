@@ -132,6 +132,23 @@ showingsRouter.get('/:id/application', requireAuth, async (req, res, next) => {
         consentPoliceCheckAt: true,
         submittedAt: true,
         createdAt: true,
+        // Fase 2.2: identidad y resultado del screening de crédito/antecedentes.
+        // Van explícitos en este `select` (igual que el resto de campos de
+        // arriba) — sin esto, Prisma seguiría devolviéndolos por default en
+        // una llamada sin `select`, pero como esta ruta ya usa `select`
+        // explícito, cualquier columna nueva del modelo queda excluida hasta
+        // que se agregue aquí a mano.
+        dateOfBirth: true,
+        currentAddress: true,
+        currentCity: true,
+        currentProvince: true,
+        currentPostalCode: true,
+        creditCheckStatus: true,
+        creditCheckSummary: true,
+        creditCheckReportKey: true,
+        criminalCheckStatus: true,
+        criminalCheckSummary: true,
+        criminalCheckReportKey: true,
       },
     });
     if (!application) {

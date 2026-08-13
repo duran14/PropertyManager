@@ -35,6 +35,7 @@ import {
   FileSignature,
   CalendarClock,
   CalendarDays,
+  Plug,
   type LucideIcon,
 } from 'lucide-react';
 import type { ComponentProps } from 'react';
@@ -65,7 +66,8 @@ export type IconName =
   | 'etransfer'
   | 'rta'
   | 'schedule'
-  | 'showings';
+  | 'showings'
+  | 'integrations';
 
 /** Color semántico por concepto: clases de fondo tenue + texto del tono. */
 export interface IconColor {
@@ -117,6 +119,7 @@ export const ICON_COLORS: Record<IconName, IconColor> = {
   rta: { badge: 'bg-rose-50', text: 'text-rose-600' },
   schedule: { badge: 'bg-indigo-50', text: 'text-indigo-600' },
   showings: { badge: 'bg-teal-50', text: 'text-teal-600' },
+  integrations: { badge: 'bg-cyan-50', text: 'text-cyan-600' },
 };
 
 const ICONS: Record<IconName, LucideIcon> = {
@@ -146,6 +149,7 @@ const ICONS: Record<IconName, LucideIcon> = {
   rta: FileSignature,
   schedule: CalendarClock,
   showings: CalendarDays,
+  integrations: Plug,
 };
 
 interface IconProps extends ComponentProps<'svg'> {
