@@ -1,11 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { prisma } from '../config/db.js';
 import {
+  approveScreening,
   markScreeningTimedOut,
   pollScreeningResult,
   runScreeningRequest,
   triggerScreeningIfConsented,
 } from './screening.service.js';
+import { saveIntegrationCredentials } from './integration-vault.service.js';
 
 const TENANT_ID = 'tenant_test_screening_service';
 
@@ -307,5 +309,44 @@ describe('persistTerminalResult — guards de estado y tenant', () => {
     const row = await prisma.rentalApplication.findUniqueOrThrow({ where: { id: applicationId } });
     expect(row.creditCheckStatus).toBe('pending');
     expect(row.creditCheckSummary).toBeNull();
+  });
+});
+
+// Task 5: cuando el tenant conectó FrontLobby real, el checkeo de crédito
+// nunca se dispara solo — cuesta $18.99 reales por corrida, así que queda
+// 'awaiting_approval' hasta que un property_manager/broker lo apruebe
+// explícitamente. Antecedentes penales sigue siendo mock (Sterling real
+// todavía no existe) y no cambia su comportamiento.
+describe('triggerScreeningIfConsented — con FrontLobby real conectado', () => {
+  it('deja creditCheckStatus en awaiting_approval y NO encola ningún job', async () => {
+    const { applicationId } = await seed();
+    await saveIntegrationCredentials({ tenantId: TENANT_ID, provider: 'frontlobby_portal', username: 'u', password: 'p' });
+
+    await triggerScreeningIfConsented(applicationId, TENANT_ID);
+
+    const row = await prisma.rentalApplication.findUniqueOrThrow({ where: { id: applicationId } });
+    expect(row.creditCheckStatus).toBe('awaiting_approval');
+    // criminal sigue siendo mock — comportamiento de hoy, sin cambios.
+    expect(row.criminalCheckStatus).toBe('requested');
+  });
+});
+
+describe('approveScreening', () => {
+  it('transiciona awaiting_approval -> requested y devuelve ok', async () => {
+    const { applicationId } = await seed();
+    await saveIntegrationCredentials({ tenantId: TENANT_ID, provider: 'frontlobby_portal', username: 'u', password: 'p' });
+    await triggerScreeningIfConsented(applicationId, TENANT_ID);
+
+    const result = await approveScreening(applicationId, TENANT_ID, 'credit');
+
+    expect(result).toEqual({ ok: true });
+    const row = await prisma.rentalApplication.findUniqueOrThrow({ where: { id: applicationId } });
+    expect(row.creditCheckStatus).toBe('requested');
+  });
+
+  it('devuelve ok:false si el estado no es awaiting_approval (evita doble cobro)', async () => {
+    const { applicationId } = await seed();
+    const result = await approveScreening(applicationId, TENANT_ID, 'credit');
+    expect(result).toEqual({ ok: false, reason: 'Not awaiting approval' });
   });
 });

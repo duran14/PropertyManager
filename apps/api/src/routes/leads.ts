@@ -18,7 +18,7 @@ import type { ChatChannel } from '@property-manager/adapters';
 import { prisma } from '../config/db.js';
 import { getAdapters } from '../config/adapters.js';
 import { getEnv } from '../config/env.js';
-import { requireAuth, requireUser } from '../auth/context.js';
+import { requireAuth, requireRole, requireUser } from '../auth/context.js';
 import {
   createLeadFromUnitUrl,
   buildLeadProspectProfile,
@@ -36,6 +36,7 @@ import {
   getPublicRentalApplication,
   submitRentalApplication,
 } from '../services/rental-application.service.js';
+import { approveScreening } from '../services/screening.service.js';
 
 export const publicRouter = Router();
 export const leadsRouter = Router();
@@ -719,6 +720,33 @@ leadsRouter.get('/applications/:applicationId/report/:kind', requireAuth, async 
     next(err);
   }
 });
+
+// Fase 2.2: aprobación manual del checkeo real (FrontLobby/Sterling). Un
+// checkeo de crédito real cuesta $18.99 por corrida — nunca se dispara solo,
+// necesita que un property_manager/broker apruebe explícitamente aquí.
+leadsRouter.post(
+  '/applications/:applicationId/screening/:kind/approve',
+  requireAuth,
+  requireRole('property_manager', 'broker'),
+  async (req, res, next) => {
+    try {
+      const user = requireUser(req);
+      const { applicationId, kind } = req.params;
+      if (kind !== 'credit' && kind !== 'criminal') {
+        res.status(400).json({ error: 'Invalid screening kind' });
+        return;
+      }
+      const result = await approveScreening(applicationId, user.tenantId, kind);
+      if (!result.ok) {
+        res.status(409).json({ error: result.reason });
+        return;
+      }
+      res.json({ ok: true });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
 // Endpoint de dev para probar el chatbot sin Twilio real.
 leadsRouter.post('/simulate-chat', requireAuth, async (req, res, next) => {

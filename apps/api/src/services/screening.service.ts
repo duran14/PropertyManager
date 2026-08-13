@@ -3,11 +3,13 @@
  * disparo tras consentimiento, envío al adapter, sondeo del resultado.
  */
 import type { ScreeningCheckKind } from '@property-manager/adapters';
+import { FrontLobbyScreeningAdapter } from '@property-manager/adapters';
 import { prisma } from '../config/db.js';
 import { getEnv } from '../config/env.js';
 import { buildDocumentStorageKey, createLocalDocumentStorage, decodeBase64Payload } from './document-storage.service.js';
 import { notifyStaffTargets, resolveStaffNotifyTargets, type NotifiableStaff } from './staff-notify.service.js';
 import { screeningPollQueue, screeningRequestQueue } from '../jobs/queues.js';
+import { getIntegrationCredentials, type ScreeningProvider } from './integration-vault.service.js';
 
 const STATUS_FIELD: Record<ScreeningCheckKind, 'creditCheckStatus' | 'criminalCheckStatus'> = {
   credit: 'creditCheckStatus',
@@ -39,11 +41,12 @@ const COMPLETED_AT_FIELD: Record<ScreeningCheckKind, 'creditCheckCompletedAt' | 
 const OPEN_STATUSES = ['requested', 'pending'] as const;
 
 /**
- * El adapter de screening real (Playwright contra FrontLobby/Sterling) aún
- * no existe: `createAdapters` construye SIEMPRE `ScreeningMockAdapter`. Ese
- * mock devuelve veredictos con pinta de reales ("Score 740, no
- * collections"), y si esto se despliega tal cual, un manager podría arrendar
- * creyendo que un dato inventado es un buró de crédito de verdad.
+ * Mientras el tenant no tenga credenciales de FrontLobby/Sterling
+ * conectadas en la bóveda (ver `getScreeningAdapter` más abajo), el
+ * checkeo corre contra `ScreeningMockAdapter`. Ese mock devuelve
+ * veredictos con pinta de reales ("Score 740, no collections"), y si esto
+ * se despliega tal cual, un manager podría arrendar creyendo que un dato
+ * inventado es un buró de crédito de verdad.
  *
  * Por eso todo resultado COMPLETADO (passed/flagged) producido por el mock
  * se marca con este prefijo, tanto en el summary que se guarda como en el
@@ -54,9 +57,32 @@ const OPEN_STATUSES = ['requested', 'pending'] as const;
  */
 const SIMULATED_PREFIX = '[SIMULATED] ';
 
-async function isSimulatedScreening(): Promise<boolean> {
+const PROVIDER_BY_KIND: Record<ScreeningCheckKind, ScreeningProvider> = {
+  credit: 'frontlobby_portal',
+  criminal: 'sterling_portal',
+};
+
+/**
+ * Resuelve el adapter real por `kind` si el tenant tiene credenciales
+ * conectadas en la bóveda; si no, cae al mock del factory global — el mismo
+ * camino de hoy, sin cambios. Vive aquí (no en `factory.ts`/`getAdapters()`)
+ * porque necesita leer la bóveda por tenant, y `getAdapters()` es síncrono
+ * y cacheado una sola vez por proceso sin `tenantId` — 64 call sites en el
+ * resto de la app dependen de que siga siendo así.
+ */
+async function getScreeningAdapter(tenantId: string, kind: ScreeningCheckKind) {
+  const credentials = await getIntegrationCredentials(tenantId, PROVIDER_BY_KIND[kind]);
+  if (credentials && kind === 'credit') {
+    const { getAdapters } = await import('../config/adapters.js');
+    return new FrontLobbyScreeningAdapter(credentials, getAdapters().glm);
+  }
   const { getAdapters } = await import('../config/adapters.js');
-  return getAdapters().screening.name === 'screening_mock';
+  return getAdapters().screening; // mock — Sterling real todavía no existe, credit sin credenciales cae aquí también
+}
+
+async function isMockScreening(tenantId: string, kind: ScreeningCheckKind): Promise<boolean> {
+  const adapter = await getScreeningAdapter(tenantId, kind);
+  return adapter.name === 'screening_mock';
 }
 
 /**
@@ -73,32 +99,47 @@ export async function triggerScreeningIfConsented(applicationId: string, tenantI
   if (!application || !application.consentCreditCheckAt || !application.consentPoliceCheckAt) return;
 
   const now = new Date();
+  // Real (credenciales de FrontLobby/Sterling conectadas) nunca se
+  // dispara solo: cada corrida real de crédito cuesta $18.99, así que
+  // queda 'awaiting_approval' hasta que un property_manager/broker lo
+  // apruebe explícitamente (ver `approveScreening`). El mock (sin
+  // credenciales, o antecedentes penales hasta que exista Sterling) sigue
+  // yendo directo a 'requested' — comportamiento de hoy, sin cambios.
+  const kinds: ScreeningCheckKind[] = ['credit', 'criminal'];
+  const initialStatusByKind = await Promise.all(
+    kinds.map(async (kind) =>
+      (await isMockScreening(tenantId, kind)) ? ('requested' as const) : ('awaiting_approval' as const),
+    ),
+  );
+
   await prisma.rentalApplication.update({
     where: { id: applicationId },
     data: {
-      creditCheckStatus: 'requested',
+      creditCheckStatus: initialStatusByKind[0],
       creditCheckRequestedAt: now,
-      criminalCheckStatus: 'requested',
+      criminalCheckStatus: initialStatusByKind[1],
       criminalCheckRequestedAt: now,
     },
   });
 
   // Promise.allSettled, NO dos `await` secuenciales: con `await` secuencial,
   // si el enqueue de 'credit' revienta, 'criminal' nunca llega a intentarse
-  // — y el update de arriba ya dejó ambos como 'requested' en la BD. Cada
-  // kind se resuelve de forma independiente; el que falle al encolarse se
-  // cierra como 'failed' de inmediato en vez de quedar 'requested' sin
-  // ningún job detrás (el mismo estado atorado y silencioso que el sondeo
-  // agotado evita más abajo).
-  const kinds: ScreeningCheckKind[] = ['credit', 'criminal'];
+  // — y el update de arriba ya dejó ambos en su estado inicial en la BD.
+  // Cada kind se resuelve de forma independiente; el que falle al
+  // encolarse se cierra como 'failed' de inmediato en vez de quedar
+  // 'requested' sin ningún job detrás (el mismo estado atorado y
+  // silencioso que el sondeo agotado evita más abajo). Solo se encolan los
+  // kinds que quedaron 'requested' — los 'awaiting_approval' esperan a
+  // `approveScreening`.
+  const kindsToEnqueue = kinds.filter((_, index) => initialStatusByKind[index] === 'requested');
   const enqueued = await Promise.allSettled(
-    kinds.map((kind) => screeningRequestQueue.add('run-screening-request', { tenantId, applicationId, kind })),
+    kindsToEnqueue.map((kind) => screeningRequestQueue.add('run-screening-request', { tenantId, applicationId, kind })),
   );
 
   await Promise.all(
     enqueued.map(async (settled, index) => {
       if (settled.status === 'fulfilled') return;
-      const kind = kinds[index];
+      const kind = kindsToEnqueue[index]!;
       console.error(`[Screening] No se pudo encolar el checkeo de ${kind} para ${applicationId}:`, settled.reason);
       await persistTerminalResult(applicationId, tenantId, kind, {
         status: 'failed',
@@ -106,6 +147,75 @@ export async function triggerScreeningIfConsented(applicationId: string, tenantI
       });
     }),
   );
+
+  const kindsAwaitingApproval = kinds.filter((_, index) => initialStatusByKind[index] === 'awaiting_approval');
+  if (kindsAwaitingApproval.length > 0) {
+    await notifyApprovalNeeded(applicationId, tenantId, kindsAwaitingApproval);
+  }
+}
+
+/**
+ * Best-effort, mismo patrón que `notifyScreeningResult`: el estado ya
+ * quedó guardado como 'awaiting_approval', un fallo de notificación no
+ * debe propagarse — el staff igual puede ver el botón de aprobar en
+ * Showings sin haber recibido el aviso.
+ */
+async function notifyApprovalNeeded(applicationId: string, tenantId: string, kinds: ScreeningCheckKind[]): Promise<void> {
+  try {
+    const application = await prisma.rentalApplication.findFirstOrThrow({
+      where: { id: applicationId, tenantId },
+      include: { showing: { select: { brokerUserId: true } }, lead: { select: { assignedUserId: true, name: true } } },
+    });
+    const staff = await prisma.user.findMany({
+      where: { tenantId, isActive: true },
+      select: { id: true, email: true, role: true, notificationChannel: true, notificationAddress: true },
+    });
+    const targets: NotifiableStaff[] = resolveStaffNotifyTargets({
+      brokerUserId: application.showing.brokerUserId,
+      assignedUserId: application.lead.assignedUserId,
+      staff,
+      propertyManagerIds: staff.filter((member) => member.role === 'property_manager').map((member) => member.id),
+    });
+    const labels = kinds.map((kind) => (kind === 'credit' ? 'Credit check ($18.99)' : 'Criminal record check')).join(', ');
+    const link = `${getEnv().WEB_URL}/showings`;
+    const body = `${labels} for ${application.lead.name ?? 'a lead'} is ready to run — approve the real charge in Showings.\n\n${link}`;
+    const { getAdapters } = await import('../config/adapters.js');
+    await notifyStaffTargets({ targets, subject: 'Screening approval needed', body, messaging: getAdapters().messaging });
+  } catch (error) {
+    console.error(`[Screening] No se pudo notificar la aprobación pendiente de ${applicationId}:`, error);
+  }
+}
+
+/**
+ * Aprueba un checkeo real que quedó 'awaiting_approval' (cargo real de
+ * $18.99 en el caso de crédito) y recién ahí lo encola. El `updateMany`
+ * con guard de estado en el `where` (no `update` por `id`) evita el doble
+ * cobro: dos clics simultáneos en el botón de aprobar solo logran que uno
+ * de los dos afecte una fila (count === 1), el otro ve count === 0 y
+ * devuelve `ok:false` sin encolar una segunda vez.
+ */
+export async function approveScreening(
+  applicationId: string,
+  tenantId: string,
+  kind: ScreeningCheckKind,
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  const { count } = await prisma.rentalApplication.updateMany({
+    where: { id: applicationId, tenantId, [STATUS_FIELD[kind]]: 'awaiting_approval' },
+    data: { [STATUS_FIELD[kind]]: 'requested' },
+  });
+  if (count === 0) {
+    return { ok: false, reason: 'Not awaiting approval' };
+  }
+  try {
+    await screeningRequestQueue.add('run-screening-request', { tenantId, applicationId, kind });
+  } catch (error) {
+    console.error(`[Screening] No se pudo encolar el checkeo de ${kind} tras aprobación (${applicationId}):`, error);
+    await persistTerminalResult(applicationId, tenantId, kind, {
+      status: 'failed',
+      reason: 'Could not schedule the screening check',
+    });
+  }
+  return { ok: true };
 }
 
 /**
@@ -140,14 +250,17 @@ export async function runScreeningRequest(
     return;
   }
 
-  const { getAdapters } = await import('../config/adapters.js');
-  const result = await getAdapters().screening.runCheck(kind, {
+  const adapter = await getScreeningAdapter(tenantId, kind);
+  const result = await adapter.runCheck(kind, {
     fullName: application.applicantFullName ?? '',
+    firstName: application.applicantFirstName ?? '',
+    lastName: application.applicantLastName ?? '',
     dateOfBirth: application.dateOfBirth?.toISOString().slice(0, 10) ?? '',
     currentAddress: application.currentAddress ?? '',
     currentCity: application.currentCity ?? '',
     currentProvince: application.currentProvince ?? '',
     currentPostalCode: application.currentPostalCode ?? '',
+    currentAddressStartDate: application.currentAddressStartDateAt?.toISOString().slice(0, 10) ?? '',
   });
 
   if (result.status === 'pending') {
@@ -177,8 +290,8 @@ export async function pollScreeningResult(
   kind: ScreeningCheckKind,
   providerRef: string,
 ): Promise<{ done: boolean }> {
-  const { getAdapters } = await import('../config/adapters.js');
-  const result = await getAdapters().screening.pollResult(kind, providerRef);
+  const adapter = await getScreeningAdapter(tenantId, kind);
+  const result = await adapter.pollResult(kind, providerRef);
 
   if (result.status === 'pending') return { done: false };
 
@@ -284,7 +397,7 @@ async function persistTerminalResult(
     contentType: result.reportMimeType,
   });
 
-  const summary = (await isSimulatedScreening())
+  const summary = (await isMockScreening(tenantId, kind))
     ? `${SIMULATED_PREFIX}${result.summary}`
     : result.summary;
 
@@ -341,7 +454,7 @@ async function notifyScreeningResult(
     // mock, el correo/mensaje al staff tampoco puede parecer real. Solo los
     // veredictos (passed/flagged) se marcan — un 'failed' no afirma nada
     // sobre el solicitante.
-    const prefix = outcome !== 'failed' && (await isSimulatedScreening()) ? SIMULATED_PREFIX : '';
+    const prefix = outcome !== 'failed' && (await isMockScreening(tenantId, kind)) ? SIMULATED_PREFIX : '';
     const body = `${prefix}${checkLabel} for ${application.lead.name ?? 'a lead'} ${outcomeText}.\n\n${link}`;
 
     const { getAdapters } = await import('../config/adapters.js');

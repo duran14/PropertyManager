@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parseAnnualIncome } from './leads.js';
 
@@ -60,5 +62,41 @@ describe('parseAnnualIncome', () => {
 
   it('accepts the upper bound of the range', () => {
     expect(parseAnnualIncome(2_000_000_000)).toEqual({ ok: true, value: 2_000_000_000 });
+  });
+});
+
+/**
+ * Task 5: ruta de aprobación manual del checkeo real de screening. Sin
+ * infraestructura de supertest en este repo (ver integrations.test.ts), la
+ * cadena de middleware se verifica por grep del código fuente — mismo
+ * patrón que integrations.test.ts y tenant-enforcement.test.ts. La
+ * transición de estado en sí (awaiting_approval -> requested, y el 409
+ * cuando no lo está) ya la cubre screening.service.test.ts sobre
+ * `approveScreening`, que es exactamente lo que esta ruta llama.
+ */
+describe('POST /applications/:applicationId/screening/:kind/approve', () => {
+  const routeSource = readFileSync(join(process.cwd(), 'src', 'routes', 'leads.ts'), 'utf8');
+
+  it('exige requireAuth y requireRole(property_manager, broker) en la cadena de middleware', () => {
+    const postLine = routeSource
+      .split('\n')
+      .find((line) => line.includes("'/applications/:applicationId/screening/:kind/approve'"));
+    expect(postLine, 'no se encontró la definición de la ruta').toBeDefined();
+
+    const routeIndex = routeSource.indexOf("'/applications/:applicationId/screening/:kind/approve'");
+    const chain = routeSource.slice(routeIndex, routeIndex + 200);
+    expect(chain).toContain('requireAuth');
+    expect(chain).toContain("requireRole('property_manager', 'broker')");
+  });
+
+  it('rechaza un kind inválido con 400 antes de llamar a approveScreening', () => {
+    expect(routeSource).toContain("kind !== 'credit' && kind !== 'criminal'");
+  });
+
+  it('devuelve 409 cuando approveScreening responde ok:false', () => {
+    const handlerIndex = routeSource.indexOf("'/applications/:applicationId/screening/:kind/approve'");
+    const handler = routeSource.slice(handlerIndex, handlerIndex + 900);
+    expect(handler).toContain('result.ok');
+    expect(handler).toContain('res.status(409)');
   });
 });
