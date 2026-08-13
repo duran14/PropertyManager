@@ -29,6 +29,7 @@ import { knowledgeBaseRouter } from './routes/knowledge-base.js';
 import { usersRouter } from './routes/users.js';
 import { webhookConfigRouter } from './routes/webhook-config.js';
 import { googleCalendarRouter } from './routes/integrations.google-calendar.js';
+import { integrationsRouter } from './routes/integrations.js';
 
 export function createApp(): express.Application {
   const env = getEnv();
@@ -74,6 +75,10 @@ export function createApp(): express.Application {
   app.use('/chat', chatRouter);
   app.use('/showings', showingsRouter);
   app.use('/integrations/google-calendar', googleCalendarRouter);
+  // Montado DESPUÉS del router de google-calendar: Express hace prefix-match
+  // en orden de registro, así que la ruta específica se queda con
+  // /integrations/google-calendar/* antes de que esta genérica la vea.
+  app.use('/integrations', integrationsRouter);
   app.use('/public', publicRouter);
 
   app.use((_req, res) => {
