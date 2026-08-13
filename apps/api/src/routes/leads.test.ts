@@ -100,3 +100,36 @@ describe('POST /applications/:applicationId/screening/:kind/approve', () => {
     expect(handler).toContain('res.status(409)');
   });
 });
+
+/**
+ * Task 2 (Fase 2.2): ruta de carga manual de un reporte de screening
+ * (PDF/OCR), cualquier proveedor. Mismo patrón de verificación por grep que
+ * la suite de arriba — sin supertest en este repo. La lógica de
+ * `recordManualScreeningReport` (400 sin veredicto confiable, override sin
+ * guard de estado, aislamiento de tenant) ya está cubierta en
+ * screening.service.test.ts.
+ */
+describe('POST /applications/:applicationId/screening/:kind/upload-report', () => {
+  const routeSource = readFileSync(join(process.cwd(), 'src', 'routes', 'leads.ts'), 'utf8');
+
+  it('existe con requireAuth y requireRole(property_manager, broker)', () => {
+    expect(routeSource).toMatch(/leadsRouter\.post\(\s*'\/applications\/:applicationId\/screening\/:kind\/upload-report'/);
+    const routeBlock = routeSource.slice(routeSource.indexOf("'/applications/:applicationId/screening/:kind/upload-report'"));
+    expect(routeBlock.slice(0, 200)).toMatch(/requireAuth/);
+    expect(routeBlock.slice(0, 200)).toMatch(/requireRole\('property_manager', 'broker'\)/);
+  });
+
+  it('rechaza un kind inválido con 400 antes de llamar a recordManualScreeningReport', () => {
+    const handlerIndex = routeSource.indexOf("'/applications/:applicationId/screening/:kind/upload-report'");
+    const handler = routeSource.slice(handlerIndex, handlerIndex + 1500);
+    expect(handler).toContain("kind !== 'credit' && kind !== 'criminal'");
+  });
+
+  it('valida el body con uploadReportSchema y responde 400 según el status de recordManualScreeningReport', () => {
+    const handlerIndex = routeSource.indexOf("'/applications/:applicationId/screening/:kind/upload-report'");
+    const handler = routeSource.slice(handlerIndex, handlerIndex + 1500);
+    expect(handler).toContain('uploadReportSchema.safeParse');
+    expect(handler).toContain('recordManualScreeningReport');
+    expect(handler).toContain('res.status(result.status)');
+  });
+});

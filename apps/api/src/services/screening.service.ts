@@ -62,6 +62,64 @@ const PROVIDER_BY_KIND: Record<ScreeningCheckKind, ScreeningProvider> = {
   criminal: 'sterling_portal',
 };
 
+const MANUAL_UPLOAD_MIN_CONFIDENCE = 0.5;
+
+/**
+ * Registra un reporte de screening que el staff obtuvo por fuera de esta
+ * app (de cualquier proveedor) y subió manualmente. A diferencia de
+ * `persistTerminalResult`, esto NO respeta el guard de `OPEN_STATUSES`: es
+ * una acción humana explícita, no una escritura automática rezagada, así
+ * que puede registrar un resultado sin importar el estado actual del
+ * checkeo (incluso sobreescribir uno ya cerrado). Si más tarde una cadena
+ * automática intenta su propio cierre vía `persistTerminalResult`, el
+ * guard de esa función ya existente (`WHERE ... IN ('requested','pending')`)
+ * no encuentra la fila y descarta la escritura en silencio -- las dos
+ * funciones componen de forma segura sin necesidad de coordinarse.
+ */
+export async function recordManualScreeningReport(
+  applicationId: string,
+  tenantId: string,
+  kind: ScreeningCheckKind,
+  upload: { mimeType: string; base64: string; filename?: string },
+): Promise<{ ok: true; verdict: 'passed' | 'flagged' } | { ok: false; status: 400 | 404; error: string }> {
+  const application = await prisma.rentalApplication.findFirst({
+    where: { id: applicationId, tenantId },
+    select: { id: true },
+  });
+  if (!application) return { ok: false, status: 404, error: 'Application not found' };
+
+  const { getAdapters } = await import('../config/adapters.js');
+  const extraction = await getAdapters().glm.extractScreeningReport({
+    mimeType: upload.mimeType, base64: upload.base64, filename: upload.filename, kind,
+  });
+  if (extraction.verdict === null || extraction.confidence < MANUAL_UPLOAD_MIN_CONFIDENCE) {
+    return { ok: false, status: 400, error: 'Could not determine a verdict from this report — review it manually' };
+  }
+
+  const env = getEnv();
+  const storage = createLocalDocumentStorage({
+    rootDir: env.DOCUMENT_STORAGE_DIR,
+    publicBaseUrl: env.DOCUMENT_STORAGE_PUBLIC_BASE_URL || undefined,
+  });
+  const stored = await storage.putObject({
+    key: buildDocumentStorageKey({ tenantId, documentId: `${applicationId}-${kind}`, filename: `${kind}-report.pdf` }),
+    body: decodeBase64Payload(upload.base64),
+    contentType: upload.mimeType,
+  });
+
+  const now = new Date();
+  await prisma.rentalApplication.updateMany({
+    where: { id: applicationId, tenantId },
+    data: {
+      [STATUS_FIELD[kind]]: extraction.verdict,
+      [SUMMARY_FIELD[kind]]: `[AUTOMATED] ${extraction.summaryText}`,
+      [REPORT_KEY_FIELD[kind]]: stored.storageKey,
+      [COMPLETED_AT_FIELD[kind]]: now,
+    },
+  });
+  return { ok: true, verdict: extraction.verdict };
+}
+
 /**
  * Resuelve el adapter real por `kind` si el tenant tiene credenciales
  * conectadas en la bóveda; si no, cae al mock del factory global — el mismo

@@ -4,6 +4,7 @@ import {
   approveScreening,
   markScreeningTimedOut,
   pollScreeningResult,
+  recordManualScreeningReport,
   runScreeningRequest,
   triggerScreeningIfConsented,
 } from './screening.service.js';
@@ -329,6 +330,72 @@ describe('triggerScreeningIfConsented — con FrontLobby real conectado', () => 
     expect(row.creditCheckStatus).toBe('awaiting_approval');
     // criminal sigue siendo mock — comportamiento de hoy, sin cambios.
     expect(row.criminalCheckStatus).toBe('requested');
+  });
+});
+
+// Task 2 (Fase 2.2): carga manual de un reporte de screening (PDF/OCR) que
+// el staff obtuvo por fuera de la app, de cualquier proveedor. A diferencia
+// de `persistTerminalResult`, esto es una acción humana explícita — no
+// respeta el guard de OPEN_STATUSES y puede registrar un resultado sin
+// importar el estado actual del checkeo.
+//
+// Este `.env` local trae `ZAI_API_KEY` real (Task 1 la necesita para
+// `GlmRealAdapter`), así que `getAdapters().glm` resuelve al adapter REAL,
+// no al mock — a diferencia de `getAdapters().screening`, que siempre es el
+// mock salvo credenciales de FrontLobby en la bóveda. Cada test de esta
+// suite mockea `extractScreeningReport` explícitamente para no depender de
+// una llamada de red real ni de bytes de PDF válidos.
+describe('recordManualScreeningReport', () => {
+  it('registra un veredicto passed y guarda el reporte con la marca [AUTOMATED]', async () => {
+    const { applicationId } = await seed();
+    const upload = { mimeType: 'application/pdf', base64: Buffer.from('fake pdf bytes').toString('base64'), filename: 'report.pdf' };
+    vi.spyOn((await import('../config/adapters.js')).getAdapters().glm, 'extractScreeningReport')
+      .mockResolvedValueOnce({ verdict: 'passed', summaryText: 'Manual credit report shows no significant concerns.', confidence: 0.9 });
+
+    const result = await recordManualScreeningReport(applicationId, TENANT_ID, 'credit', upload);
+
+    expect(result).toEqual({ ok: true, verdict: 'passed' });
+    const row = await prisma.rentalApplication.findUniqueOrThrow({ where: { id: applicationId } });
+    expect(row.creditCheckStatus).toBe('passed');
+    expect(row.creditCheckSummary).toMatch(/^\[AUTOMATED\] /);
+    expect(row.creditCheckReportKey).not.toBeNull();
+    expect(row.creditCheckCompletedAt).not.toBeNull();
+  });
+
+  it('rechaza con 400 cuando el modelo no puede determinar un veredicto', async () => {
+    const { applicationId } = await seed();
+    const upload = { mimeType: 'application/pdf', base64: Buffer.from('unreadable').toString('base64'), filename: 'unreadable.pdf' };
+    vi.spyOn((await import('../config/adapters.js')).getAdapters().glm, 'extractScreeningReport')
+      .mockResolvedValueOnce({ verdict: null, summaryText: '', confidence: 0 });
+
+    const result = await recordManualScreeningReport(applicationId, TENANT_ID, 'credit', upload);
+
+    expect(result).toEqual({ ok: false, status: 400, error: expect.stringContaining('verdict') });
+    const row = await prisma.rentalApplication.findUniqueOrThrow({ where: { id: applicationId } });
+    expect(row.creditCheckStatus).toBeNull();
+  });
+
+  it('sobreescribe un checkeo que estaba awaiting_approval (acción humana explícita, sin guard de estado)', async () => {
+    const { applicationId } = await seed();
+    await prisma.rentalApplication.update({ where: { id: applicationId }, data: { creditCheckStatus: 'awaiting_approval' } });
+    const upload = { mimeType: 'application/pdf', base64: Buffer.from('fake pdf bytes').toString('base64') };
+    vi.spyOn((await import('../config/adapters.js')).getAdapters().glm, 'extractScreeningReport')
+      .mockResolvedValueOnce({ verdict: 'passed', summaryText: 'Manual credit report shows no significant concerns.', confidence: 0.9 });
+
+    const result = await recordManualScreeningReport(applicationId, TENANT_ID, 'credit', upload);
+
+    expect(result.ok).toBe(true);
+    const row = await prisma.rentalApplication.findUniqueOrThrow({ where: { id: applicationId } });
+    expect(row.creditCheckStatus).toBe('passed');
+  });
+
+  it('devuelve 404 para una aplicación de otro tenant', async () => {
+    const { applicationId } = await seed();
+    const upload = { mimeType: 'application/pdf', base64: Buffer.from('fake pdf bytes').toString('base64') };
+
+    const result = await recordManualScreeningReport(applicationId, 'tenant_otro', 'credit', upload);
+
+    expect(result).toEqual({ ok: false, status: 404, error: expect.any(String) });
   });
 });
 
