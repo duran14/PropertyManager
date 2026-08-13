@@ -212,7 +212,25 @@ export async function approveScreening(
     return { ok: false, reason: 'Not awaiting approval' };
   }
   try {
-    await screeningRequestQueue.add('run-screening-request', { tenantId, applicationId, kind });
+    // `attempts: 1` sobreescribe el `defaultJobOptions.attempts: 3` de
+    // `screeningRequestQueue` SOLO para este job (BullMQ 5.79.3 hace
+    // `{...jobsOpts, ...opts}` en `Queue.addJob`, así que el resto de las
+    // opciones por defecto — backoff, removeOnComplete/Fail — se conservan).
+    //
+    // El motivo es económico, no técnico: el guard de idempotencia de
+    // `runScreeningRequest` solo protege si `runCheck` ya alcanzó a persistir
+    // el providerRef. Si el worker muere (crash, deploy, OOM) o el job se
+    // queda "stalled" durante los ~60-90s que tarda la navegación real de
+    // Playwright, un reintento automático volvería a llamar `runCheck` desde
+    // cero: un SEGUNDO cargo real de $18.99 con una sola aprobación humana de
+    // por medio. Fallar cuesta $0 y el listener 'failed' del worker ya cierra
+    // el checkeo como 'failed' (`handleScreeningRequestFailure`); reintentar
+    // solo puede costar dinero duplicado. Si un humano quiere reintentar,
+    // vuelve a aprobar a mano — nunca automáticamente.
+    //
+    // El `.add(...)` del mock (`triggerScreeningIfConsented`) NO lleva esto:
+    // ese camino es gratis y sus 3 intentos son puro beneficio.
+    await screeningRequestQueue.add('run-screening-request', { tenantId, applicationId, kind }, { attempts: 1 });
   } catch (error) {
     console.error(`[Screening] No se pudo encolar el checkeo de ${kind} tras aprobación (${applicationId}):`, error);
     await persistTerminalResult(applicationId, tenantId, kind, {
