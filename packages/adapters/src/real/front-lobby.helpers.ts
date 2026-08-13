@@ -76,6 +76,29 @@ export function parseRowDate(rowText: string): Date | null {
 }
 
 /**
+ * True si `candidateDate` (normalmente el resultado ya truncado a día que
+ * devuelve `parseRowDate`) cae en el mismo día calendario (UTC) que
+ * `submittedAtIso`, o después. Se compara por día calendario, no por
+ * timestamp exacto: `parseRowDate` casi siempre solo puede leer una fecha
+ * sin hora de la fila de la tabla, y el reporte normalmente se genera
+ * horas después del envío el MISMO día — comparar contra el timestamp
+ * completo del envío (con hora) descartaría ese caso normal casi siempre,
+ * porque medianoche UTC de un día es siempre anterior a cualquier hora
+ * posterior de ese mismo día. Si `submittedAtIso` no parsea a una fecha
+ * válida, devuelve `false` (no hay base para decidir "en o después").
+ */
+export function isOnOrAfterSubmittedDay(candidateDate: Date, submittedAtIso: string): boolean {
+  const submittedAt = new Date(submittedAtIso);
+  if (Number.isNaN(submittedAt.getTime())) return false;
+  const submittedAtDayStart = Date.UTC(
+    submittedAt.getUTCFullYear(),
+    submittedAt.getUTCMonth(),
+    submittedAt.getUTCDate(),
+  );
+  return candidateDate.getTime() >= submittedAtDayStart;
+}
+
+/**
  * Umbral mínimo de confianza del OCR de GLM (`CreditReportExtraction.confidence`)
  * para confiar en el score extraído del PDF. 0.5 es un punto de partida
  * conservador y arbitrario — no viene del spec, ajustar si corridas reales

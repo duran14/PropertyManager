@@ -20,6 +20,7 @@ import {
   escapeRegExp,
   formatAutomatedSummary,
   isExtractionConfident,
+  isOnOrAfterSubmittedDay,
   parseRowDate,
   scoreToVerdict,
 } from './front-lobby.helpers.js';
@@ -114,6 +115,16 @@ export class FrontLobbyScreeningAdapter implements ScreeningAdapter {
     if (!input.currentAddress.trim()) {
       return { status: 'failed', reason: 'currentAddress is required to create/search the FrontLobby property' };
     }
+    // `input.fullName` viaja en el `providerRef` (vía `encodeProviderRef`) y
+    // `pollResult` lo necesita para volver a encontrar la fila en Reports —
+    // ese método ya rechaza un nombre vacío, pero si no se valida ACÁ
+    // primero, `runCheck` gastaría el cargo real de $18.99 completo y el
+    // sondeo fallaría de inmediato después, dejando el checkeo pagado
+    // huérfano. `application.applicantFullName` es nullable en Prisma, así
+    // que un `''` es alcanzable desde `screening.service.ts`.
+    if (!input.fullName.trim()) {
+      return { status: 'failed', reason: 'fullName is required to submit and later find this screening' };
+    }
     try {
       return await this.withBrowser(async (page) => {
         await page.goto(`${FRONTLOBBY_BASE_URL}/tenant-screening`);
@@ -188,27 +199,34 @@ export class FrontLobbyScreeningAdapter implements ScreeningAdapter {
         // Un re-screening del mismo solicitante puede dejar una fila VIEJA
         // con status "complete" en la tabla — sin desambiguar por fecha, se
         // podría leer y persistir el veredicto del checkeo anterior en vez
-        // del que se acaba de pagar. Se intenta preferir la fila cuya
-        // "Date Created" sea posterior o igual al timestamp de envío
-        // (`submittedAtIso`, codificado en el providerRef). El formato
-        // exacto de esa columna no se pudo verificar contra la app real
-        // (ver `parseRowDate`) — si no se puede parsear ninguna fila, se
-        // usa conservadoramente la última fila que matcheó (asumiendo que
-        // las filas más nuevas tienden a aparecer al final/arriba de una
-        // tabla ordenada por fecha) en vez de ciegamente la primera.
-        const submittedAt = submittedAtIso ? new Date(submittedAtIso) : null;
-        const hasValidSubmittedAt = submittedAt !== null && !Number.isNaN(submittedAt.getTime());
-        let targetRow = rows.last();
-        if (hasValidSubmittedAt) {
-          for (let i = 0; i < rowCount; i += 1) {
-            const candidate = rows.nth(i);
-            const candidateText = (await candidate.textContent()) ?? '';
-            const candidateDate = parseRowDate(candidateText);
-            if (candidateDate && candidateDate.getTime() >= submittedAt!.getTime()) {
-              targetRow = candidate;
-              break;
-            }
+        // del que se acaba de pagar. Se prefiere la primera fila cuya
+        // "Date Created" caiga en o después del DÍA CALENDARIO (UTC) del
+        // envío (`submittedAtIso`, codificado en el providerRef) —
+        // `isOnOrAfterSubmittedDay` compara por día calendario, no por
+        // timestamp exacto, porque `parseRowDate` normalmente solo puede
+        // leer una fecha sin hora de la fila, y el reporte casi siempre se
+        // genera horas después del envío el MISMO día calendario.
+        //
+        // Si ninguna fila tiene una fecha parseable que caiga en o después
+        // de ese día (o `submittedAtIso` no parsea), NO se adivina cuál
+        // fila usar (ni "la última" ni "la primera") — devolvemos
+        // `pending` y dejamos que el próximo sondeo lo reintente. Adivinar
+        // mal acá persistiría el veredicto de crédito de otro checkeo o
+        // solicitante, que es peor que esperar un ciclo más. El formato
+        // exacto de la columna "Date Created" queda como punto de
+        // verificación de la primera corrida real.
+        let targetRow: typeof rows | null = null;
+        for (let i = 0; i < rowCount; i += 1) {
+          const candidate = rows.nth(i);
+          const candidateText = (await candidate.textContent()) ?? '';
+          const candidateDate = parseRowDate(candidateText);
+          if (candidateDate && submittedAtIso && isOnOrAfterSubmittedDay(candidateDate, submittedAtIso)) {
+            targetRow = candidate;
+            break;
           }
+        }
+        if (!targetRow) {
+          return { status: 'pending', providerRef };
         }
         const statusText = (await targetRow.textContent()) ?? '';
         // El texto real de "completado" en la columna Status no se pudo

@@ -5,6 +5,7 @@ import {
   escapeRegExp,
   formatAutomatedSummary,
   isExtractionConfident,
+  isOnOrAfterSubmittedDay,
   parseRowDate,
   scoreToVerdict,
 } from './front-lobby.helpers.js';
@@ -67,6 +68,31 @@ describe('parseRowDate', () => {
 
   it('devuelve null si no encuentra un patrón de fecha reconocible', () => {
     expect(parseRowDate('Jane Prospect Complete')).toBeNull();
+  });
+});
+
+describe('isOnOrAfterSubmittedDay', () => {
+  it('una fila del MISMO día calendario (UTC) que el envío cuenta, aunque la hora del envío sea posterior', () => {
+    // Caso normal: el envío ocurre a las 15:00 UTC, pero parseRowDate solo
+    // pudo leer la fecha sin hora de la fila (medianoche UTC de ese mismo
+    // día) — comparar por timestamp completo descartaría esto por error.
+    const rowDateAtMidnight = new Date('2026-08-13T00:00:00.000Z');
+    expect(isOnOrAfterSubmittedDay(rowDateAtMidnight, '2026-08-13T15:00:00.000Z')).toBe(true);
+  });
+
+  it('una fila de un día calendario posterior cuenta', () => {
+    const rowDate = new Date('2026-08-14T00:00:00.000Z');
+    expect(isOnOrAfterSubmittedDay(rowDate, '2026-08-13T15:00:00.000Z')).toBe(true);
+  });
+
+  it('una fila de un día calendario anterior NO cuenta', () => {
+    const rowDate = new Date('2026-08-12T00:00:00.000Z');
+    expect(isOnOrAfterSubmittedDay(rowDate, '2026-08-13T15:00:00.000Z')).toBe(false);
+  });
+
+  it('un submittedAtIso que no parsea nunca cuenta como match (no se adivina)', () => {
+    const rowDate = new Date('2026-08-13T00:00:00.000Z');
+    expect(isOnOrAfterSubmittedDay(rowDate, 'not-a-date')).toBe(false);
   });
 });
 
