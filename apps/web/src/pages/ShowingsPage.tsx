@@ -54,6 +54,7 @@ interface ApplicationDetail {
 }
 
 const SCREENING_STATUS_META: Record<string, { label: string; color: string }> = {
+  awaiting_approval: { label: 'Needs approval', color: 'bg-blue-100 text-blue-800' },
   requested: { label: 'Requested', color: 'bg-slate-100 text-slate-600' },
   pending: { label: 'Pending', color: 'bg-slate-100 text-slate-600' },
   passed: { label: 'Passed', color: 'bg-green-100 text-green-800' },
@@ -137,10 +138,18 @@ function ScreeningBlock({
   summary: string | null | undefined;
   reportKey: string | null | undefined;
 }) {
+  const { user } = useAuth();
+  const canApprove = user?.role === 'property_manager' || user?.role === 'broker';
+  const queryClient = useQueryClient();
   const [downloadError, setDownloadError] = useState<string | null>(null);
   const [isDownloading, setIsDownloading] = useState(false);
   const meta = status ? SCREENING_STATUS_META[status] : null;
-  const showSummary = summary && status !== 'requested' && status !== 'pending';
+  const showSummary = summary && status !== 'requested' && status !== 'pending' && status !== 'awaiting_approval';
+
+  const approve = useMutation({
+    mutationFn: () => apiFetch(`/leads/applications/${applicationId}/screening/${kind}/approve`, { method: 'POST' }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['showing-application'] }),
+  });
 
   async function handleDownload() {
     setDownloadError(null);
@@ -176,6 +185,17 @@ function ScreeningBlock({
           <span className="text-slate-400">Not requested</span>
         )}
       </div>
+      {status === 'awaiting_approval' && canApprove && (
+        <button
+          type="button"
+          onClick={() => approve.mutate()}
+          disabled={approve.isPending}
+          className="mt-0.5 rounded-md bg-teal-600 px-2 py-1 text-white hover:bg-teal-700 disabled:opacity-50"
+        >
+          {approve.isPending ? 'Approving…' : `Approve $18.99 charge and run ${label.toLowerCase()}`}
+        </button>
+      )}
+      {approve.isError && <p className="mt-0.5 text-red-600">Could not approve — try again.</p>}
       {showSummary && <p className="mt-0.5 text-slate-600">{summary}</p>}
       {reportKey && (
         <button
