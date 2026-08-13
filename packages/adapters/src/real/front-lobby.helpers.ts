@@ -113,6 +113,43 @@ export function isOnOrAfterSubmittedDay(candidateDate: Date, submittedAtIso: str
 }
 
 /**
+ * Elige, entre los textos crudos de las filas ya filtradas por nombre en
+ * /tenant-screening/reports, el ÍNDICE de la fila que corresponde al checkeo
+ * recién enviado (`submittedAtIso`, decodificado del providerRef). Devuelve
+ * `null` si ninguna fila tiene una fecha parseable que caiga en o después
+ * del día de envío — el llamador debe tratar eso como `pending` y volver a
+ * sondear, NUNCA adivinar una fila (adivinar mal persistiría el veredicto de
+ * crédito de otro checkeo o solicitante).
+ *
+ * Se elige la fila de fecha MÁS RECIENTE entre las candidatas, no la primera
+ * que matchee en orden del DOM. Motivo: la tolerancia de 24h de
+ * `isOnOrAfterSubmittedDay` hace que una fila del día calendario ANTERIOR
+ * también pueda matchear, así que un re-screening del mismo solicitante
+ * dentro de ~48h (caso normal: el primer checkeo salió `flagged` y el manager
+ * lo corre de nuevo) puede dejar DOS filas candidatas — la vieja y la nueva.
+ * Quedarse con la primera del DOM ataría el resultado al orden de la tabla,
+ * que nunca se observó en una corrida real; comparar las fechas ya parseadas
+ * es lógica pura e independiente de ese orden. Ante empate exacto de fecha
+ * (típico cuando `parseRowDate` solo lee el día, sin hora) se conserva la
+ * primera — no hay más información disponible para desempatar.
+ */
+export function pickReportRowIndex(rowTexts: string[], submittedAtIso: string): number | null {
+  let bestIndex: number | null = null;
+  let bestTime = Number.NEGATIVE_INFINITY;
+  for (let i = 0; i < rowTexts.length; i += 1) {
+    const candidateDate = parseRowDate(rowTexts[i] ?? '');
+    if (!candidateDate) continue;
+    if (!isOnOrAfterSubmittedDay(candidateDate, submittedAtIso)) continue;
+    const candidateTime = candidateDate.getTime();
+    if (candidateTime > bestTime) {
+      bestTime = candidateTime;
+      bestIndex = i;
+    }
+  }
+  return bestIndex;
+}
+
+/**
  * Umbral mínimo de confianza del OCR de GLM (`CreditReportExtraction.confidence`)
  * para confiar en el score extraído del PDF. 0.5 es un punto de partida
  * conservador y arbitrario — no viene del spec, ajustar si corridas reales

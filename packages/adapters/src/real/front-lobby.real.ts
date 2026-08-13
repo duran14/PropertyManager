@@ -20,8 +20,7 @@ import {
   escapeRegExp,
   formatAutomatedSummary,
   isExtractionConfident,
-  isOnOrAfterSubmittedDay,
-  parseRowDate,
+  pickReportRowIndex,
   scoreToVerdict,
 } from './front-lobby.helpers.js';
 
@@ -125,14 +124,36 @@ export class FrontLobbyScreeningAdapter implements ScreeningAdapter {
     if (!input.fullName.trim()) {
       return { status: 'failed', reason: 'fullName is required to submit and later find this screening' };
     }
+    // `fillApplicantDetails` escribe estos dos campos directo en el
+    // formulario del paso 3; con `''` el `getByLabel(...).fill('')` no falla
+    // pero deja el envío incompleto (y FrontLobby lo rechaza recién después
+    // de cobrar). Ambos son nullable en Prisma para las solicitudes previas
+    // a la migración de esta fase, así que un `''` es alcanzable desde
+    // `screening.service.ts`.
+    if (!input.firstName.trim()) {
+      return { status: 'failed', reason: 'firstName is required' };
+    }
+    if (!input.lastName.trim()) {
+      return { status: 'failed', reason: 'lastName is required' };
+    }
+    // `fillApplicantDetails` hace `.split('-').map(Number)` sobre estas dos
+    // fechas y mete el resultado en `selectOption({value: String(month - 1)})`.
+    // Con `''` eso produce `NaN` → se busca la opción literal `"NaN"` en el
+    // <select> → Playwright agota un timeout de 30s con un error críptico,
+    // en vez de decir lo único útil: que esta solicitud (anterior a la
+    // migración de esta fase) no tiene los datos que FrontLobby necesita.
+    // Mismo patrón de validación que ya usa `rental-application.service.ts`
+    // para el formulario público.
+    const parsedDateOfBirth = new Date(input.dateOfBirth);
+    if (!input.dateOfBirth.trim() || Number.isNaN(parsedDateOfBirth.getTime())) {
+      return { status: 'failed', reason: 'A valid dateOfBirth is required' };
+    }
+    const parsedAddressStartDate = new Date(input.currentAddressStartDate);
+    if (!input.currentAddressStartDate.trim() || Number.isNaN(parsedAddressStartDate.getTime())) {
+      return { status: 'failed', reason: 'A valid currentAddressStartDate is required' };
+    }
     try {
       return await this.withBrowser(async (page) => {
-        await page.goto(`${FRONTLOBBY_BASE_URL}/tenant-screening`);
-        await page.click('text=Screen Tenant');
-        await page.click('text=You Pay and You Fill Out Information');
-        await page.click('button:has-text("Continue")');
-        await page.click('text=Credit Report');
-        await page.click('button:has-text("Continue")');
         const property: FrontLobbyProperty = {
           name: input.currentAddress,
           address: input.currentAddress,
@@ -140,7 +161,21 @@ export class FrontLobbyScreeningAdapter implements ScreeningAdapter {
           province: input.currentProvince,
           postalCode: input.currentPostalCode,
         };
+        // `ensureProperty` navega a /property (y eventualmente abre el modal
+        // de "Add Property"), así que TIENE que correr ANTES de entrar al
+        // wizard de Tenant Screening: hacerlo en medio del paso 3 dejaba la
+        // página fuera del wizard y `fillApplicantDetails` corría contra la
+        // pantalla equivocada, con timeout garantizado en `getByLabel('First
+        // name')`. El wizard se abre recién después, ya con la Property
+        // existente para que el dropdown "Property this Screening is for"
+        // (dentro de `fillApplicantDetails`) pueda encontrarla por dirección.
         await this.ensureProperty(page, property);
+        await page.goto(`${FRONTLOBBY_BASE_URL}/tenant-screening`);
+        await page.click('text=Screen Tenant');
+        await page.click('text=You Pay and You Fill Out Information');
+        await page.click('button:has-text("Continue")');
+        await page.click('text=Credit Report');
+        await page.click('button:has-text("Continue")');
         await this.fillApplicantDetails(page, input, property);
         await page.click('button:has-text("Continue")');
         // Paso 4 (confirmación/pago) — no verificado contra la app real
@@ -204,6 +239,12 @@ export class FrontLobbyScreeningAdapter implements ScreeningAdapter {
         const rows = page.getByRole('row', { name: new RegExp(escapeRegExp(fullName), 'i') });
         const rowCount = await rows.count();
         if (rowCount === 0) {
+          // Sin este log, un selector/placeholder equivocado (nada de esto
+          // se pudo observar en una corrida real) es indistinguible de
+          // "FrontLobby todavía no generó el reporte": el checkeo se queda
+          // `pending` los 10 reintentos (~2.5h) y muere como 'failed' sin
+          // dejar rastro de por qué.
+          console.warn(`[FrontLobby] No se encontró ninguna fila para "${fullName}" en Reports`);
           return { status: 'pending', providerRef };
         }
         // Un re-screening del mismo solicitante puede dejar una fila VIEJA
@@ -225,20 +266,29 @@ export class FrontLobbyScreeningAdapter implements ScreeningAdapter {
         // solicitante, que es peor que esperar un ciclo más. El formato
         // exacto de la columna "Date Created" queda como punto de
         // verificación de la primera corrida real.
-        let targetRow: typeof rows | null = null;
+        //
+        // Entre VARIAS filas candidatas (posible con la tolerancia de 24h de
+        // `isOnOrAfterSubmittedDay` cuando el mismo solicitante se re-screenea
+        // dentro de ~48h) se elige la de fecha más reciente, no la primera del
+        // DOM — ver `pickReportRowIndex`, que es donde vive esa decisión como
+        // función pura testeable.
+        const rowTexts: string[] = [];
         for (let i = 0; i < rowCount; i += 1) {
-          const candidate = rows.nth(i);
-          const candidateText = (await candidate.textContent()) ?? '';
-          const candidateDate = parseRowDate(candidateText);
-          if (candidateDate && submittedAtIso && isOnOrAfterSubmittedDay(candidateDate, submittedAtIso)) {
-            targetRow = candidate;
-            break;
-          }
+          rowTexts.push((await rows.nth(i).textContent()) ?? '');
         }
-        if (!targetRow) {
+        const targetIndex = pickReportRowIndex(rowTexts, submittedAtIso);
+        if (targetIndex === null) {
+          // Se incluye el texto crudo de las filas que sí aparecieron: si el
+          // parseo de fecha está fallando (el formato real de "Date Created"
+          // nunca se observó), este log es lo único que permite ver el
+          // formato verdadero sin acceso interactivo al navegador.
+          console.warn(
+            `[FrontLobby] ${rowCount} fila(s) encontradas para "${fullName}" pero ninguna con fecha aceptable (envío: ${submittedAtIso}). Textos de fila: ${JSON.stringify(rowTexts)}`,
+          );
           return { status: 'pending', providerRef };
         }
-        const statusText = (await targetRow.textContent()) ?? '';
+        const targetRow = rows.nth(targetIndex);
+        const statusText = rowTexts[targetIndex] ?? '';
         // El texto real de "completado" en la columna Status no se pudo
         // observar (cuenta sin reportes generados aún) — se asume que
         // contiene "complete" o "ready", ajustar tras la primera corrida

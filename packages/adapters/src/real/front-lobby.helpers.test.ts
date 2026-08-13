@@ -7,6 +7,7 @@ import {
   isExtractionConfident,
   isOnOrAfterSubmittedDay,
   parseRowDate,
+  pickReportRowIndex,
   scoreToVerdict,
 } from './front-lobby.helpers.js';
 
@@ -116,6 +117,51 @@ describe('isOnOrAfterSubmittedDay', () => {
     const rowDate = parseRowDate('Jane Prospect Aug 13, 2026 Complete');
     expect(rowDate).not.toBeNull();
     expect(isOnOrAfterSubmittedDay(rowDate!, submittedAtIso)).toBe(true);
+  });
+});
+
+describe('pickReportRowIndex', () => {
+  const submittedAtIso = '2026-08-13T15:00:00.000Z';
+
+  it('con DOS filas candidatas válidas elige la de fecha MÁS RECIENTE, sin importar el orden en que se pasen', () => {
+    // El caso real: el primer checkeo salió `flagged` y el manager lo corre
+    // de nuevo dentro de ~48h, así que la fila vieja (día anterior, aceptada
+    // por la tolerancia de 24h) y la nueva conviven en la tabla. Cuál queda
+    // primera en el DOM nunca se observó en una corrida real — la elección
+    // NO puede depender de eso.
+    const vieja = 'Jane Prospect 2026-08-12 Complete';
+    const nueva = 'Jane Prospect 2026-08-13 Complete';
+    expect(pickReportRowIndex([vieja, nueva], submittedAtIso)).toBe(1);
+    expect(pickReportRowIndex([nueva, vieja], submittedAtIso)).toBe(0);
+  });
+
+  it('ignora las filas fuera de la ventana aunque estén primeras en el DOM', () => {
+    const rows = [
+      'Jane Prospect 2026-07-01 Complete', // reporte viejo de semanas atrás
+      'Jane Prospect 2026-08-14 Complete',
+    ];
+    expect(pickReportRowIndex(rows, submittedAtIso)).toBe(1);
+  });
+
+  it('ignora las filas sin fecha parseable', () => {
+    const rows = ['Jane Prospect Complete', 'Jane Prospect 2026-08-13 Complete'];
+    expect(pickReportRowIndex(rows, submittedAtIso)).toBe(1);
+  });
+
+  it('devuelve null si ninguna fila tiene fecha aceptable (se prefiere pending sobre adivinar)', () => {
+    const rows = ['Jane Prospect 2026-07-01 Complete', 'Jane Prospect Complete'];
+    expect(pickReportRowIndex(rows, submittedAtIso)).toBeNull();
+  });
+
+  it('devuelve null sin filas, y null si submittedAtIso no parsea', () => {
+    expect(pickReportRowIndex([], submittedAtIso)).toBeNull();
+    expect(pickReportRowIndex(['Jane Prospect 2026-08-13 Complete'], 'not-a-date')).toBeNull();
+    expect(pickReportRowIndex(['Jane Prospect 2026-08-13 Complete'], '')).toBeNull();
+  });
+
+  it('ante empate exacto de fecha conserva la primera fila', () => {
+    const rows = ['A 2026-08-13 Complete', 'B 2026-08-13 Complete'];
+    expect(pickReportRowIndex(rows, submittedAtIso)).toBe(0);
   });
 });
 
