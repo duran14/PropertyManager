@@ -154,4 +154,9 @@ describe('createAdapters', () => {
     expect(adapters.calendar.name).toBe('google_calendar');
     expect(adapters.mockModes.google_calendar).toBe(false);
   });
+
+  it('expone un adapter de screening', () => {
+    const adapters = createAdapters(baseEnv);
+    expect(adapters.screening.name).toBe('screening_mock');
+  });
 });

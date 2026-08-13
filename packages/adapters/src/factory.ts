@@ -21,6 +21,7 @@ import type {
   PhotoEnhancementAdapter,
   PlaidAdapter,
   QboAdapter,
+  ScreeningAdapter,
   ShowMojoAdapter,
   StripeAdapter,
   TwilioAdapter,
@@ -31,6 +32,7 @@ import { GlmMockAdapter } from './mocks/glm.mock.js';
 import { PhotoEnhancementMockAdapter } from './mocks/photo-enhancement.mock.js';
 import { PlaidMockAdapter } from './mocks/plaid.mock.js';
 import { QboMockAdapter } from './mocks/qbo.mock.js';
+import { ScreeningMockAdapter } from './mocks/screening.mock.js';
 import { ShowMojoMockAdapter } from './mocks/showmojo.mock.js';
 import { StripeMockAdapter } from './mocks/stripe.mock.js';
 import { TwilioMockAdapter } from './mocks/twilio.mock.js';
@@ -55,6 +57,7 @@ export interface Adapters {
   photoEnhancement: PhotoEnhancementAdapter;
   showmojo: ShowMojoAdapter;
   calendar: CalendarAdapter;
+  screening: ScreeningAdapter;
   /** Adapters de mensajería por canal (para el chatbot omnicanal). */
   messaging: Record<ChatChannel, MessagingAdapter>;
   /** Lista de integraciones que están en modo mock (para logs/UI). */
@@ -98,6 +101,10 @@ export function createAdapters(env: Env): Adapters {
     })
     : new CalendarMockAdapter();
 
+  // El adapter real (Playwright) llega cuando exista cuenta con los
+  // proveedores — hasta entonces el mock cubre desarrollo y pruebas.
+  const screening: ScreeningAdapter = new ScreeningMockAdapter();
+
   return {
     buildium: new BuildiumMockAdapter(),
     qbo: new QboMockAdapter(),
@@ -115,6 +122,7 @@ export function createAdapters(env: Env): Adapters {
     photoEnhancement: new PhotoEnhancementMockAdapter(),
     showmojo: new ShowMojoMockAdapter(),
     calendar,
+    screening,
     messaging: {
       whatsapp: new TwilioMessagingWrapper(
         twilioAdapter,

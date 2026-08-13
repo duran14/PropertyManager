@@ -453,3 +453,43 @@ export interface CalendarAdapter {
     eventId: string;
   }): Promise<void>;
 }
+
+// -----------------------------------------------------------------------------
+// Screening — checkeo de crédito y antecedentes penales de un solicitante.
+//
+// Agnóstico de proveedor y de mecanismo: el mismo contrato sirve para
+// automatización de navegador (esta fase), y para una API real o un flujo
+// de PDF+OCR si algún día existen, sin que el resto del sistema cambie.
+// -----------------------------------------------------------------------------
+
+export interface ScreeningApplicantInput {
+  fullName: string;
+  dateOfBirth: string; // ISO date (YYYY-MM-DD)
+  currentAddress: string;
+  currentCity: string;
+  currentProvince: string;
+  currentPostalCode: string;
+  email?: string;
+  phone?: string;
+}
+
+export type ScreeningCheckKind = 'credit' | 'criminal';
+
+export type ScreeningRunResult =
+  | {
+    status: 'completed';
+    verdict: 'passed' | 'flagged';
+    summary: string;
+    reportBase64: string;
+    reportMimeType: string;
+  }
+  | { status: 'pending'; providerRef: string }
+  | { status: 'failed'; reason: string };
+
+export interface ScreeningAdapter {
+  readonly name: 'screening_mock' | 'screening_playwright';
+  /** Envía la solicitud. Un mecanismo de navegador casi siempre devuelve 'pending'. */
+  runCheck(kind: ScreeningCheckKind, input: ScreeningApplicantInput): Promise<ScreeningRunResult>;
+  /** Revisa si un envío 'pending' ya tiene resultado. */
+  pollResult(kind: ScreeningCheckKind, providerRef: string): Promise<ScreeningRunResult>;
+}
