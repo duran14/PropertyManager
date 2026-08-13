@@ -220,11 +220,22 @@ export interface OcrResult {
   confidence: number;
 }
 
+export interface CreditReportExtraction {
+  /** null si el modelo no pudo leer el gauge de score del PDF. */
+  score: number | null;
+  /** Texto completo de la sección "AI Summary" del reporte, tal cual. */
+  aiSummaryText: string;
+  /** Confidence global de la extracción (0..1). */
+  confidence: number;
+}
+
 export interface GlmAdapter {
   readonly name: 'glm';
   reason(request: GlmReasoningRequest): Promise<GlmReasoningResponse>;
   /** OCR de un recibo/factura (PDF o imagen). */
   extractReceipt(input: { mimeType: string; base64: string; filename?: string }): Promise<OcrResult>;
+  /** OCR de un reporte de crédito (PDF) — score + texto del resumen de IA. */
+  extractCreditReport(input: { mimeType: string; base64: string; filename?: string }): Promise<CreditReportExtraction>;
 }
 
 // =============================================================================

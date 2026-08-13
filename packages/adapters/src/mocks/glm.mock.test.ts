@@ -135,3 +135,13 @@ describe('GlmMockAdapter chatbot flow', () => {
     expect(first).toContain('move in');
   });
 });
+
+describe('GlmMockAdapter.extractCreditReport', () => {
+  it('devuelve un score determinista y texto de resumen', async () => {
+    const adapter = new GlmMockAdapter();
+    const result = await adapter.extractCreditReport({ mimeType: 'application/pdf', base64: 'Zm9v' });
+    expect(result.score).toBe(675);
+    expect(result.aiSummaryText).toContain('credit score');
+    expect(result.confidence).toBeGreaterThan(0);
+  });
+});

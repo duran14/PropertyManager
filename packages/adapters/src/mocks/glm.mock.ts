@@ -11,6 +11,7 @@
  * handoff decision: warm but never pretending to be human).
  */
 import type {
+  CreditReportExtraction,
   GlmAdapter,
   GlmReasoningRequest,
   GlmReasoningResponse,
@@ -361,6 +362,18 @@ export class GlmMockAdapter implements GlmAdapter {
         },
       ],
       confidence: 0.92,
+    };
+  }
+
+  async extractCreditReport(_input: {
+    mimeType: string;
+    base64: string;
+    filename?: string;
+  }): Promise<CreditReportExtraction> {
+    return {
+      score: 675,
+      aiSummaryText: 'The applicant has a credit score of 675, which is categorized as good. No outstanding balances on most tradelines.',
+      confidence: 0.9,
     };
   }
 }

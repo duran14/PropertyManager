@@ -1,4 +1,5 @@
 import type {
+  CreditReportExtraction,
   GlmAdapter,
   GlmReasoningRequest,
   GlmReasoningResponse,
@@ -94,6 +95,43 @@ export class GlmRealAdapter implements GlmAdapter {
       choices?: Array<{ message?: { content?: string } }>;
     };
     return JSON.parse(body.choices?.[0]?.message?.content ?? '{}') as OcrResult;
+  }
+
+  async extractCreditReport(input: { mimeType: string; base64: string; filename?: string }): Promise<CreditReportExtraction> {
+    const response = await fetch(`${this.config.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${this.config.apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: this.config.ocrModel,
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'text',
+                text: 'This is a tenant credit report PDF. Find the credit score gauge (a number roughly 300-900) and the "AI Summary" section text. Respond as JSON: {"score": number|null, "aiSummaryText": string, "confidence": number between 0 and 1}.',
+              },
+              {
+                type: 'image_url',
+                image_url: { url: `data:${input.mimeType};base64,${input.base64}` },
+              },
+            ],
+          },
+        ],
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`GLM credit report OCR request failed: ${response.status}`);
+    }
+
+    const body = (await response.json()) as {
+      choices?: Array<{ message?: { content?: string } }>;
+    };
+    return JSON.parse(body.choices?.[0]?.message?.content ?? '{}') as CreditReportExtraction;
   }
 }
 
