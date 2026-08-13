@@ -106,73 +106,73 @@ dinero real — no debe dispararse solo.
   checkeo"**, visible solo para esos roles (mismo patrón de
   `canManage`/`requireRole` ya usado en `IntegrationsPage.tsx`).
 
-## 4. Adapter compuesto — crédito real, antecedentes sigue mock
+## 4. Enrutamiento por `kind` — NO vive en el factory síncrono
 
-`getAdapters().screening` sigue siendo un único objeto que implementa
-`ScreeningAdapter` (ningún consumidor existente cambia). Por dentro, un
-nuevo `CompositeScreeningAdapter` enruta por `kind`:
+**Corrección tras revisar el código real de `apps/api/src/config/adapters.ts`:**
+`getAdapters(env)` es **síncrono** y cachea `Adapters` una sola vez por
+proceso, construido solo a partir de `env` — sin `tenantId`, sin lectura a
+BD. 64 call sites en `apps/api/src` lo consumen así, sin `await`. Forzar
+un `CompositeScreeningAdapter` que necesita leer la bóveda (async, por
+tenant) dentro de ese factory síncrono rompería ese contrato para las
+otras ~12 integraciones que ya lo usan. Se descarta el diseño original de
+esta sección (un `CompositeScreeningAdapter` metido en `factory.ts`).
+
+**Diseño corregido:** el enrutamiento por `kind` vive en
+`screening.service.ts`, que ya es 100% async y ya hace
+`await import('../config/adapters.js')` por llamada. Función nueva:
 
 ```ts
-export class CompositeScreeningAdapter implements ScreeningAdapter {
-  readonly name = 'screening_playwright' as const; // ver nota abajo
-
-  constructor(
-    private readonly byKind: Record<ScreeningCheckKind, ScreeningAdapter>,
-  ) {}
-
-  runCheck(kind: ScreeningCheckKind, input: ScreeningApplicantInput) {
-    return this.byKind[kind].runCheck(kind, input);
+async function getScreeningAdapter(tenantId: string, kind: ScreeningCheckKind): Promise<ScreeningAdapter> {
+  const provider: ScreeningProvider = kind === 'credit' ? 'frontlobby_portal' : 'sterling_portal';
+  const credentials = await getIntegrationCredentials(tenantId, provider);
+  if (credentials) {
+    return kind === 'credit'
+      ? new FrontLobbyScreeningAdapter(credentials)
+      : new ScreeningMockAdapter(); // Sterling real: fuera de alcance, no existe todavía
   }
-  pollResult(kind: ScreeningCheckKind, providerRef: string) {
-    return this.byKind[kind].pollResult(kind, providerRef);
-  }
+  const { getAdapters } = await import('../config/adapters.js');
+  return getAdapters().screening; // mock, camino de hoy sin cambios
+}
+
+async function isMockScreening(tenantId: string, kind: ScreeningCheckKind): Promise<boolean> {
+  const adapter = await getScreeningAdapter(tenantId, kind);
+  return adapter.name === 'screening_mock';
 }
 ```
 
-`factory.ts`: si hay credenciales de `frontlobby_portal` en la bóveda para
-el tenant → `byKind.credit = new FrontLobbyScreeningAdapter(...)`, si no →
-`ScreeningMockAdapter` (mismo para `criminal`/`sterling_portal`, hoy
-siempre mock). **Importante:** la bóveda es por tenant, pero
-`createAdapters(env)` construye adapters una sola vez por proceso, sin
-`tenantId` — igual que el resto de la bóveda (Tarea 3) es
-write-only-hasta-ahora. Este spec asume una sola cuenta de FrontLobby a
-nivel de proceso (variable de entorno o la primera fila de la bóveda),
-consistente con cómo están construidos hoy `twilio`/`glm`/etc. en
-`factory.ts`. Multi-tenant-con-credenciales-propias queda fuera de
-alcance — anotar como límite conocido, no bloqueante para un solo tenant.
+Cada punto de `screening.service.ts` que hoy hace
+`(await import('../config/adapters.js')).getAdapters().screening.runCheck(...)`
+o `.pollResult(...)` pasa a `(await getScreeningAdapter(tenantId, kind)).runCheck(...)`/`.pollResult(...)`.
+`getAdapters()` (el factory global, síncrono) queda intacto — sigue
+sirviendo `screening` como el mock de siempre para cuando no hay
+credenciales de FrontLobby en la bóveda, sin que ninguno de los otros 63
+call sites note el cambio.
 
-**Nota sobre `name`:** el campo `name` de `ScreeningAdapter` ya no alcanza
-para decidir "¿es simulado?" cuando el compuesto mezcla real y mock por
-`kind` — ver Sección 5.
+**Costo de una lectura extra a BD por llamada:** `getScreeningAdapter`
+consulta la bóveda en cada `runCheck`/`pollResult` en vez de una vez por
+proceso — aceptable dado el volumen real (aplicaciones de renta, no un
+endpoint de alto tráfico) y consistente con que el resto de la bóveda
+(Tarea 3) ya es una tabla pequeña sin caché.
 
-## 5. Detección de "es mock" por `kind`, no por adapter completo
+**Multi-tenant:** con este diseño, cada tenant que guarde sus propias
+credenciales de FrontLobby en su bóveda obtiene su propio adapter real
+automáticamente — el enrutamiento ya es por tenant, no hay límite de
+"una sola cuenta por proceso" que anotar como pendiente.
 
-La marca `[SIMULATED]` (Sección de la ronda de arreglo final de la Tarea
-7) hoy compara `getAdapters().screening.name === 'screening_mock'` — con
-el compuesto, ese campo pasa a ser `'screening_playwright'` aunque
-`criminal` siga siendo mock por dentro. Sin cambiar esto, antecedentes
-penales dejaría de marcarse como simulado — es el mismo bug que Hallazgo 1
-ya cerró, reabierto por esta feature si no se corrige aquí mismo.
+## 5. Detección de "es mock" por `kind` — ya cubierta arriba
 
-`ScreeningAdapter` gana un método:
-
-```ts
-export interface ScreeningAdapter {
-  readonly name: 'screening_mock' | 'screening_playwright';
-  isMock(kind: ScreeningCheckKind): boolean; // NUEVO
-  runCheck(...): Promise<ScreeningRunResult>;
-  pollResult(...): Promise<ScreeningRunResult>;
-}
-```
-
-`ScreeningMockAdapter.isMock()` → siempre `true`. `FrontLobbyScreeningAdapter.isMock()`
-→ siempre `false`. `CompositeScreeningAdapter.isMock(kind)` → delega en
-`this.byKind[kind].isMock(kind)`. `isSimulatedScreening()` en
-`screening.service.ts` pasa de comparar `.name` a llamar
-`getAdapters().screening.isMock(kind)` — y **ese mismo método** es lo que
-`triggerScreeningIfConsented` usa en la Sección 3 para decidir
-auto-disparo vs. aprobación manual (una sola fuente de verdad para "¿esto
-es real?", no dos chequeos que puedan divergir).
+La marca `[SIMULATED]` (ronda de arreglo final de la Tarea 7) hoy compara
+`getAdapters().screening.name === 'screening_mock'` en
+`isSimulatedScreening()`. Con el enrutamiento de la Sección 4,
+`isSimulatedScreening(tenantId, kind)` pasa a llamar
+`isMockScreening(tenantId, kind)` — **la misma función** que
+`triggerScreeningIfConsented` usa para decidir auto-disparo (mock) vs.
+aprobación manual (real, Sección 3). Una sola fuente de verdad para
+"¿esto es real?", sin duplicar el chequeo ni arriesgar que diverjan. No
+hace falta ningún método nuevo en el contrato `ScreeningAdapter` — el
+campo `name` que ya existe (`'screening_mock' | 'screening_playwright'`)
+alcanza, porque cada adapter que `getScreeningAdapter` devuelve es
+puramente mock o puramente real, nunca un compuesto de los dos.
 
 ## 6. `FrontLobbyScreeningAdapter.runCheck('credit', input)`
 
@@ -298,9 +298,6 @@ nunca asume un veredicto por defecto.
 - Antecedentes penales (Sterling) — sigue en `ScreeningMockAdapter` hasta
   que exista esa cuenta. El compuesto ya está diseñado para agregarlo
   después sin tocar `criminal` cuando llegue el momento.
-- Multi-tenant con credenciales de FrontLobby distintas por tenant (ver
-  nota de la Sección 4) — límite conocido, no bloqueante para un solo
-  tenant real hoy.
 - Configuración del umbral de score por tenant/UI — hardcoded por ahora
   (Sección 8), YAGNI.
 - Verificar en producción los valores reales de columna `Status` y el
