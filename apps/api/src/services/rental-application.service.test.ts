@@ -280,6 +280,21 @@ describe('completeShowingAndInvite', () => {
     const updatedShowing = await prisma.showing.findUniqueOrThrow({ where: { id: showing.id } });
     expect(updatedShowing.status).toBe('completed');
   });
+
+  it('completa el showing con actorUserId null cuando el showing no tiene brokerUserId', async () => {
+    const { showing } = await seedShowing();
+    expect(showing.brokerUserId).toBeNull();
+
+    const result = await completeShowingAndInvite(
+      { showingId: showing.id, tenantId: TENANT_ID, actorUserId: null },
+      { messaging: fakeMessaging().messaging },
+    );
+
+    expect(result.ok).toBe(true);
+    const updated = await prisma.showing.findUniqueOrThrow({ where: { id: showing.id } });
+    expect(updated.status).toBe('completed');
+    expect(updated.brokerUserId).toBeNull();
+  });
 });
 
 function validSubmission(overrides: Partial<SubmitApplicationInput> = {}): SubmitApplicationInput {

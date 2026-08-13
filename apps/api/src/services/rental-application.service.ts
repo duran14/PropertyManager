@@ -71,7 +71,7 @@ function canCompleteShowingStatus(status: string): boolean {
  * distinguir 404 de 409.
  */
 export async function completeShowingAndInvite(
-  input: { showingId: string; tenantId: string; actorUserId: string },
+  input: { showingId: string; tenantId: string; actorUserId: string | null },
   deps: { messaging: Record<ChatChannel, MessagingAdapter> },
 ): Promise<CompleteShowingResult> {
   const showing = await prisma.showing.findFirst({
@@ -99,7 +99,10 @@ export async function completeShowingAndInvite(
   // con P2002 → 500 al broker, con el showing ya completado.
   const { count } = await prisma.showing.updateMany({
     where: { id: showing.id, tenantId: input.tenantId, status: { in: ['scheduled', 'confirmed'] } },
-    data: { status: 'completed', brokerUserId: showing.brokerUserId ?? input.actorUserId },
+    // `undefined` (no `null`) omite el campo del UPDATE cuando ni el
+    // showing ni el actor tienen un brokerUserId — deja la columna como
+    // estaba en vez de escribir `null` explícito.
+    data: { status: 'completed', brokerUserId: showing.brokerUserId ?? input.actorUserId ?? undefined },
   });
   if (count === 0) {
     return { ok: false, status: 409, error: `Showing cannot be completed from status: ${showing.status}` };
