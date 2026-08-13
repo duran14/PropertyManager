@@ -14,7 +14,15 @@ import type {
   ScreeningRunResult,
   GlmAdapter,
 } from '../contracts.js';
-import { decodeProviderRef, encodeProviderRef, formatAutomatedSummary, scoreToVerdict } from './front-lobby.helpers.js';
+import {
+  decodeProviderRef,
+  encodeProviderRef,
+  escapeRegExp,
+  formatAutomatedSummary,
+  isExtractionConfident,
+  parseRowDate,
+  scoreToVerdict,
+} from './front-lobby.helpers.js';
 
 const FRONTLOBBY_BASE_URL = 'https://app.frontlobby.com';
 
@@ -56,7 +64,13 @@ export class FrontLobbyScreeningAdapter implements ScreeningAdapter {
   private async ensureProperty(page: Page, property: FrontLobbyProperty): Promise<void> {
     await page.goto(`${FRONTLOBBY_BASE_URL}/property`);
     await page.fill('input[placeholder="Search for address..."]', property.address);
-    const existingRow = page.getByRole('row', { name: new RegExp(property.address, 'i') });
+    // `count()` no auto-espera a que la tabla reaccione al filtro recién
+    // escrito (a diferencia de la mayoría de los métodos de Playwright) —
+    // sin esta pausa se puede leer el estado viejo de la tabla y crear una
+    // Property duplicada en la cuenta real. 500ms es el mínimo aceptable
+    // documentado; ajustar si una corrida real muestra que no alcanza.
+    await page.waitForTimeout(500);
+    const existingRow = page.getByRole('row', { name: new RegExp(escapeRegExp(property.address), 'i') });
     if (await existingRow.count() > 0) return;
 
     await page.click('text=+ Add Property');
@@ -93,6 +107,13 @@ export class FrontLobbyScreeningAdapter implements ScreeningAdapter {
     if (kind !== 'credit') {
       return { status: 'failed', reason: 'FrontLobbyScreeningAdapter only handles credit checks' };
     }
+    // `ensureProperty` construye un RegExp dinámico a partir de esta
+    // dirección — un valor vacío/solo espacios matchearía CUALQUIER fila de
+    // la tabla de Properties y podría reusar/crear la Property equivocada.
+    // Se rechaza acá, antes de lanzar el navegador y gastar el checkeo real.
+    if (!input.currentAddress.trim()) {
+      return { status: 'failed', reason: 'currentAddress is required to create/search the FrontLobby property' };
+    }
     try {
       return await this.withBrowser(async (page) => {
         await page.goto(`${FRONTLOBBY_BASE_URL}/tenant-screening`);
@@ -116,6 +137,17 @@ export class FrontLobbyScreeningAdapter implements ScreeningAdapter {
         // real y, si aparece un ID propio de FrontLobby, preferirlo sobre
         // encodeProviderRef.
         await page.click('button:has-text("Submit")');
+        // El clic de Submit retorna en cuanto el clic se despacha, no
+        // cuando FrontLobby terminó de procesar el envío del cargo real de
+        // $18.99 — sin esperar una señal, `withBrowser` cerraría el
+        // navegador de inmediato y podría abortar un envío en vuelo,
+        // dejando el cargo en un estado ambiguo. El selector/URL exacto de
+        // la pantalla de confirmación no se pudo observar en el recorrido
+        // original (para no gastar dinero de prueba) — como señal
+        // conservadora se espera a que el botón Submit deje de estar
+        // visible. Si esto no coincide con la app real, lanza y el
+        // llamador recibe `failed` (nunca un 'pending' sin confirmación).
+        await page.waitForSelector('button:has-text("Submit")', { state: 'hidden', timeout: 20_000 });
         const submittedAtIso = new Date().toISOString();
         return { status: 'pending', providerRef: encodeProviderRef(input.fullName, submittedAtIso) };
       });
@@ -128,16 +160,57 @@ export class FrontLobbyScreeningAdapter implements ScreeningAdapter {
     if (kind !== 'credit') {
       return { status: 'failed', reason: 'FrontLobbyScreeningAdapter only handles credit checks' };
     }
-    const { fullName } = decodeProviderRef(providerRef);
     try {
+      // `decodeProviderRef` va DENTRO del try — es la única línea de este
+      // adapter que podía lanzar sin que nadie la capturara si `providerRef`
+      // llegara malformado en runtime (el tipo dice `string`, pero nada
+      // garantiza el formato en producción).
+      const { fullName, submittedAtIso } = decodeProviderRef(providerRef);
+      // El nombre decodificado se usa para construir un RegExp dinámico
+      // contra la tabla de Reports — un valor vacío/solo espacios
+      // matchearía CUALQUIER fila y podría devolver el reporte de otro
+      // solicitante. Se rechaza acá, antes de lanzar el navegador.
+      if (!fullName.trim()) {
+        return { status: 'failed', reason: 'providerRef does not contain a usable applicant full name' };
+      }
       return await this.withBrowser(async (page) => {
         await page.goto(`${FRONTLOBBY_BASE_URL}/tenant-screening/reports`);
         await page.fill('input[placeholder="Search for applicant or property"]', fullName);
-        const row = page.getByRole('row', { name: new RegExp(fullName, 'i') });
-        if (await row.count() === 0) {
+        // `count()` no auto-espera a que la tabla reaccione al filtro
+        // recién escrito — sin esta pausa se puede leer el estado viejo de
+        // la tabla. 500ms es el mínimo aceptable documentado.
+        await page.waitForTimeout(500);
+        const rows = page.getByRole('row', { name: new RegExp(escapeRegExp(fullName), 'i') });
+        const rowCount = await rows.count();
+        if (rowCount === 0) {
           return { status: 'pending', providerRef };
         }
-        const statusText = (await row.first().textContent()) ?? '';
+        // Un re-screening del mismo solicitante puede dejar una fila VIEJA
+        // con status "complete" en la tabla — sin desambiguar por fecha, se
+        // podría leer y persistir el veredicto del checkeo anterior en vez
+        // del que se acaba de pagar. Se intenta preferir la fila cuya
+        // "Date Created" sea posterior o igual al timestamp de envío
+        // (`submittedAtIso`, codificado en el providerRef). El formato
+        // exacto de esa columna no se pudo verificar contra la app real
+        // (ver `parseRowDate`) — si no se puede parsear ninguna fila, se
+        // usa conservadoramente la última fila que matcheó (asumiendo que
+        // las filas más nuevas tienden a aparecer al final/arriba de una
+        // tabla ordenada por fecha) en vez de ciegamente la primera.
+        const submittedAt = submittedAtIso ? new Date(submittedAtIso) : null;
+        const hasValidSubmittedAt = submittedAt !== null && !Number.isNaN(submittedAt.getTime());
+        let targetRow = rows.last();
+        if (hasValidSubmittedAt) {
+          for (let i = 0; i < rowCount; i += 1) {
+            const candidate = rows.nth(i);
+            const candidateText = (await candidate.textContent()) ?? '';
+            const candidateDate = parseRowDate(candidateText);
+            if (candidateDate && candidateDate.getTime() >= submittedAt!.getTime()) {
+              targetRow = candidate;
+              break;
+            }
+          }
+        }
+        const statusText = (await targetRow.textContent()) ?? '';
         // El texto real de "completado" en la columna Status no se pudo
         // observar (cuenta sin reportes generados aún) — se asume que
         // contiene "complete" o "ready", ajustar tras la primera corrida
@@ -147,7 +220,7 @@ export class FrontLobbyScreeningAdapter implements ScreeningAdapter {
         }
         const [download] = await Promise.all([
           page.waitForEvent('download'),
-          row.first().getByRole('link', { name: /report|download/i }).click(),
+          targetRow.getByRole('link', { name: /report|download/i }).click(),
         ]);
         const stream = await download.createReadStream();
         const chunks: Buffer[] = [];
@@ -157,10 +230,16 @@ export class FrontLobbyScreeningAdapter implements ScreeningAdapter {
           }
         }
         const pdfBuffer = Buffer.concat(chunks);
+        if (pdfBuffer.length === 0) {
+          return { status: 'failed', reason: 'Downloaded report was empty' };
+        }
         const base64 = pdfBuffer.toString('base64');
         const extraction = await this.glm.extractCreditReport({ mimeType: 'application/pdf', base64 });
         if (extraction.score === null) {
           return { status: 'failed', reason: 'Could not read credit score from report' };
+        }
+        if (!isExtractionConfident(extraction.confidence)) {
+          return { status: 'failed', reason: 'Credit score extraction confidence too low to trust' };
         }
         return {
           status: 'completed',
