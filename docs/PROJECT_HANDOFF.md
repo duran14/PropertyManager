@@ -322,6 +322,8 @@ Required local services:
 
 Deployment requirement (FrontLobby real adapter, `packages/adapters/src/real/front-lobby.real.ts`): the production environment must run `pnpm --filter @property-manager/adapters exec playwright install chromium --with-deps` as part of the build/deploy so the Chromium binary Playwright needs is present.
 
+Runbook note (FrontLobby real adapter, real credit checks at $18.99 each): if a credit check ends up `'failed'` while `creditCheckProviderRef` is NOT null, the real $18.99 charge already happened at FrontLobby and the failure occurred at a later step (e.g. enqueuing the poll job). Never re-approve that check from the UI — that would trigger a second real charge. Instead, manually re-enqueue the poll job using the already-saved `providerRef`.
+
 Key environment variables currently relevant:
 
 - `DATABASE_URL`

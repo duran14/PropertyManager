@@ -208,7 +208,15 @@ export function startWorkers(): void {
     async (job) => {
       await runScreeningRequest(job.data.applicationId, job.data.tenantId, job.data.kind, job.data.forceMock ?? false);
     },
-    { connection: redis },
+    // `attempts: 1` (en queues.ts) evita que un fallo de `runCheck` se
+    // reintente y cobre dos veces — pero BullMQ tiene un camino aparte que no
+    // consulta `attempts`: si el worker muere a mitad de la corrida (Playwright,
+    // 60-90s), el job queda 'active' y BullMQ lo mueve de vuelta a 'wait' y lo
+    // re-despacha ("stalled"), lo que puede producir un segundo cargo real de
+    // $18.99. Con `maxStalledCount: 0`, el primer stall detectado se cierra
+    // como `UnrecoverableError` en vez de re-despacharse — ese camino ya lo
+    // maneja `handleScreeningRequestFailure`/`isFinalJobFailure` arriba.
+    { connection: redis, maxStalledCount: 0 },
   );
 
   const screeningPollWorker = new Worker<ScreeningPollJobData>(
