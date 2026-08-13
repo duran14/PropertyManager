@@ -8,6 +8,7 @@ import { scheduleWeeklyRemarketing } from './jobs/queues.js';
 import { startTelegramPoller } from './jobs/telegram-poller.js';
 import { startShortlistReminderWorker } from './jobs/shortlist-reminders.js';
 import { startMessageDeliveryRetryWorker } from './services/message-delivery-retry.service.js';
+import { startShowingAutoCompleteWorker } from './jobs/showing-auto-complete.js';
 
 const app = createApp();
 const env = getEnv();
@@ -28,6 +29,7 @@ app.listen(env.API_PORT, () => {
   startTelegramPoller();
   startShortlistReminderWorker();
   startMessageDeliveryRetryWorker();
+  startShowingAutoCompleteWorker();
 
   console.log('');
 });
