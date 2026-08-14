@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { API_BASE, apiFetch, ApiError, getAccessToken } from '../lib/apiClient';
@@ -78,6 +78,19 @@ function formatDate(iso: string): string {
   });
 }
 
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result as string;
+      const base64 = result.split(',')[1] ?? '';
+      resolve(base64);
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
 function formatTime(iso: string): string {
   return new Date(iso).toLocaleTimeString('en-CA', {
     hour: 'numeric',
@@ -151,6 +164,18 @@ function ScreeningBlock({
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['showing-application'] }),
   });
 
+  const fileInput = useRef<HTMLInputElement>(null);
+  const upload = useMutation({
+    mutationFn: async (file: File) => {
+      const base64 = await fileToBase64(file);
+      return apiFetch(`/leads/applications/${applicationId}/screening/${kind}/upload-report`, {
+        method: 'POST',
+        body: JSON.stringify({ mimeType: file.type || 'application/pdf', base64, filename: file.name }),
+      });
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['showing-application'] }),
+  });
+
   async function handleDownload() {
     setDownloadError(null);
     setIsDownloading(true);
@@ -208,6 +233,34 @@ function ScreeningBlock({
         </button>
       )}
       {downloadError && <p className="mt-0.5 text-red-600">{downloadError}</p>}
+      {canApprove && (
+        <>
+          <button
+            type="button"
+            onClick={() => fileInput.current?.click()}
+            disabled={upload.isPending}
+            className="mt-0.5 text-teal-600 hover:underline disabled:opacity-50"
+          >
+            {upload.isPending ? 'Uploading…' : 'Upload report manually'}
+          </button>
+          <input
+            ref={fileInput}
+            type="file"
+            accept="application/pdf"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) upload.mutate(file);
+              e.target.value = '';
+            }}
+          />
+        </>
+      )}
+      {upload.isError && (
+        <p className="mt-0.5 text-red-600">
+          {upload.error instanceof ApiError ? upload.error.message : 'Could not process the uploaded report.'}
+        </p>
+      )}
     </div>
   );
 }

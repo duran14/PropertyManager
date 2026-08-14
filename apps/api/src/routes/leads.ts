@@ -36,7 +36,7 @@ import {
   getPublicRentalApplication,
   submitRentalApplication,
 } from '../services/rental-application.service.js';
-import { approveScreening } from '../services/screening.service.js';
+import { approveScreening, recordManualScreeningReport } from '../services/screening.service.js';
 
 export const publicRouter = Router();
 export const leadsRouter = Router();
@@ -742,6 +742,52 @@ leadsRouter.post(
         return;
       }
       res.json({ ok: true });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+const uploadReportSchema = z.object({
+  mimeType: z.string().min(5),
+  base64: z.string().min(10),
+  filename: z.string().optional(),
+});
+const MAX_REPORT_BASE64_LENGTH = 1_500_000; // mismo tope que idDocumentBase64 en rental-application.service.ts
+
+// Fase 2.2 (Task 2): carga manual de un reporte de screening (PDF/OCR) que
+// el staff obtuvo por fuera de la app, de cualquier proveedor de crédito o
+// antecedentes penales. A diferencia de la ruta de aprobación de arriba,
+// esta es una acción humana explícita que puede registrar un resultado sin
+// importar el estado actual del checkeo — ver el comentario de
+// `recordManualScreeningReport` en screening.service.ts.
+leadsRouter.post(
+  '/applications/:applicationId/screening/:kind/upload-report',
+  requireAuth,
+  requireRole('property_manager', 'broker'),
+  async (req, res, next) => {
+    try {
+      const user = requireUser(req);
+      const { applicationId, kind } = req.params;
+      if (kind !== 'credit' && kind !== 'criminal') {
+        res.status(400).json({ error: 'Invalid screening kind' });
+        return;
+      }
+      const parsed = uploadReportSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Invalid upload', details: parsed.error.flatten() });
+        return;
+      }
+      if (parsed.data.base64.length > MAX_REPORT_BASE64_LENGTH) {
+        res.status(400).json({ error: 'The report file is too large' });
+        return;
+      }
+      const result = await recordManualScreeningReport(applicationId, user.tenantId, kind, parsed.data);
+      if (!result.ok) {
+        res.status(result.status).json({ error: result.error });
+        return;
+      }
+      res.json({ ok: true, verdict: result.verdict });
     } catch (err) {
       next(err);
     }

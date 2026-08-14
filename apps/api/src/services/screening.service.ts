@@ -62,6 +62,97 @@ const PROVIDER_BY_KIND: Record<ScreeningCheckKind, ScreeningProvider> = {
   criminal: 'sterling_portal',
 };
 
+const MANUAL_UPLOAD_MIN_CONFIDENCE = 0.5;
+
+/**
+ * Registra un reporte de screening que el staff obtuvo por fuera de esta
+ * app (de cualquier proveedor) y subió manualmente. A diferencia de
+ * `persistTerminalResult`, esto NO respeta el guard de `OPEN_STATUSES`: es
+ * una acción humana explícita, no una escritura automática rezagada, así
+ * que puede registrar un resultado sin importar el estado actual del
+ * checkeo (incluso sobreescribir uno ya cerrado). Si más tarde una cadena
+ * automática intenta su propio cierre vía `persistTerminalResult`, el
+ * guard de esa función ya existente (`WHERE ... IN ('requested','pending')`)
+ * no encuentra la fila y descarta la escritura en silencio -- las dos
+ * funciones componen de forma segura sin necesidad de coordinarse.
+ */
+export async function recordManualScreeningReport(
+  applicationId: string,
+  tenantId: string,
+  kind: ScreeningCheckKind,
+  upload: { mimeType: string; base64: string; filename?: string },
+): Promise<{ ok: true; verdict: 'passed' | 'flagged' } | { ok: false; status: 400 | 404; error: string }> {
+  const application = await prisma.rentalApplication.findFirst({
+    where: { id: applicationId, tenantId },
+    select: { id: true },
+  });
+  if (!application) return { ok: false, status: 404, error: 'Application not found' };
+
+  const { getAdapters } = await import('../config/adapters.js');
+  const adapters = getAdapters();
+  const extraction = await adapters.glm.extractScreeningReport({
+    mimeType: upload.mimeType, base64: upload.base64, filename: upload.filename, kind,
+  });
+  // Whitelist positiva, no negativa: `GlmRealAdapter.extractScreeningReport`
+  // hace `JSON.parse(content ?? '{}')` sin validar el shape en runtime. Si el
+  // modelo devuelve `{}` (respuesta vacía / contenido filtrado), `verdict` es
+  // `undefined`, no `null` — un guard `=== null` lo deja pasar. Y un
+  // `confidence` no-numérico (`undefined`, `NaN`) siempre da `false` contra
+  // `< MIN` por la semántica de comparación con NaN, así que también se
+  // colaría. Aquí se exige explícitamente que `verdict` sea uno de los dos
+  // valores válidos y que `confidence` sea un número que cumpla el mínimo —
+  // `!(confidence >= MIN)` en vez de `confidence < MIN` para rechazar
+  // también NaN/undefined/tipos raros que `<` dejaría pasar en silencio.
+  if (extraction.verdict !== 'passed' && extraction.verdict !== 'flagged') {
+    return { ok: false, status: 400, error: 'Could not determine a verdict from this report — review it manually' };
+  }
+  if (typeof extraction.confidence !== 'number' || !(extraction.confidence >= MANUAL_UPLOAD_MIN_CONFIDENCE)) {
+    return { ok: false, status: 400, error: 'Could not determine a verdict from this report — review it manually' };
+  }
+
+  const env = getEnv();
+  const storage = createLocalDocumentStorage({
+    rootDir: env.DOCUMENT_STORAGE_DIR,
+    publicBaseUrl: env.DOCUMENT_STORAGE_PUBLIC_BASE_URL || undefined,
+  });
+  const stored = await storage.putObject({
+    // `-manual` en el documentId: `persistTerminalResult` (pipeline
+    // automático) usa la MISMA fórmula sin este sufijo para el mismo
+    // `applicationId`/`kind`. `storage.putObject` hace `fs.writeFile` sin
+    // condición — sin este sufijo, un reporte manual subido mientras el
+    // sondeo automático sigue en curso ('pending') se pisaría en disco en
+    // cuanto ese sondeo resuelva, aunque la fila en BD (que sí respeta el
+    // guard de OPEN_STATUSES) conserve el veredicto manual. La ruta de
+    // descarga no necesita cambios: sirve lo que sea que esté en
+    // `creditCheckReportKey`/`criminalCheckReportKey`, sin importar la
+    // convención de nombre de esa clave.
+    key: buildDocumentStorageKey({ tenantId, documentId: `${applicationId}-${kind}-manual`, filename: `${kind}-report.pdf` }),
+    body: decodeBase64Payload(upload.base64),
+    contentType: upload.mimeType,
+  });
+
+  // El mock (`GlmMockAdapter`) fabrica un veredicto SIN leer el contenido
+  // real del documento — decide solo por el filename. Es el mismo riesgo que
+  // ya cubre `SIMULATED_PREFIX` en `persistTerminalResult` para el pipeline
+  // automático (ver comentario en la constante), y alcanzable por DEFAULT:
+  // cualquier entorno sin `ZAI_API_KEY` cae aquí. `[AUTOMATED]` sería
+  // engañoso: implica que una IA sí leyó e interpretó el documento, y eso no
+  // pasó. `[AUTOMATED]` y `[SIMULATED]` no se combinan en ningún otro punto
+  // de este archivo, así que se usa `SIMULATED_PREFIX` sola.
+  const now = new Date();
+  const summaryPrefix = adapters.mockModes.glm ? SIMULATED_PREFIX : '[AUTOMATED] ';
+  await prisma.rentalApplication.updateMany({
+    where: { id: applicationId, tenantId },
+    data: {
+      [STATUS_FIELD[kind]]: extraction.verdict,
+      [SUMMARY_FIELD[kind]]: `${summaryPrefix}${extraction.summaryText}`,
+      [REPORT_KEY_FIELD[kind]]: stored.storageKey,
+      [COMPLETED_AT_FIELD[kind]]: now,
+    },
+  });
+  return { ok: true, verdict: extraction.verdict };
+}
+
 /**
  * Resuelve el adapter real por `kind` si el tenant tiene credenciales
  * conectadas en la bóveda; si no, cae al mock del factory global — el mismo

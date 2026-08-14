@@ -145,3 +145,19 @@ describe('GlmMockAdapter.extractCreditReport', () => {
     expect(result.confidence).toBeGreaterThan(0);
   });
 });
+
+describe('GlmMockAdapter.extractScreeningReport', () => {
+  it('devuelve un veredicto passed determinista para crédito', async () => {
+    const adapter = new GlmMockAdapter();
+    const result = await adapter.extractScreeningReport({ mimeType: 'application/pdf', base64: 'Zm9v', kind: 'credit' });
+    expect(result.verdict).toBe('passed');
+    expect(result.confidence).toBeGreaterThan(0);
+    expect(result.summaryText.length).toBeGreaterThan(0);
+  });
+
+  it('devuelve flagged si el filename contiene "flagged" (mismo patrón que ScreeningMockAdapter)', async () => {
+    const adapter = new GlmMockAdapter();
+    const result = await adapter.extractScreeningReport({ mimeType: 'application/pdf', base64: 'Zm9v', filename: 'flagged-report.pdf', kind: 'criminal' });
+    expect(result.verdict).toBe('flagged');
+  });
+});
