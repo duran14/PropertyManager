@@ -901,6 +901,11 @@ model RentalApplication {
   employerName         String?
   references           String?
   idDocumentStorageKey String?
+  // El frontend público ya manda este dato (ApplyPage.tsx) desde la Fase
+  // 2A, pero nunca se persistía — sin él, una ruta de descarga no puede
+  // servir el archivo con el Content-Type correcto (el documento puede
+  // ser JPG, PNG o PDF).
+  idDocumentMimeType   String?
 
   // Fase 2.2: identidad requerida para el screening de crédito/antecedentes
   // — sin esto ni FrontLobby ni Sterling pueden identificar a la persona.

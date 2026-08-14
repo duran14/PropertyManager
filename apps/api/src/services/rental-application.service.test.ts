@@ -381,6 +381,19 @@ describe('submitRentalApplication', () => {
     expect(saved.consentPoliceCheckAt).not.toBeNull();
   });
 
+  it('persiste idDocumentMimeType junto con idDocumentStorageKey', async () => {
+    const { token } = await seedInvitedApplication();
+    const result = await submitRentalApplication(
+      token,
+      validSubmission({ idDocumentMimeType: 'image/png' }),
+      { messaging: fakeMessaging().messaging },
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const row = await prisma.rentalApplication.findUniqueOrThrow({ where: { id: result.applicationId } });
+    expect(row.idDocumentMimeType).toBe('image/png');
+  });
+
   it.each([
     ['consentApplication'],
     ['consentCreditCheck'],

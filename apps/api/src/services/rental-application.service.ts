@@ -302,6 +302,7 @@ export async function submitRentalApplication(
       currentPostalCode: input.currentPostalCode.trim(),
       currentAddressStartDateAt: parsedAddressStartDate,
       idDocumentStorageKey,
+      idDocumentMimeType: input.idDocumentMimeType,
       consentApplicationAt: now,
       consentCreditCheckAt: now,
       consentPoliceCheckAt: now,
