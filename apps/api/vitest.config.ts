@@ -11,6 +11,25 @@ import { defineConfig } from 'vitest/config';
 // packages/config/src/env.ts, actualiza esta ruta.
 import { INTEGRATION_CREDENTIAL_ENV_KEYS } from '../../packages/config/src/env.js';
 
+// Antes de que este archivo existiera, Vitest/Vite cargaban `apps/api/.env`
+// hacia `process.env` de forma implícita para el proceso de test. Declarar
+// `test.env` explícito (abajo) REEMPLAZA esa carga implícita en vez de
+// extenderla, así que sin este `loadEnvFile` de por medio,
+// `DATABASE_URL`/`REDIS_URL`/etc. quedan `undefined` y `getEnv()` revienta
+// con "Variables de entorno inválidas" en cualquier corrida que no tenga
+// esas variables ya exportadas en el shell ambiente. `vite`/`dotenv` no son
+// dependencias directas de este paquete (pnpm bloquea importarlos sin
+// declararlos) — `process.loadEnvFile` es un builtin de Node (estable desde
+// Node 20.12/21.7, este repo corre en Node 24+) que hace exactamente lo
+// mismo sin agregar una dependencia nueva. `try/catch` porque en CI (u otro
+// entorno sin `.env` en disco, con las variables ya provistas por el
+// orquestador) el archivo puede no existir — ahí no hay nada que cargar.
+try {
+  process.loadEnvFile(new URL('./.env', import.meta.url));
+} catch {
+  // Sin .env en disco — se asume que el entorno ya provee las variables.
+}
+
 export default defineConfig({
   test: {
     env: {
