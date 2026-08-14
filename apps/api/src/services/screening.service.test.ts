@@ -343,27 +343,44 @@ describe('triggerScreeningIfConsented — con FrontLobby real conectado', () => 
 // respeta el guard de OPEN_STATUSES y puede registrar un resultado sin
 // importar el estado actual del checkeo.
 //
-// Este `.env` local trae `ZAI_API_KEY` real (Task 1 la necesita para
-// `GlmRealAdapter`), así que `getAdapters().glm` resuelve al adapter REAL,
-// no al mock — a diferencia de `getAdapters().screening`, que siempre es el
-// mock salvo credenciales de FrontLobby en la bóveda. Cada test de esta
-// suite mockea `extractScreeningReport` explícitamente para no depender de
-// una llamada de red real ni de bytes de PDF válidos.
+// `apps/api/vitest.config.ts` fuerza `ZAI_API_KEY` (y toda credencial de
+// integración) a `''` en todo test run, así que `getAdapters().mockModes.glm`
+// es SIEMPRE `true` por defecto en esta suite, sin importar el `.env` local
+// del desarrollador. El único test que necesita ejercitar la etiqueta
+// `[AUTOMATED]` (ruta del adapter real, no mock) fuerza
+// `adapters.mockModes.glm = false` de forma local y explícita, y lo
+// restaura al terminar — el resto de los tests de este describe no
+// verifica el prefijo del summary, así que el modo mock por defecto no les
+// afecta. Cada test mockea `extractScreeningReport` explícitamente para no
+// depender de una llamada de red real ni de bytes de PDF válidos.
 describe('recordManualScreeningReport', () => {
   it('registra un veredicto passed y guarda el reporte con la marca [AUTOMATED]', async () => {
     const { applicationId } = await seed();
     const upload = { mimeType: 'application/pdf', base64: Buffer.from('fake pdf bytes').toString('base64'), filename: 'report.pdf' };
-    vi.spyOn((await import('../config/adapters.js')).getAdapters().glm, 'extractScreeningReport')
+    const { getAdapters } = await import('../config/adapters.js');
+    const adapters = getAdapters();
+    // `apps/api/vitest.config.ts` fuerza `ZAI_API_KEY` a `''`, así que
+    // `mockModes.glm` es `true` por defecto acá. Este test necesita el
+    // adapter "real" para ejercitar la etiqueta [AUTOMATED], así que lo
+    // fuerza de forma explícita y local, sin depender de ninguna variable
+    // de entorno, y lo restaura al terminar.
+    const originalMockMode = adapters.mockModes.glm;
+    adapters.mockModes.glm = false;
+    vi.spyOn(adapters.glm, 'extractScreeningReport')
       .mockResolvedValueOnce({ verdict: 'passed', summaryText: 'Manual credit report shows no significant concerns.', confidence: 0.9 });
 
-    const result = await recordManualScreeningReport(applicationId, TENANT_ID, 'credit', upload);
+    try {
+      const result = await recordManualScreeningReport(applicationId, TENANT_ID, 'credit', upload);
 
-    expect(result).toEqual({ ok: true, verdict: 'passed' });
-    const row = await prisma.rentalApplication.findUniqueOrThrow({ where: { id: applicationId } });
-    expect(row.creditCheckStatus).toBe('passed');
-    expect(row.creditCheckSummary).toMatch(/^\[AUTOMATED\] /);
-    expect(row.creditCheckReportKey).not.toBeNull();
-    expect(row.creditCheckCompletedAt).not.toBeNull();
+      expect(result).toEqual({ ok: true, verdict: 'passed' });
+      const row = await prisma.rentalApplication.findUniqueOrThrow({ where: { id: applicationId } });
+      expect(row.creditCheckStatus).toBe('passed');
+      expect(row.creditCheckSummary).toMatch(/^\[AUTOMATED\] /);
+      expect(row.creditCheckReportKey).not.toBeNull();
+      expect(row.creditCheckCompletedAt).not.toBeNull();
+    } finally {
+      adapters.mockModes.glm = originalMockMode;
+    }
   });
 
   it('rechaza con 400 cuando el modelo no puede determinar un veredicto', async () => {
