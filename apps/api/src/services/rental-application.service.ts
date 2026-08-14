@@ -6,6 +6,7 @@
  * vive su hash.
  */
 import { createHash, randomBytes } from 'node:crypto';
+import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { ChatChannel, MessagingAdapter } from '@property-manager/adapters';
 import { prisma } from '../config/db.js';
@@ -338,6 +339,47 @@ export async function submitRentalApplication(
   });
 
   return { ok: true, applicationId: application.id };
+}
+
+export type GetIdDocumentResult =
+  | { ok: false; status: 400 | 404; error: string }
+  | { ok: true; file: Buffer; contentType: string };
+
+/**
+ * Fase 3: descarga del documento de identificación subido en el formulario
+ * público (Fase 2A) — existía el archivo guardado pero nunca una ruta que lo
+ * sirviera. Extraída de la ruta (en vez de vivir inline en el handler) para
+ * poder testearla directo, igual que el resto de funciones de este archivo —
+ * este repo no tiene infraestructura de supertest (ver leads.test.ts).
+ */
+export async function getIdDocumentForDownload(
+  applicationId: string,
+  tenantId: string,
+): Promise<GetIdDocumentResult> {
+  // Aislamiento por tenant: la fila se busca filtrada por el tenantId del
+  // usuario autenticado ANTES de tocar el disco — mismo razonamiento que la
+  // ruta de reportes de screening en leads.ts.
+  const application = await prisma.rentalApplication.findFirst({
+    where: { id: applicationId, tenantId },
+    select: { idDocumentStorageKey: true, idDocumentMimeType: true },
+  });
+  if (!application) {
+    return { ok: false, status: 404, error: 'Application not found' };
+  }
+  if (!application.idDocumentStorageKey) {
+    return { ok: false, status: 404, error: 'ID document not available' };
+  }
+
+  const env = getEnv();
+  const root = path.resolve(env.DOCUMENT_STORAGE_DIR);
+  const target = path.resolve(root, application.idDocumentStorageKey);
+  // Mismo guard de path traversal que ya usa createLocalDocumentStorage al
+  // escribir y la ruta de reportes al leer.
+  if (!target.startsWith(root)) {
+    return { ok: false, status: 400, error: 'Invalid document path' };
+  }
+  const file = await fs.readFile(target);
+  return { ok: true, file, contentType: application.idDocumentMimeType ?? 'application/octet-stream' };
 }
 
 /**

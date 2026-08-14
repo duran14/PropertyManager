@@ -33,6 +33,7 @@ import { buildShortlistPrefillContact, getPublicShortlist, hashShortlistToken } 
 import { bookShowingFromCalendar, getSchedulingAvailability } from '../services/scheduling.service.js';
 import { parseShortlistBooking } from '../services/shortlist-booking.service.js';
 import {
+  getIdDocumentForDownload,
   getPublicRentalApplication,
   submitRentalApplication,
 } from '../services/rental-application.service.js';
@@ -716,6 +717,29 @@ leadsRouter.get('/applications/:applicationId/report/:kind', requireAuth, async 
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename="${kind}-report.pdf"`);
     res.send(file);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Fase 3: descarga del documento de identificación subido en el formulario
+// público (Fase 2A) — existía el archivo guardado pero nunca una ruta que lo
+// sirviera. Mismo patrón que la ruta de reportes de screening de arriba; la
+// lógica vive en getIdDocumentForDownload (testeable directo, ver
+// rental-application.service.test.ts) porque este repo no tiene
+// infraestructura de supertest.
+leadsRouter.get('/applications/:applicationId/id-document', requireAuth, async (req, res, next) => {
+  try {
+    const user = requireUser(req);
+    const { applicationId } = req.params;
+    const result = await getIdDocumentForDownload(applicationId, user.tenantId);
+    if (!result.ok) {
+      res.status(result.status).json({ error: result.error });
+      return;
+    }
+    res.setHeader('Content-Type', result.contentType);
+    res.setHeader('Content-Disposition', 'inline; filename="id-document"');
+    res.send(result.file);
   } catch (err) {
     next(err);
   }

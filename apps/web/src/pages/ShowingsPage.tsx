@@ -36,6 +36,7 @@ interface ApplicationDetail {
   references: string | null;
   applicantFullName: string | null;
   idDocumentStorageKey: string | null;
+  idDocumentMimeType: string | null;
   consentApplicationAt: string | null;
   consentCreditCheckAt: string | null;
   consentPoliceCheckAt: string | null;
@@ -266,6 +267,52 @@ function ScreeningBlock({
 }
 
 /**
+ * Fase 3: botón de descarga del documento de identificación subido en el
+ * formulario público (Fase 2A). Mismo mecanismo de descarga autenticada que
+ * ScreeningBlock.handleDownload arriba — fetch con Authorization: Bearer,
+ * blob URL, pestaña nueva — necesario porque el token vive en memoria, no en
+ * cookie.
+ */
+function IdDocumentDownload({ applicationId }: { applicationId: string }) {
+  const [downloadError, setDownloadError] = useState<string | null>(null);
+  const [isDownloading, setIsDownloading] = useState(false);
+
+  async function handleDownload() {
+    setDownloadError(null);
+    setIsDownloading(true);
+    try {
+      const token = getAccessToken();
+      const res = await fetch(`${API_BASE}/leads/applications/${applicationId}/id-document`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        credentials: 'include',
+      });
+      if (!res.ok) {
+        setDownloadError('Could not download the document');
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      window.open(url, '_blank', 'noopener,noreferrer');
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch {
+      setDownloadError('Could not download the document');
+    } finally {
+      setIsDownloading(false);
+    }
+  }
+
+  return (
+    <div className="flex items-center gap-1 text-slate-500">
+      <Icon name="approve" size={12} className="text-green-600" />
+      <button type="button" onClick={handleDownload} disabled={isDownloading} className="text-teal-600 hover:underline disabled:opacity-50">
+        {isDownloading ? 'Opening document…' : 'ID document — download'}
+      </button>
+      {downloadError && <span className="ml-1 text-red-600">{downloadError}</span>}
+    </div>
+  );
+}
+
+/**
  * Panel de la aplicación de renta para un showing completado. Se monta como
  * su propio componente (en vez de llamar useQuery dentro del .map de
  * ShowingsPage) para no violar las reglas de hooks cuando la lista de
@@ -325,16 +372,7 @@ function CompletedApplicationPanel({ showingId }: { showingId: string }) {
           reportKey={app.criminalCheckReportKey}
         />
       </div>
-      {app.idDocumentStorageKey && (
-        // Hay un documento de identificación guardado, pero no existe
-        // ninguna ruta en la app que sirva archivos de DOCUMENT_STORAGE_DIR
-        // — servir/descargar el documento queda fuera de alcance de este
-        // fix y es trabajo futuro.
-        <div className="flex items-center gap-1 text-slate-500">
-          <Icon name="approve" size={12} className="text-green-600" />
-          ID document attached
-        </div>
-      )}
+      {app.idDocumentStorageKey && <IdDocumentDownload applicationId={app.id} />}
       <div className="mt-1.5 space-y-0.5 rounded-md bg-slate-50 p-2">
         <ConsentRow label="Application consent" at={app.consentApplicationAt} />
         <ConsentRow label="Credit check consent" at={app.consentCreditCheckAt} />

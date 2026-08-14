@@ -133,3 +133,34 @@ describe('POST /applications/:applicationId/screening/:kind/upload-report', () =
     expect(handler).toContain('res.status(result.status)');
   });
 });
+
+/**
+ * Task 2 (id-document-download): ruta de descarga del documento de
+ * identificación. Mismo patrón de verificación por grep que las suites de
+ * arriba — sin supertest en este repo. La lógica de negocio (aislamiento de
+ * tenant, 404 sin documento, fallback de Content-Type para filas legacy) vive
+ * en `getIdDocumentForDownload` y ya está cubierta con tests reales de
+ * DB/disco en rental-application.service.test.ts.
+ */
+describe('GET /applications/:applicationId/id-document', () => {
+  const routeSource = readFileSync(join(process.cwd(), 'src', 'routes', 'leads.ts'), 'utf8');
+
+  it('existe con requireAuth y sin restricción de rol adicional, igual que la ruta de reportes de screening', () => {
+    expect(routeSource).toMatch(/leadsRouter\.get\(\s*'\/applications\/:applicationId\/id-document',\s*requireAuth/);
+  });
+
+  it('delega en getIdDocumentForDownload y traduce { ok: false } al status devuelto', () => {
+    const routeIndex = routeSource.indexOf("'/applications/:applicationId/id-document'");
+    const handler = routeSource.slice(routeIndex, routeIndex + 700);
+    expect(handler).toContain('getIdDocumentForDownload(applicationId, user.tenantId)');
+    expect(handler).toContain('result.ok');
+    expect(handler).toContain('res.status(result.status)');
+  });
+
+  it('sirve el archivo con el Content-Type devuelto por el servicio', () => {
+    const routeIndex = routeSource.indexOf("'/applications/:applicationId/id-document'");
+    const handler = routeSource.slice(routeIndex, routeIndex + 700);
+    expect(handler).toContain("res.setHeader('Content-Type', result.contentType)");
+    expect(handler).toContain('res.send(result.file)');
+  });
+});

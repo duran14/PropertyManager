@@ -1,9 +1,13 @@
+import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { ChatChannel, MessagingAdapter, OutboundMessage } from '@property-manager/adapters';
 import { prisma } from '../config/db.js';
+import { getEnv } from '../config/env.js';
+import { buildDocumentStorageKey, createLocalDocumentStorage } from './document-storage.service.js';
 import {
   completeShowingAndInvite,
   createRentalApplication,
+  getIdDocumentForDownload,
   getPublicRentalApplication,
   hashApplicationToken,
   submitRentalApplication,
@@ -692,5 +696,90 @@ describe('submitRentalApplication', () => {
     expect(emailSent).toHaveLength(1);
 
     await prisma.user.deleteMany({ where: { tenantId: TENANT_ID } });
+  });
+});
+
+/**
+ * Task 2 (id-document-download): lógica de negocio detrás de
+ * `GET /leads/applications/:applicationId/id-document` (leads.ts), extraída
+ * a esta función para poder testearla directo — este repo no tiene
+ * infraestructura de supertest (ver leads.test.ts).
+ */
+describe('getIdDocumentForDownload', () => {
+  beforeEach(cleanup);
+  afterEach(cleanup);
+
+  it('returns the file bytes and the stored Content-Type for a submitted application', async () => {
+    const { token } = await seedInvitedApplication();
+    const submitted = await submitRentalApplication(
+      token,
+      validSubmission({
+        idDocumentMimeType: 'image/png',
+        idDocumentBase64: Buffer.from('fake-image-bytes').toString('base64'),
+      }),
+      { messaging: fakeMessaging().messaging },
+    );
+    expect(submitted.ok).toBe(true);
+    if (!submitted.ok) return;
+
+    const result = await getIdDocumentForDownload(submitted.applicationId, TENANT_ID);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.contentType).toBe('image/png');
+    expect(result.file.toString('utf8')).toBe('fake-image-bytes');
+  });
+
+  // Restricción del plan: filas existentes de antes de que
+  // `idDocumentMimeType` se agregara (Tarea 1) deben seguir siendo
+  // descargables con fallback 'application/octet-stream'.
+  it('falls back to application/octet-stream when idDocumentMimeType is null (legacy rows)', async () => {
+    const { application } = await seedInvitedApplication();
+    const env = getEnv();
+    const storage = createLocalDocumentStorage({ rootDir: path.resolve(env.DOCUMENT_STORAGE_DIR) });
+    const key = buildDocumentStorageKey({
+      tenantId: TENANT_ID,
+      documentId: application.id,
+      filename: 'legacy-id.jpg',
+    });
+    await storage.putObject({ key, body: Buffer.from('legacy-bytes'), contentType: 'image/jpeg' });
+    await prisma.rentalApplication.update({
+      where: { id: application.id },
+      data: { idDocumentStorageKey: key, idDocumentMimeType: null },
+    });
+
+    const result = await getIdDocumentForDownload(application.id, TENANT_ID);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.contentType).toBe('application/octet-stream');
+    expect(result.file.toString('utf8')).toBe('legacy-bytes');
+  });
+
+  it('returns 404 when the application has no ID document', async () => {
+    const { application } = await seedInvitedApplication();
+
+    const result = await getIdDocumentForDownload(application.id, TENANT_ID);
+
+    expect(result).toEqual({ ok: false, status: 404, error: 'ID document not available' });
+  });
+
+  it('returns 404 for an unknown applicationId', async () => {
+    const result = await getIdDocumentForDownload('not-a-real-id', TENANT_ID);
+
+    expect(result).toEqual({ ok: false, status: 404, error: 'Application not found' });
+  });
+
+  // Aislamiento por tenant: la fila se busca filtrada por tenantId ANTES de
+  // tocar el disco, así que un tenantId equivocado nunca debe distinguirse
+  // de un applicationId inexistente — mismo 404 genérico en ambos casos.
+  it('returns 404 for an applicationId that belongs to a different tenant', async () => {
+    const { token, application } = await seedInvitedApplication();
+    const submitted = await submitRentalApplication(token, validSubmission(), { messaging: fakeMessaging().messaging });
+    expect(submitted.ok).toBe(true);
+
+    const result = await getIdDocumentForDownload(application.id, 'tenant_some_other_tenant');
+
+    expect(result).toEqual({ ok: false, status: 404, error: 'Application not found' });
   });
 });

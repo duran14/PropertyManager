@@ -127,6 +127,7 @@ showingsRouter.get('/:id/application', requireAuth, async (req, res, next) => {
         references: true,
         applicantFullName: true,
         idDocumentStorageKey: true,
+        idDocumentMimeType: true,
         consentApplicationAt: true,
         consentCreditCheckAt: true,
         consentPoliceCheckAt: true,
