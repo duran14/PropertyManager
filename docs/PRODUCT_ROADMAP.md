@@ -152,9 +152,15 @@
       selector de descarga del reporte completo quedan por validar en la
       primera ejecución real en producción.
   
-  - **Checkeo de antecedentes penales (Sterling) — MOCK (hasta Sterling):**
-    - Permanece en mock hasta que se establezca una cuenta real con Sterling.
-    - Modelo de datos y UI ya preparados para ambas integraciones.
+  - **Checkeo de antecedentes penales (Certn) — MOCK (hasta cuenta Certn):**
+    - Proveedor decidido: Certn (API REST directa, no browser automation —
+      más simple que el caso de FrontLobby). Descartados: Court Services
+      Online de BC (usa CAPTCHA, incompatible con automation), Sterling
+      (descartado por precio, $59 CAD vs. la oferta de Certn).
+    - Permanece en mock hasta que se cree la cuenta demo/sandbox de Certn
+      (self-serve, pendiente de que el usuario la registre) y se comparta
+      el Client ID/Secret vía la pantalla de Integrations.
+    - Modelo de datos y UI ya preparados para la integración.
   
   - **Infraestructura compartida:**
     - Modelo de datos completo en `RentalApplication` (identidad requerida +
@@ -182,13 +188,23 @@
 
 ---
 
-## 🟠 Fase 3: Core Property Trust Accounting & Owner Statements
+## 🟠 Fase 3: Core Property Trust Accounting & Owner Statements ✅ Entregado
 
 **Prioridad:** Urgente / Media *(elevada desde "Importante" — ver nota de validación arriba)*
 
 **Objetivo:** Gestión contable por cuentas segregadas (trust account) con liquidación exacta en $0.00 al cierre de mes.
 
-### 3.1 Modelo de datos (PostgreSQL / Supabase)
+> Entregado: modelo de datos (`Owner`, `PropertyAccountingConfig`,
+> `OwnerStatement`), motor de cálculo puro reconciliado con
+> `Money`/`audit` de `packages/core` (ver ADR-004 y ADR-005 — sigue sin
+> custodiar fondos), vista previa del estado de cuenta sobre transacciones y
+> bills existentes, cierre de mes inmutable y transaccional, y la pantalla de
+> Owner Statements en la UI. El schema real difiere del boceto SQL de esta
+> sección (que era ilustrativo, no literal) — ver el spec y plan de Fase 3
+> (`docs/superpowers/specs/`, `docs/superpowers/plans/`) para el diseño
+> final implementado.
+
+### 3.1 Modelo de datos (PostgreSQL / Supabase) — boceto original, ver nota arriba
 
 ```sql
 -- Schema simplificado para Trust Accounting
