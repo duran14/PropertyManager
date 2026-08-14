@@ -182,6 +182,24 @@ export type SubmitApplicationResult =
 // real una vez decodificado el base64).
 const MAX_ID_DOCUMENT_BASE64_LENGTH = 1_500_000;
 
+// Fix de revisión final (Critical 1 — XSS almacenado): `idDocumentMimeType`
+// lo manda el solicitante sin autenticar (ApplyPage.tsx toma `idFile.type`
+// del navegador tal cual) y se sirve crudo como `Content-Type` en la
+// descarga (getIdDocumentForDownload más abajo). Sin allowlist, un
+// solicitante puede mandar 'text/html' o 'image/svg+xml' con un cuerpo
+// malicioso; cuando el staff abre "Download ID document" ese script corre en
+// el origen del SPA — mismo origen que el refresh token httpOnly. La
+// allowlist se aplica en los DOS lados: aquí al recibir (rechaza con 400
+// antes de persistir) y de nuevo en getIdDocumentForDownload al servir (no
+// confía en que la fila ya esté limpia — puede haber quedado un valor
+// envenenado de antes de este fix).
+const ALLOWED_ID_DOCUMENT_MIME_TYPES = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'application/pdf',
+]);
+
 /**
  * Tope de espera del disparo del screening dentro del request HTTP. Muy por
  * debajo del timeout por default de Node (300s) — ver el comentario largo en
@@ -257,6 +275,11 @@ export async function submitRentalApplication(
   }
   if (!input.idDocumentBase64 || !input.idDocumentFilename || !input.idDocumentMimeType) {
     return { ok: false, status: 400, error: 'A photo ID document is required' };
+  }
+  // Critical 1 (revisión final): allowlist estricta, no un chequeo truthy —
+  // ver el comentario largo junto a ALLOWED_ID_DOCUMENT_MIME_TYPES arriba.
+  if (!ALLOWED_ID_DOCUMENT_MIME_TYPES.has(input.idDocumentMimeType)) {
+    return { ok: false, status: 400, error: 'Unsupported ID document file type' };
   }
   if (input.idDocumentBase64.length > MAX_ID_DOCUMENT_BASE64_LENGTH) {
     return { ok: false, status: 400, error: 'The ID document is too large' };
@@ -379,7 +402,15 @@ export async function getIdDocumentForDownload(
     return { ok: false, status: 400, error: 'Invalid document path' };
   }
   const file = await fs.readFile(target);
-  return { ok: true, file, contentType: application.idDocumentMimeType ?? 'application/octet-stream' };
+  // Critical 1 (revisión final): no confiar en que la fila ya esté limpia —
+  // filas escritas antes de este fix pueden tener un valor no confiable
+  // persistido. Se re-valida contra la MISMA allowlist que usa el lado de
+  // recepción arriba; cualquier valor fuera de ella (incluye null legacy)
+  // cae al fallback seguro, igual que ya hacía el caso null.
+  const contentType = application.idDocumentMimeType && ALLOWED_ID_DOCUMENT_MIME_TYPES.has(application.idDocumentMimeType)
+    ? application.idDocumentMimeType
+    : 'application/octet-stream';
+  return { ok: true, file, contentType };
 }
 
 /**

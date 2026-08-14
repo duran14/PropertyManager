@@ -159,8 +159,21 @@ describe('GET /applications/:applicationId/id-document', () => {
 
   it('sirve el archivo con el Content-Type devuelto por el servicio', () => {
     const routeIndex = routeSource.indexOf("'/applications/:applicationId/id-document'");
-    const handler = routeSource.slice(routeIndex, routeIndex + 700);
+    const handler = routeSource.slice(routeIndex, routeIndex + 1000);
     expect(handler).toContain("res.setHeader('Content-Type', result.contentType)");
     expect(handler).toContain('res.send(result.file)');
+  });
+
+  // Critical 1 (revisión final): header de defensa en profundidad — aunque
+  // getIdDocumentForDownload ya filtra el Content-Type contra una allowlist,
+  // nosniff evita que el navegador reinterprete el body por su cuenta.
+  it('agrega X-Content-Type-Options: nosniff antes de escribir el Content-Type', () => {
+    const routeIndex = routeSource.indexOf("'/applications/:applicationId/id-document'");
+    const handler = routeSource.slice(routeIndex, routeIndex + 1000);
+    const nosniffIndex = handler.indexOf("res.setHeader('X-Content-Type-Options', 'nosniff')");
+    const contentTypeIndex = handler.indexOf("res.setHeader('Content-Type', result.contentType)");
+    expect(nosniffIndex).toBeGreaterThan(-1);
+    expect(contentTypeIndex).toBeGreaterThan(-1);
+    expect(nosniffIndex).toBeLessThan(contentTypeIndex);
   });
 });

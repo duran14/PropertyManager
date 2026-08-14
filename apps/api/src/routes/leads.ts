@@ -737,6 +737,11 @@ leadsRouter.get('/applications/:applicationId/id-document', requireAuth, async (
       res.status(result.status).json({ error: result.error });
       return;
     }
+    // Defensa en profundidad (Critical 1, revisión final): aunque
+    // getIdDocumentForDownload ya filtra contentType contra una allowlist,
+    // nosniff evita que el navegador ignore el Content-Type declarado y
+    // reinterprete el body por su cuenta.
+    res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Content-Type', result.contentType);
     res.setHeader('Content-Disposition', 'inline; filename="id-document"');
     res.send(result.file);

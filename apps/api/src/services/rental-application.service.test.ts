@@ -516,6 +516,44 @@ describe('submitRentalApplication', () => {
     expect(result).toEqual({ ok: false, status: 400, error: 'The ID document is too large' });
   });
 
+  // Critical 1 (revisión final): un idDocumentMimeType fuera de la allowlist
+  // (aquí 'text/html', el vector de XSS almacenado confirmado por el
+  // revisor) tiene que rechazarse con 400 ANTES de persistir nada — no basta
+  // con un chequeo truthy.
+  it('rejects an idDocumentMimeType outside the allowlist (Critical 1: stored XSS)', async () => {
+    const { token, application } = await seedInvitedApplication();
+    const { messaging } = fakeMessaging();
+
+    const result = await submitRentalApplication(
+      token,
+      { ...validSubmission(), idDocumentMimeType: 'text/html' },
+      { messaging },
+    );
+
+    expect(result).toEqual({ ok: false, status: 400, error: 'Unsupported ID document file type' });
+    const row = await prisma.rentalApplication.findUniqueOrThrow({ where: { id: application.id } });
+    expect(row.status).toBe('invited');
+    expect(row.idDocumentStorageKey).toBeNull();
+  });
+
+  it.each([
+    ['image/jpeg'],
+    ['image/png'],
+    ['image/webp'],
+    ['application/pdf'],
+  ])('accepts %s, an allowlisted ID document mime type', async (mimeType) => {
+    const { token } = await seedInvitedApplication();
+    const { messaging } = fakeMessaging();
+
+    const result = await submitRentalApplication(
+      token,
+      { ...validSubmission(), idDocumentMimeType: mimeType },
+      { messaging },
+    );
+
+    expect(result.ok).toBe(true);
+  });
+
   it('returns 404 for an unknown token', async () => {
     const { messaging } = fakeMessaging();
 
@@ -781,5 +819,75 @@ describe('getIdDocumentForDownload', () => {
     const result = await getIdDocumentForDownload(application.id, 'tenant_some_other_tenant');
 
     expect(result).toEqual({ ok: false, status: 404, error: 'Application not found' });
+  });
+
+  // Critical 1 (revisión final): el lado de recepción ya rechaza valores
+  // fuera de la allowlist desde este fix, pero una fila escrita ANTES del
+  // fix puede tener un valor envenenado persistido de antes (el propio
+  // vector de XSS que confirmó el revisor: 'text/html'). El lado de
+  // descarga no puede confiar en que la fila ya esté limpia.
+  it('never serves a poisoned legacy Content-Type — falls back to application/octet-stream (Critical 1: stored XSS)', async () => {
+    const { application } = await seedInvitedApplication();
+    const env = getEnv();
+    const storage = createLocalDocumentStorage({ rootDir: path.resolve(env.DOCUMENT_STORAGE_DIR) });
+    const key = buildDocumentStorageKey({
+      tenantId: TENANT_ID,
+      documentId: application.id,
+      filename: 'evil.html',
+    });
+    await storage.putObject({ key, body: Buffer.from('<script>alert(document.cookie)</script>'), contentType: 'text/html' });
+    // Simula una fila envenenada ANTES de este fix — el `updateMany` de
+    // submitRentalApplication ya no puede escribir esto, pero una fila vieja
+    // podría tenerlo persistido.
+    await prisma.rentalApplication.update({
+      where: { id: application.id },
+      data: { idDocumentStorageKey: key, idDocumentMimeType: 'text/html' },
+    });
+
+    const result = await getIdDocumentForDownload(application.id, TENANT_ID);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.contentType).toBe('application/octet-stream');
+    expect(result.contentType).not.toBe('text/html');
+  });
+
+  it.each([
+    ['image/jpeg'],
+    ['image/webp'],
+    ['application/pdf'],
+  ])('serves the real Content-Type for the allowlisted mime type %s', async (mimeType) => {
+    const { token } = await seedInvitedApplication();
+    const submitted = await submitRentalApplication(
+      token,
+      validSubmission({ idDocumentMimeType: mimeType }),
+      { messaging: fakeMessaging().messaging },
+    );
+    expect(submitted.ok).toBe(true);
+    if (!submitted.ok) return;
+
+    const result = await getIdDocumentForDownload(submitted.applicationId, TENANT_ID);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.contentType).toBe(mimeType);
+  });
+
+  // Minor 6 (revisión final): el guard `target.startsWith(root)` es
+  // inalcanzable en el flujo normal (las keys siempre las genera
+  // buildDocumentStorageKey, saneadas), por eso no tenía ningún test que lo
+  // ejerciera. Se fuerza una key maliciosa directo en la DB de test para
+  // simular una fila corrupta/legacy y confirmar que el guard responde 400
+  // en vez de lanzar o servir un archivo fuera de DOCUMENT_STORAGE_DIR.
+  it('returns 400 instead of serving a file outside DOCUMENT_STORAGE_DIR (path traversal guard)', async () => {
+    const { application } = await seedInvitedApplication();
+    await prisma.rentalApplication.update({
+      where: { id: application.id },
+      data: { idDocumentStorageKey: '../../etc/passwd', idDocumentMimeType: 'image/png' },
+    });
+
+    const result = await getIdDocumentForDownload(application.id, TENANT_ID);
+
+    expect(result).toEqual({ ok: false, status: 400, error: 'Invalid document path' });
   });
 });

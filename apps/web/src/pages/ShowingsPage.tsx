@@ -36,7 +36,6 @@ interface ApplicationDetail {
   references: string | null;
   applicantFullName: string | null;
   idDocumentStorageKey: string | null;
-  idDocumentMimeType: string | null;
   consentApplicationAt: string | null;
   consentCreditCheckAt: string | null;
   consentPoliceCheckAt: string | null;
