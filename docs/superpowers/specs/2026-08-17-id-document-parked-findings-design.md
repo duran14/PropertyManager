@@ -84,12 +84,18 @@ Registrar una entrada de auditoría en ambas descargas, **solo cuando la
 descarga tiene éxito** (no en los 404, que no son acceso a PII):
 
 - ID: `action: 'rental_application.id_document.downloaded'`,
-  `entityType: 'RentalApplication'`, `entityId: applicationId`.
+  `entityType: 'rental_application'`, `entityId: applicationId`.
 - Reporte de screening: `action: 'rental_application.screening_report.downloaded'`,
   mismo `entityType`/`entityId`, con `kind` (`credit`/`criminal`) en el payload.
 
-`actorId`/`actorType` salen de `actorFromUser(user.id, user.role)`, el helper
-que ya existe para esto.
+`entityType` va en snake_case minúsculas para respetar la convención ya
+establecida en el repo (`lead`, `owner_statement`, `listing_photo`,
+`calendar_connection` — verificado sobre los `writeAudit` existentes), no el
+nombre del modelo de Prisma.
+
+`actorId`/`actorType` salen de `actorFromUser(user.userId, user.role)` — nótese
+`userId`, que es el nombre real del campo en `AuthUser`
+(`apps/api/src/auth/context.ts:11-16`), no `id`.
 
 **Restricción crítica del payload:** el payload de auditoría **nunca** debe
 contener el contenido del documento, el base64, ni la storage key completa —
