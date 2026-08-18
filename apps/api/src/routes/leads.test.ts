@@ -159,7 +159,9 @@ describe('GET /applications/:applicationId/id-document', () => {
 
   it('sirve el archivo con el Content-Type devuelto por el servicio', () => {
     const routeIndex = routeSource.indexOf("'/applications/:applicationId/id-document'");
-    const handler = routeSource.slice(routeIndex, routeIndex + 1000);
+    // Ventana ampliada de 1000 a 1400 (Task 2, audit trail): el bloque de
+    // writeAudit insertado antes de los setHeader corre el offset.
+    const handler = routeSource.slice(routeIndex, routeIndex + 1400);
     expect(handler).toContain("res.setHeader('Content-Type', result.contentType)");
     expect(handler).toContain('res.send(result.file)');
   });
@@ -169,11 +171,61 @@ describe('GET /applications/:applicationId/id-document', () => {
   // nosniff evita que el navegador reinterprete el body por su cuenta.
   it('agrega X-Content-Type-Options: nosniff antes de escribir el Content-Type', () => {
     const routeIndex = routeSource.indexOf("'/applications/:applicationId/id-document'");
-    const handler = routeSource.slice(routeIndex, routeIndex + 1000);
+    const handler = routeSource.slice(routeIndex, routeIndex + 1400);
     const nosniffIndex = handler.indexOf("res.setHeader('X-Content-Type-Options', 'nosniff')");
     const contentTypeIndex = handler.indexOf("res.setHeader('Content-Type', result.contentType)");
     expect(nosniffIndex).toBeGreaterThan(-1);
     expect(contentTypeIndex).toBeGreaterThan(-1);
     expect(nosniffIndex).toBeLessThan(contentTypeIndex);
+  });
+});
+
+describe('audit trail en descargas de PII', () => {
+  it('la ruta de documento de identificación escribe una entrada de auditoría', () => {
+    const source = readFileSync(
+      new URL('./leads.ts', import.meta.url),
+      'utf8',
+    );
+    const routeIndex = source.indexOf("'/applications/:applicationId/id-document'");
+    expect(routeIndex).toBeGreaterThan(-1);
+    const handler = source.slice(routeIndex, routeIndex + 1600);
+    expect(handler).toContain('writeAudit');
+    expect(handler).toContain("action: 'rental_application.id_document.downloaded'");
+    expect(handler).toContain("entityType: 'rental_application'");
+    expect(handler).toContain('actorFromUser(user.userId, user.role)');
+  });
+
+  it('la ruta de reporte de screening escribe una entrada de auditoría con el kind', () => {
+    const source = readFileSync(
+      new URL('./leads.ts', import.meta.url),
+      'utf8',
+    );
+    const routeIndex = source.indexOf("'/applications/:applicationId/report/:kind'");
+    expect(routeIndex).toBeGreaterThan(-1);
+    const handler = source.slice(routeIndex, routeIndex + 2300);
+    expect(handler).toContain('writeAudit');
+    expect(handler).toContain("action: 'rental_application.screening_report.downloaded'");
+    expect(handler).toContain('payload: { kind }');
+  });
+
+  it('ninguna de las dos rutas mete el archivo ni la storage key en el payload de auditoría', () => {
+    const source = readFileSync(
+      new URL('./leads.ts', import.meta.url),
+      'utf8',
+    );
+    // El payload de auditoría es consultable y persistente: meterle PII lo
+    // convierte en una segunda copia de lo que se pretendía proteger. Se
+    // acota a los handlers de descarga (y no a todo el archivo) porque
+    // `idDocumentBase64` también aparece legítimamente en la ruta de
+    // envío del formulario (línea ~249), que no forma parte de este cambio.
+    const idDocumentIndex = source.indexOf("'/applications/:applicationId/id-document'");
+    const idDocumentHandler = source.slice(idDocumentIndex, idDocumentIndex + 1600);
+    const reportIndex = source.indexOf("'/applications/:applicationId/report/:kind'");
+    const reportHandler = source.slice(reportIndex, reportIndex + 2300);
+    for (const handler of [idDocumentHandler, reportHandler]) {
+      expect(handler).not.toContain('payload: { file');
+      expect(handler).not.toContain('storageKey: key');
+      expect(handler).not.toContain('idDocumentBase64');
+    }
   });
 });

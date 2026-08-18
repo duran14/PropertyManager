@@ -38,6 +38,7 @@ import {
   submitRentalApplication,
 } from '../services/rental-application.service.js';
 import { approveScreening, recordManualScreeningReport } from '../services/screening.service.js';
+import { actorFromUser, writeAudit } from '../services/audit.service.js';
 
 export const publicRouter = Router();
 export const leadsRouter = Router();
@@ -714,6 +715,19 @@ leadsRouter.get('/applications/:applicationId/report/:kind', requireAuth, async 
       return;
     }
     const file = await fs.readFile(target);
+    // PII sensible: la descarga queda trazada. Payload: solo el kind.
+    try {
+      await writeAudit({
+        tenantId: user.tenantId,
+        ...actorFromUser(user.userId, user.role),
+        action: 'rental_application.screening_report.downloaded',
+        entityType: 'rental_application',
+        entityId: applicationId,
+        payload: { kind },
+      });
+    } catch (auditError) {
+      console.error('[leads] writeAudit failed after screening-report download:', auditError);
+    }
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename="${kind}-report.pdf"`);
     res.send(file);
@@ -736,6 +750,19 @@ leadsRouter.get('/applications/:applicationId/id-document', requireAuth, async (
     if (!result.ok) {
       res.status(result.status).json({ error: result.error });
       return;
+    }
+    // Acceso a PII: la descarga queda trazada. Payload: solo identificadores.
+    try {
+      await writeAudit({
+        tenantId: user.tenantId,
+        ...actorFromUser(user.userId, user.role),
+        action: 'rental_application.id_document.downloaded',
+        entityType: 'rental_application',
+        entityId: applicationId,
+        payload: {},
+      });
+    } catch (auditError) {
+      console.error('[leads] writeAudit failed after id-document download:', auditError);
     }
     // Defensa en profundidad (Critical 1, revisión final): aunque
     // getIdDocumentForDownload ya filtra contentType contra una allowlist,
