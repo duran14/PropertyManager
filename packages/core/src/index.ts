@@ -10,3 +10,4 @@ export * from './period.js';
 export * from './owner-statement.js';
 export * from './availability.js';
 export * from './id-document.js';
+export * from './listing-feed.js';

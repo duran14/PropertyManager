@@ -10,7 +10,8 @@
     "./showing-messages": "./src/showing-messages.ts",
     "./conversation-timeline": "./src/conversation-timeline.ts",
     "./conversation-activity": "./src/conversation-activity.ts",
-    "./id-document": "./src/id-document.ts"
+    "./id-document": "./src/id-document.ts",
+    "./listing-feed": "./src/listing-feed.ts"
   },
   "scripts": {
     "test": "vitest run",
