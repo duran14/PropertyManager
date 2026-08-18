@@ -17,6 +17,7 @@ import {
   buildDocumentStorageKey,
   createLocalDocumentStorage,
   decodeBase64Payload,
+  resolveStorageKeyWithinRoot,
 } from './document-storage.service.js';
 import { notifyStaffTargets, resolveStaffNotifyTargets } from './staff-notify.service.js';
 import { triggerScreeningIfConsented } from './screening.service.js';
@@ -392,11 +393,8 @@ export async function getIdDocumentForDownload(
   }
 
   const env = getEnv();
-  const root = path.resolve(env.DOCUMENT_STORAGE_DIR);
-  const target = path.resolve(root, application.idDocumentStorageKey);
-  // Mismo guard de path traversal que ya usa createLocalDocumentStorage al
-  // escribir y la ruta de reportes al leer.
-  if (!target.startsWith(root)) {
+  const target = resolveStorageKeyWithinRoot(env.DOCUMENT_STORAGE_DIR, application.idDocumentStorageKey);
+  if (target === null) {
     return { ok: false, status: 400, error: 'Invalid document path' };
   }
   const file = await fs.readFile(target);

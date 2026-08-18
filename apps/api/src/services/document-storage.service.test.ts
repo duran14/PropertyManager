@@ -1,5 +1,10 @@
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { buildDocumentStorageKey, decodeBase64Payload } from './document-storage.service.js';
+import {
+  buildDocumentStorageKey,
+  decodeBase64Payload,
+  resolveStorageKeyWithinRoot,
+} from './document-storage.service.js';
 
 describe('document storage service', () => {
   it('builds tenant-scoped object keys with safe filenames', () => {
@@ -18,5 +23,30 @@ describe('document storage service', () => {
 
     expect(decodeBase64Payload(raw).toString('utf8')).toBe('Cats are considered.');
     expect(decodeBase64Payload(dataUrl).toString('utf8')).toBe('Cats are considered.');
+  });
+});
+
+describe('resolveStorageKeyWithinRoot', () => {
+  it('resuelve una key normal dentro del root', () => {
+    const resolved = resolveStorageKeyWithinRoot('/data/docs', 'tenants/t1/documents/d1/file.pdf');
+    expect(resolved).toBe(path.resolve('/data/docs', 'tenants/t1/documents/d1/file.pdf'));
+  });
+
+  it('rechaza una key que escapa con ..', () => {
+    expect(resolveStorageKeyWithinRoot('/data/docs', '../../etc/passwd')).toBeNull();
+  });
+
+  it('rechaza una key absoluta que apunta fuera del root', () => {
+    expect(resolveStorageKeyWithinRoot('/data/docs', '/etc/passwd')).toBeNull();
+  });
+
+  // El caso que la comparación vieja (startsWith sin separador) dejaba pasar:
+  // un directorio hermano cuyo nombre empieza igual que el root.
+  it('rechaza un directorio hermano con el mismo prefijo (docs-evil vs docs)', () => {
+    expect(resolveStorageKeyWithinRoot('/data/docs', '../docs-evil/file.pdf')).toBeNull();
+  });
+
+  it('acepta el root mismo', () => {
+    expect(resolveStorageKeyWithinRoot('/data/docs', '.')).toBe(path.resolve('/data/docs'));
   });
 });

@@ -11,7 +11,6 @@
  *  POST /leads/simulate-chat          — simula un mensaje entrante del chatbot (dev)
  */
 import { promises as fs } from 'node:fs';
-import path from 'node:path';
 import { Router } from 'express';
 import { z } from 'zod';
 import type { ChatChannel } from '@property-manager/adapters';
@@ -37,6 +36,7 @@ import {
   getPublicRentalApplication,
   submitRentalApplication,
 } from '../services/rental-application.service.js';
+import { resolveStorageKeyWithinRoot } from '../services/document-storage.service.js';
 import { approveScreening, recordManualScreeningReport } from '../services/screening.service.js';
 import { actorFromUser, writeAudit } from '../services/audit.service.js';
 
@@ -705,12 +705,8 @@ leadsRouter.get('/applications/:applicationId/report/:kind', requireAuth, async 
     }
 
     const env = getEnv();
-    const root = path.resolve(env.DOCUMENT_STORAGE_DIR);
-    const target = path.resolve(root, key);
-    // Mismo guard de path traversal que ya usa createLocalDocumentStorage
-    // al escribir — se repite aquí porque este es un punto de lectura
-    // independiente, no una llamada a ese servicio.
-    if (!target.startsWith(root)) {
+    const target = resolveStorageKeyWithinRoot(env.DOCUMENT_STORAGE_DIR, key);
+    if (target === null) {
       res.status(400).json({ error: 'Invalid report path' });
       return;
     }

@@ -29,15 +29,39 @@ export function decodeBase64Payload(value: string): Buffer {
   return Buffer.from(payload, 'base64');
 }
 
+/**
+ * Resuelve una storage key contra el root configurado, devolviendo `null` si
+ * la ruta resultante escapa de ese root.
+ *
+ * Fuente única del guard anti path-traversal: antes estaba copiado en tres
+ * lugares (escritura acá, descarga de reportes en routes/leads.ts, descarga
+ * del documento de identificación en rental-application.service.ts), lo que
+ * obligaba a endurecer tres sitios a la vez y era fácil olvidar uno.
+ *
+ * La comparación exige el separador (`root + path.sep`) en vez de un
+ * `startsWith(root)` pelón: sin él, un directorio hermano cuyo nombre empieza
+ * igual que el root (`/data/docs-evil` contra `/data/docs`) pasaba el guard.
+ * Hoy no es explotable porque todas las keys las genera
+ * `buildDocumentStorageKey` con segmentos saneados y ninguna ruta acepta una
+ * key cruda del request — pero es la trampa que espera a la primera que sí.
+ */
+export function resolveStorageKeyWithinRoot(rootDir: string, key: string): string | null {
+  const root = path.resolve(rootDir);
+  const target = path.resolve(root, key);
+  if (target !== root && !target.startsWith(root + path.sep)) {
+    return null;
+  }
+  return target;
+}
+
 export function createLocalDocumentStorage(input: {
   rootDir: string;
   publicBaseUrl?: string;
 }): DocumentObjectStorage {
   return {
     async putObject(object): Promise<DocumentStoragePutResult> {
-      const target = path.resolve(input.rootDir, object.key);
-      const root = path.resolve(input.rootDir);
-      if (!target.startsWith(root)) {
+      const target = resolveStorageKeyWithinRoot(input.rootDir, object.key);
+      if (target === null) {
         throw new Error('Document storage key escaped the configured root directory');
       }
       await fs.mkdir(path.dirname(target), { recursive: true });
