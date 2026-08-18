@@ -107,6 +107,13 @@ model Property {
   // float para dinero, y bps mantiene el porcentaje exacto.
   managementFeePercentBps Int      @default(1250)
   reserveFundTargetCents  Int      @default(0)
+  // Fase 4.1: campos que el catálogo de bienes raíces de Meta exige y que
+  // no se pueden derivar de la dirección sin geocodificar. Se capturan a
+  // mano una sola vez por propiedad; una propiedad sin ellos queda fuera
+  // del feed de sindicación (ver buildListingFeed en packages/core).
+  yearBuilt               Int?
+  latitude                Float?
+  longitude               Float?
   createdAt               DateTime @default(now())
   updatedAt               DateTime @updatedAt
 

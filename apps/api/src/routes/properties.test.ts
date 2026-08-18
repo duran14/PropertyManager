@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { prisma } from '../config/db.js';
-import { resolveOwnerId } from './properties.js';
+import { propertySchema, resolveOwnerId } from './properties.js';
 
 /**
  * Fix de seguridad (post-review de Task 6): `Property.ownerId` es una FK
@@ -86,5 +86,84 @@ describe('resolveOwnerId', () => {
     const result = await resolveOwnerId(TENANT_A, 'nonexistent-owner-id');
 
     expect(result).toEqual({ ok: false });
+  });
+});
+
+const TENANT_SYND = 'tenant_test_syndication_fields';
+
+describe('campos de sindicación', () => {
+  beforeEach(async () => {
+    await prisma.property.deleteMany({ where: { tenantId: TENANT_SYND } });
+    await prisma.tenant.upsert({
+      where: { id: TENANT_SYND },
+      update: {},
+      create: { id: TENANT_SYND, name: 'Syndication Fields Test', province: 'BC' },
+    });
+  });
+
+  afterEach(async () => {
+    await prisma.property.deleteMany({ where: { tenantId: TENANT_SYND } });
+  });
+
+  it('persiste yearBuilt, latitude y longitude', async () => {
+    const property = await prisma.property.create({
+      data: {
+        tenantId: TENANT_SYND,
+        name: 'Surrey Crossing',
+        address: '123 King George Blvd',
+        city: 'Surrey',
+        province: 'BC',
+        yearBuilt: 1998,
+        latitude: 49.1044,
+        longitude: -122.8011,
+      },
+    });
+    expect(property.yearBuilt).toBe(1998);
+    expect(property.latitude).toBeCloseTo(49.1044);
+    expect(property.longitude).toBeCloseTo(-122.8011);
+  });
+
+  it('deja los tres campos en null cuando no se mandan', async () => {
+    const property = await prisma.property.create({
+      data: {
+        tenantId: TENANT_SYND,
+        name: 'Sin datos',
+        address: '9 Nowhere Rd',
+        city: 'Surrey',
+        province: 'BC',
+      },
+    });
+    expect(property.yearBuilt).toBeNull();
+    expect(property.latitude).toBeNull();
+    expect(property.longitude).toBeNull();
+  });
+
+  it('rechaza coordenadas fuera de rango', () => {
+    expect(
+      propertySchema.safeParse({
+        name: 'X', address: 'Y', city: 'Z', province: 'BC', latitude: 200,
+      }).success,
+    ).toBe(false);
+    expect(
+      propertySchema.safeParse({
+        name: 'X', address: 'Y', city: 'Z', province: 'BC', longitude: -400,
+      }).success,
+    ).toBe(false);
+  });
+
+  it('rechaza un año de construcción absurdo', () => {
+    expect(
+      propertySchema.safeParse({
+        name: 'X', address: 'Y', city: 'Z', province: 'BC', yearBuilt: 12345,
+      }).success,
+    ).toBe(false);
+  });
+
+  it('acepta los tres campos ausentes o en null', () => {
+    expect(
+      propertySchema.safeParse({
+        name: 'X', address: 'Y', city: 'Z', province: 'BC', yearBuilt: null,
+      }).success,
+    ).toBe(true);
   });
 });

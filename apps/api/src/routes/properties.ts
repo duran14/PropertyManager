@@ -7,7 +7,7 @@ import { closeOwnerStatement, previewOwnerStatement } from '../services/owner-st
 
 export const propertiesRouter = Router();
 
-const propertySchema = z.object({
+export const propertySchema = z.object({
   name: z.string().min(1).max(200),
   address: z.string().min(1).max(300),
   city: z.string().min(1).max(100),
@@ -16,6 +16,9 @@ const propertySchema = z.object({
   ownerId: z.string().optional().nullable(),
   managementFeePercentBps: z.number().int().min(0).max(10_000).optional(),
   reserveFundTargetCents: z.number().int().min(0).optional(),
+  yearBuilt: z.number().int().min(1800).max(2100).optional().nullable(),
+  latitude: z.number().min(-90).max(90).optional().nullable(),
+  longitude: z.number().min(-180).max(180).optional().nullable(),
 });
 
 const unitSchema = z.object({

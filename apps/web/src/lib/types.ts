@@ -221,6 +221,11 @@ export interface PropertyRecord {
   ownerId: string | null;
   managementFeePercentBps: number;
   reserveFundTargetCents: number;
+  // Fase 4.1: campos requeridos por el catálogo de bienes raíces de Meta
+  // para el feed de sindicación de listados.
+  yearBuilt: number | null;
+  latitude: number | null;
+  longitude: number | null;
   units: PropertyUnit[];
 }
 

@@ -39,6 +39,12 @@ const emptyProperty = {
   ownerId: '',
   managementFeePercent: '',
   reserveFundTarget: '',
+  // Fase 4.1: requeridos por el catálogo de bienes raíces de Meta para el
+  // feed de sindicación. Sin conversión de unidades — solo '' <-> null y
+  // string <-> número en la frontera de la mutación.
+  yearBuilt: '',
+  latitude: '',
+  longitude: '',
 };
 
 const emptyUnit = {
@@ -138,6 +144,10 @@ export function PropertiesPage() {
           reserveFundTargetCents: property.reserveFundTarget === ''
             ? undefined
             : Math.round(Number(property.reserveFundTarget) * 100),
+          // Sin conversión de unidades: solo '' -> null y string -> número.
+          yearBuilt: property.yearBuilt === '' ? null : Number(property.yearBuilt),
+          latitude: property.latitude === '' ? null : Number(property.latitude),
+          longitude: property.longitude === '' ? null : Number(property.longitude),
         }),
       }),
     onSuccess: () => {
@@ -266,6 +276,9 @@ export function PropertiesPage() {
       managementFeePercent: String(propertyRecord.managementFeePercentBps / 100),
       // centavos -> dólares legibles.
       reserveFundTarget: String(propertyRecord.reserveFundTargetCents / 100),
+      yearBuilt: propertyRecord.yearBuilt === null ? '' : String(propertyRecord.yearBuilt),
+      latitude: propertyRecord.latitude === null ? '' : String(propertyRecord.latitude),
+      longitude: propertyRecord.longitude === null ? '' : String(propertyRecord.longitude),
     });
   }
 
@@ -366,6 +379,36 @@ export function PropertiesPage() {
               type="number"
               placeholder="5000"
             />
+            <div className="md:col-span-2 rounded-md border border-slate-200 bg-slate-50 p-3">
+              <p className="mb-2 text-xs font-medium text-slate-500">
+                Listing syndication — required to publish this property to listing portals
+              </p>
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                <TextField
+                  label="Year built"
+                  value={property.yearBuilt}
+                  onChange={(value) => setProperty({ ...property, yearBuilt: value })}
+                  type="number"
+                  placeholder="1998"
+                />
+                <TextField
+                  label="Latitude"
+                  value={property.latitude}
+                  onChange={(value) => setProperty({ ...property, latitude: value })}
+                  type="number"
+                  step="any"
+                  placeholder="49.1044"
+                />
+                <TextField
+                  label="Longitude"
+                  value={property.longitude}
+                  onChange={(value) => setProperty({ ...property, longitude: value })}
+                  type="number"
+                  step="any"
+                  placeholder="-122.8011"
+                />
+              </div>
+            </div>
             <div className="md:col-span-2">
               <button disabled={createProperty.isPending} className="rounded-md bg-brand-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">
                 {editingPropertyId ? 'Save property' : 'Create property'}
@@ -669,6 +712,7 @@ function TextField({
   onChange,
   className = '',
   type = 'text',
+  step,
   placeholder,
   required = false,
 }: {
@@ -677,6 +721,7 @@ function TextField({
   onChange: (value: string) => void;
   className?: string;
   type?: string;
+  step?: string;
   placeholder?: string;
   required?: boolean;
 }) {
@@ -685,6 +730,7 @@ function TextField({
       <span className="mb-1 block text-xs font-medium text-slate-500">{label}</span>
       <input
         type={type}
+        step={step}
         value={value}
         onChange={(event) => onChange(event.target.value)}
         placeholder={placeholder}
