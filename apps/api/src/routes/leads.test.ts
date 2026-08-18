@@ -181,14 +181,32 @@ describe('GET /applications/:applicationId/id-document', () => {
 });
 
 describe('audit trail en descargas de PII', () => {
+  const routeSource = readFileSync(join(process.cwd(), 'src', 'routes', 'leads.ts'), 'utf8');
+
+  // Minor 5 (revisión final): las ventanas de offset fijo (`slice(idx, idx +
+  // N)`) fallaban ABIERTO — si el handler crecía más allá del offset, el
+  // assert `not.toContain` de PII de más abajo dejaba de mirar la parte
+  // nueva del handler y pasaba en verde sin haber revisado nada. Cortar
+  // desde el índice de la ruta hasta el `});` que cierra el handler completo
+  // (balance de paréntesis/llaves) elimina esa fragilidad: no hay número
+  // mágico que se pueda quedar corto.
+  function sliceRouteHandler(routePathLiteral: string): string {
+    const routeIndex = routeSource.indexOf(routePathLiteral);
+    if (routeIndex === -1) throw new Error(`no se encontró la ruta: ${routePathLiteral}`);
+    let depth = 1; // ya estamos dentro del paréntesis de apertura de leadsRouter.get(/.post(
+    for (let i = routeIndex; i < routeSource.length; i++) {
+      const ch = routeSource[i];
+      if (ch === '(' || ch === '{') depth++;
+      else if (ch === ')' || ch === '}') {
+        depth--;
+        if (depth === 0) return routeSource.slice(routeIndex, i + 1);
+      }
+    }
+    throw new Error(`no se encontró el cierre del handler: ${routePathLiteral}`);
+  }
+
   it('la ruta de documento de identificación escribe una entrada de auditoría', () => {
-    const source = readFileSync(
-      new URL('./leads.ts', import.meta.url),
-      'utf8',
-    );
-    const routeIndex = source.indexOf("'/applications/:applicationId/id-document'");
-    expect(routeIndex).toBeGreaterThan(-1);
-    const handler = source.slice(routeIndex, routeIndex + 1600);
+    const handler = sliceRouteHandler("'/applications/:applicationId/id-document'");
     expect(handler).toContain('writeAudit');
     expect(handler).toContain("action: 'rental_application.id_document.downloaded'");
     expect(handler).toContain("entityType: 'rental_application'");
@@ -196,32 +214,20 @@ describe('audit trail en descargas de PII', () => {
   });
 
   it('la ruta de reporte de screening escribe una entrada de auditoría con el kind', () => {
-    const source = readFileSync(
-      new URL('./leads.ts', import.meta.url),
-      'utf8',
-    );
-    const routeIndex = source.indexOf("'/applications/:applicationId/report/:kind'");
-    expect(routeIndex).toBeGreaterThan(-1);
-    const handler = source.slice(routeIndex, routeIndex + 2300);
+    const handler = sliceRouteHandler("'/applications/:applicationId/report/:kind'");
     expect(handler).toContain('writeAudit');
     expect(handler).toContain("action: 'rental_application.screening_report.downloaded'");
     expect(handler).toContain('payload: { kind }');
   });
 
   it('ninguna de las dos rutas mete el archivo ni la storage key en el payload de auditoría', () => {
-    const source = readFileSync(
-      new URL('./leads.ts', import.meta.url),
-      'utf8',
-    );
     // El payload de auditoría es consultable y persistente: meterle PII lo
     // convierte en una segunda copia de lo que se pretendía proteger. Se
     // acota a los handlers de descarga (y no a todo el archivo) porque
     // `idDocumentBase64` también aparece legítimamente en la ruta de
     // envío del formulario (línea ~249), que no forma parte de este cambio.
-    const idDocumentIndex = source.indexOf("'/applications/:applicationId/id-document'");
-    const idDocumentHandler = source.slice(idDocumentIndex, idDocumentIndex + 1600);
-    const reportIndex = source.indexOf("'/applications/:applicationId/report/:kind'");
-    const reportHandler = source.slice(reportIndex, reportIndex + 2300);
+    const idDocumentHandler = sliceRouteHandler("'/applications/:applicationId/id-document'");
+    const reportHandler = sliceRouteHandler("'/applications/:applicationId/report/:kind'");
     for (const handler of [idDocumentHandler, reportHandler]) {
       expect(handler).not.toContain('payload: { file');
       expect(handler).not.toContain('storageKey: key');

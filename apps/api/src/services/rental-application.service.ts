@@ -184,21 +184,6 @@ export type SubmitApplicationResult =
 // real una vez decodificado el base64).
 const MAX_ID_DOCUMENT_BASE64_LENGTH = 1_500_000;
 
-// Fix de revisión final (Critical 1 — XSS almacenado): `idDocumentMimeType`
-// lo manda el solicitante sin autenticar (ApplyPage.tsx toma `idFile.type`
-// del navegador tal cual) y se sirve crudo como `Content-Type` en la
-// descarga (getIdDocumentForDownload más abajo). Sin allowlist, un
-// solicitante puede mandar 'text/html' o 'image/svg+xml' con un cuerpo
-// malicioso; cuando el staff abre "Download ID document" ese script corre en
-// el origen del SPA — mismo origen que el refresh token httpOnly. La
-// allowlist se aplica en los DOS lados: aquí al recibir (rechaza con 400
-// antes de persistir) y de nuevo en getIdDocumentForDownload al servir (no
-// confía en que la fila ya esté limpia — puede haber quedado un valor
-// envenenado de antes de este fix).
-// La lista en sí ahora vive en `@property-manager/core/id-document`, para que
-// el formulario público (ApplyPage.tsx) la consuma también y no vuelva a
-// desalinearse con esta validación.
-
 /**
  * Tope de espera del disparo del screening dentro del request HTTP. Muy por
  * debajo del timeout por default de Node (300s) — ver el comentario largo en
@@ -275,8 +260,20 @@ export async function submitRentalApplication(
   if (!input.idDocumentBase64 || !input.idDocumentFilename || !input.idDocumentMimeType) {
     return { ok: false, status: 400, error: 'A photo ID document is required' };
   }
-  // Critical 1 (revisión final): allowlist estricta, no un chequeo truthy —
-  // ver el comentario largo arriba sobre el origen de esta validación.
+  // Fix de revisión final (Critical 1 — XSS almacenado): `idDocumentMimeType`
+  // lo manda el solicitante sin autenticar (ApplyPage.tsx toma `idFile.type`
+  // del navegador tal cual) y se sirve crudo como `Content-Type` en la
+  // descarga (getIdDocumentForDownload más abajo). Sin allowlist, un
+  // solicitante puede mandar 'text/html' o 'image/svg+xml' con un cuerpo
+  // malicioso; cuando el staff abre "Download ID document" ese script corre
+  // en el origen del SPA — mismo origen que el refresh token httpOnly.
+  // Allowlist estricta, no un chequeo truthy. Se aplica en los DOS lados:
+  // aquí al recibir (rechaza con 400 antes de persistir) y de nuevo en
+  // `getIdDocumentForDownload` al servir (no confía en que la fila ya esté
+  // limpia — puede haber quedado un valor envenenado de antes de este fix).
+  // La lista en sí vive en `@property-manager/core/id-document`, para que el
+  // formulario público (ApplyPage.tsx) la consuma también y no vuelva a
+  // desalinearse con esta validación.
   if (!isAllowedIdDocumentMimeType(input.idDocumentMimeType)) {
     return { ok: false, status: 400, error: 'Unsupported ID document file type' };
   }

@@ -301,6 +301,16 @@ describe('chatbot conversation identity', () => {
   });
 
   it('explains when immediate move-in is the blocker and offers the closest real availability', () => {
+    // Fechas relativas a "ahora": buildInventoryRecoveryTurn filtra con
+    // `unit.availableFrom > new Date()`, así que un fixture con fechas fijas
+    // caduca solo (ver 3d2081d, mismo defecto en el test hermano). North
+    // Vancouver debe seguir siendo la disponibilidad más próxima de las dos,
+    // y ambas deben seguir en el futuro para tomar la rama de move-in.
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    const northVanAvailableFrom = new Date(Date.now() + 15 * DAY_MS);
+    const richmondAvailableFrom = new Date(Date.now() + 30 * DAY_MS);
+    const expectedAvailableDate = northVanAvailableFrom.toISOString().slice(0, 10);
+
     const turn = buildInventoryRecoveryTurn([
       {
         id: 'richmond-611',
@@ -312,7 +322,7 @@ describe('chatbot conversation identity', () => {
         rentCents: 320000,
         bedrooms: 3,
         bathrooms: 2,
-        availableFrom: new Date('2026-09-15T00:00:00Z'),
+        availableFrom: richmondAvailableFrom,
         petPolicy: 'Pet friendly',
       },
       {
@@ -325,7 +335,7 @@ describe('chatbot conversation identity', () => {
         rentCents: 345000,
         bedrooms: 3,
         bathrooms: 2,
-        availableFrom: new Date('2026-09-01T00:00:00Z'),
+        availableFrom: northVanAvailableFrom,
         petPolicy: 'Pet friendly',
       },
     ], {
@@ -339,11 +349,11 @@ describe('chatbot conversation identity', () => {
 
     expect(turn.reply).toContain("don't currently have a 3+ bedroom home available right away");
     expect(turn.reply).toContain('first one I can offer is in North Vancouver');
-    expect(turn.reply).toContain('available on 2026-09-01');
+    expect(turn.reply).toContain(`available on ${expectedAvailableDate}`);
     expect(turn.reply).toContain('Would that timing work for you?');
     expect(turn.slots).toMatchObject({
       pending_search_adjustment: 'offer_move_in_date',
-      suggested_move_in_date: '2026-09-01',
+      suggested_move_in_date: expectedAvailableDate,
     });
   });
 

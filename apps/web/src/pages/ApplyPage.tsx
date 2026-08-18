@@ -1,7 +1,11 @@
 import { type ChangeEvent, type FormEvent, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { ALLOWED_ID_DOCUMENT_MIME_TYPES, isAllowedIdDocumentMimeType } from '@property-manager/core/id-document';
+import {
+  ALLOWED_ID_DOCUMENT_MIME_TYPES,
+  describeAllowedIdDocumentFormats,
+  isAllowedIdDocumentMimeType,
+} from '@property-manager/core/id-document';
 import { apiFetch } from '../lib/apiClient';
 
 type ApplicationSummary = {
@@ -31,7 +35,7 @@ const MAX_ID_DOCUMENT_MB = (MAX_ID_DOCUMENT_BYTES / (1024 * 1024)).toFixed(1);
 // Derivado de la allowlist compartida, no una cadena literal: cuando estaban
 // duplicadas, el `accept` quedó ofreciendo tipos que el servidor rechazaba.
 const ID_DOCUMENT_ACCEPT = ALLOWED_ID_DOCUMENT_MIME_TYPES.join(',');
-const ID_DOCUMENT_FORMATS_LABEL = 'JPEG, PNG, WebP or PDF';
+const ID_DOCUMENT_FORMATS_LABEL = describeAllowedIdDocumentFormats();
 
 // Export nombrado, no default: es la convención de las páginas de este
 // repo (ver ShortlistPage).
