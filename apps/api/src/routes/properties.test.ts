@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { prisma } from '../config/db.js';
-import { propertySchema, resolveOwnerId } from './properties.js';
+import { buildPropertyCreateData, propertySchema, resolveOwnerId } from './properties.js';
 
 /**
  * Fix de seguridad (post-review de Task 6): `Property.ownerId` es una FK
@@ -92,6 +92,8 @@ describe('resolveOwnerId', () => {
 const TENANT_SYND = 'tenant_test_syndication_fields';
 
 describe('campos de sindicación', () => {
+  const base = { name: 'X', address: 'Y', city: 'Z', province: 'BC' };
+
   beforeEach(async () => {
     await prisma.property.deleteMany({ where: { tenantId: TENANT_SYND } });
     await prisma.tenant.upsert({
@@ -159,11 +161,69 @@ describe('campos de sindicación', () => {
     ).toBe(false);
   });
 
-  it('acepta los tres campos ausentes o en null', () => {
+  it('distingue el rango de latitud del de longitud', () => {
+    // 91 es inválido como latitud pero válido como longitud: si alguien
+    // intercambiara los rangos, este par lo delata.
+    expect(propertySchema.safeParse({ ...base, latitude: 91 }).success).toBe(false);
+    expect(propertySchema.safeParse({ ...base, longitude: 91 }).success).toBe(true);
+  });
+
+  it('acepta los valores límite exactos', () => {
+    expect(propertySchema.safeParse({ ...base, latitude: 90 }).success).toBe(true);
+    expect(propertySchema.safeParse({ ...base, latitude: -90 }).success).toBe(true);
+    expect(propertySchema.safeParse({ ...base, longitude: 180 }).success).toBe(true);
+    expect(propertySchema.safeParse({ ...base, longitude: -180 }).success).toBe(true);
+    expect(propertySchema.safeParse({ ...base, yearBuilt: 1800 }).success).toBe(true);
+    expect(propertySchema.safeParse({ ...base, yearBuilt: 2100 }).success).toBe(true);
+  });
+
+  it('rechaza justo afuera del límite', () => {
+    expect(propertySchema.safeParse({ ...base, latitude: 90.1 }).success).toBe(false);
+    expect(propertySchema.safeParse({ ...base, longitude: 180.1 }).success).toBe(false);
+    expect(propertySchema.safeParse({ ...base, yearBuilt: 1799 }).success).toBe(false);
+    expect(propertySchema.safeParse({ ...base, yearBuilt: 2101 }).success).toBe(false);
+  });
+
+  it('acepta los tres campos de sindicación en null explícito', () => {
     expect(
       propertySchema.safeParse({
-        name: 'X', address: 'Y', city: 'Z', province: 'BC', yearBuilt: null,
+        ...base, yearBuilt: null, latitude: null, longitude: null,
       }).success,
     ).toBe(true);
+  });
+});
+
+describe('buildPropertyCreateData', () => {
+  const base = { name: 'X', address: 'Y', city: 'Z', province: 'BC' };
+
+  it('incluye los campos de sindicación cuando vienen', () => {
+    const data = buildPropertyCreateData(
+      propertySchema.parse({ ...base, yearBuilt: 1998, latitude: 49.1044, longitude: -122.8011 }),
+      't1', null,
+    );
+    expect(data.yearBuilt).toBe(1998);
+    expect(data.latitude).toBeCloseTo(49.1044);
+    expect(data.longitude).toBeCloseTo(-122.8011);
+  });
+
+  it('omite los campos de sindicación cuando no vienen', () => {
+    const data = buildPropertyCreateData(propertySchema.parse(base), 't1', null);
+    expect('yearBuilt' in data).toBe(false);
+    expect('latitude' in data).toBe(false);
+    expect('longitude' in data).toBe(false);
+  });
+
+  // Guard contra la regresión exacta que motivó este fix: si alguien agrega un
+  // campo al schema y olvida el handler, este test lo caza.
+  it('no pierde ningún campo del schema que el handler deba persistir', () => {
+    const full = propertySchema.parse({
+      ...base, postalCode: 'V3S1A1', yearBuilt: 1998,
+      latitude: 49.1, longitude: -122.8,
+      managementFeePercentBps: 1000, reserveFundTargetCents: 50000,
+    });
+    const data = buildPropertyCreateData(full, 't1', null);
+    for (const key of ['yearBuilt', 'latitude', 'longitude', 'managementFeePercentBps', 'reserveFundTargetCents'] as const) {
+      expect(data[key]).toBeDefined();
+    }
   });
 });

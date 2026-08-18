@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
+import type { Prisma } from '@prisma/client';
 import { requireAuth, requireRole, requireUser } from '../auth/context.js';
 import { prisma } from '../config/db.js';
 import { parseListInput, slugifyUnit } from '../services/property-inventory.service.js';
@@ -75,6 +76,41 @@ propertiesRouter.get('/', requireAuth, async (req, res, next) => {
   }
 });
 
+/**
+ * Arma el `data` del create de propiedad a partir del input ya validado.
+ *
+ * Extraída del handler para poder testearla: este repo no tiene supertest, y
+ * los tests que llaman a `prisma.property.create` directo no ejercitan el
+ * whitelist del handler — que fue exactamente donde se perdieron
+ * silenciosamente los campos de sindicación (Critical de la revisión de esta
+ * tarea: `POST /` nunca incluía `yearBuilt`/`latitude`/`longitude`, solo
+ * `PATCH /:propertyId` porque ese sí hace `...parsed.data`).
+ */
+export function buildPropertyCreateData(
+  input: z.infer<typeof propertySchema>,
+  tenantId: string,
+  ownerId: string | null,
+): Prisma.PropertyUncheckedCreateInput {
+  return {
+    tenantId,
+    name: input.name,
+    address: input.address,
+    city: input.city,
+    province: input.province,
+    postalCode: input.postalCode || null,
+    ownerId,
+    ...(input.managementFeePercentBps === undefined
+      ? {}
+      : { managementFeePercentBps: input.managementFeePercentBps }),
+    ...(input.reserveFundTargetCents === undefined
+      ? {}
+      : { reserveFundTargetCents: input.reserveFundTargetCents }),
+    ...(input.yearBuilt === undefined ? {} : { yearBuilt: input.yearBuilt }),
+    ...(input.latitude === undefined ? {} : { latitude: input.latitude }),
+    ...(input.longitude === undefined ? {} : { longitude: input.longitude }),
+  };
+}
+
 propertiesRouter.post('/', requireAuth, async (req, res, next) => {
   try {
     const user = requireUser(req);
@@ -91,21 +127,7 @@ propertiesRouter.post('/', requireAuth, async (req, res, next) => {
     }
 
     const property = await prisma.property.create({
-      data: {
-        tenantId: user.tenantId,
-        name: parsed.data.name,
-        address: parsed.data.address,
-        city: parsed.data.city,
-        province: parsed.data.province,
-        postalCode: parsed.data.postalCode || null,
-        ownerId: ownerResolution.ownerId,
-        ...(parsed.data.managementFeePercentBps === undefined
-          ? {}
-          : { managementFeePercentBps: parsed.data.managementFeePercentBps }),
-        ...(parsed.data.reserveFundTargetCents === undefined
-          ? {}
-          : { reserveFundTargetCents: parsed.data.reserveFundTargetCents }),
-      },
+      data: buildPropertyCreateData(parsed.data, user.tenantId, ownerResolution.ownerId),
       include: { units: true },
     });
     res.status(201).json({ property });
