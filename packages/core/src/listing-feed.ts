@@ -70,7 +70,11 @@ export interface ListingFeedContext {
   tenantId: string;
 }
 
-const MAX_FEED_IMAGES = 10;
+// Minor 4 (ronda de corrección final): exportado porque `listing-feed.service.ts`
+// tenía un `take: 10` quemado por separado — si este límite sube (Meta lo
+// amplía), el `take` de Prisma se queda atrás y las columnas `image[10..].url`
+// del CSV salen siempre vacías sin que nada lo señale.
+export const MAX_FEED_IMAGES = 10;
 const CURRENCY = 'CAD' as const;
 const COUNTRY = 'CA' as const;
 
@@ -150,11 +154,31 @@ export function buildListingFeed(
   return { entries, skipped };
 }
 
+// Minor 3 (ronda de corrección final): neutraliza CSV injection. Excel y
+// Google Sheets interpretan una celda que EMPIEZA con `=`, `+` o `@` como el
+// inicio de una fórmula; prefijarla con un apóstrofo la fuerza a texto plano
+// sin cambiar el valor visible. El triaje original asumía que todo el
+// contenido del feed lo captura staff autenticado del tenant, pero
+// `image[N].url` sale de `photo.enhancedUrl`, que escribe el webhook sin
+// autenticar de Autoenhance (`apps/api/src/routes/photos.ts`) sin validarlo
+// como URL — así que una celda puede traer contenido no confiable.
+//
+// Deliberadamente NO se incluye `-`: una longitud negativa (todo Norteamérica,
+// ej. `-122.8011`) es un valor legítimo y numérico, no el inicio de una
+// fórmula de Excel; sanitizarla corrompería un dato que Meta requiere.
+const CSV_FORMULA_PREFIXES = ['=', '+', '@'];
+
 function escapeCsvField(value: string): string {
-  if (value.includes(',') || value.includes('"') || value.includes('\n')) {
-    return `"${value.replace(/"/g, '""')}"`;
+  const needsFormulaGuard = CSV_FORMULA_PREFIXES.some((prefix) => value.startsWith(prefix));
+  const guarded = needsFormulaGuard ? `'${value}` : value;
+
+  // Minor 6 (ronda de corrección final): `\r` solo (sin `\n` de por medio)
+  // no estaba cubierto — un parser que trate `\r` como fin de registro
+  // partiría la fila. `\r\n` ya quedaba cubierto por contener `\n`.
+  if (guarded.includes(',') || guarded.includes('"') || guarded.includes('\n') || guarded.includes('\r')) {
+    return `"${guarded.replace(/"/g, '""')}"`;
   }
-  return value;
+  return guarded;
 }
 
 function toCsvCell(value: string | number | null): string {

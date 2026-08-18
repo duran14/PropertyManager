@@ -168,4 +168,71 @@ describe('serializeListingFeedCsv', () => {
     const csv = serializeListingFeedCsv([]);
     expect(csv.trim().split('\n')).toHaveLength(1);
   });
+
+  // Minor 3 (ronda de corrección final): CSV injection. `name`/`address`
+  // vienen de staff autenticado, pero `image[N].url` sale de
+  // `photo.enhancedUrl`, que escribe una ruta sin autenticar
+  // (`apps/api/src/routes/photos.ts`) sin validarlo como URL. Un valor que
+  // empiece con `=`, `+` o `@` debe salir prefijado con `'` para que Excel /
+  // Google Sheets no lo interprete como fórmula.
+  describe('CSV injection — prefijos de fórmula', () => {
+    it('prefija un valor que empieza con =', () => {
+      const { entries } = buildListingFeed(
+        [makeInput({ photoUrls: ['=1+1'] })],
+        NOW,
+        BASE,
+      );
+      const csv = serializeListingFeedCsv(entries);
+      expect(csv).toContain("'=1+1");
+    });
+
+    it('prefija un valor que empieza con +', () => {
+      const { entries } = buildListingFeed(
+        [makeInput({ streetAddress: '+1+1' })],
+        NOW,
+        BASE,
+      );
+      const csv = serializeListingFeedCsv(entries);
+      expect(csv).toContain("'+1+1");
+    });
+
+    it('prefija un valor que empieza con @', () => {
+      const { entries } = buildListingFeed(
+        [makeInput({ propertyName: '@SUM(1,1)' })],
+        NOW,
+        BASE,
+      );
+      const csv = serializeListingFeedCsv(entries);
+      expect(csv).toContain("'@SUM(1,1)");
+    });
+
+    // El caso que este fix NO debe romper: una longitud negativa es un dato
+    // legítimo (toda Norteamérica), no el inicio de una fórmula. Sanitizarla
+    // corrompería un valor que Meta requiere.
+    it('NO toca una longitud negativa', () => {
+      const { entries } = buildListingFeed(
+        [makeInput({ longitude: -122.8011 })],
+        NOW,
+        BASE,
+      );
+      const csv = serializeListingFeedCsv(entries);
+      expect(csv).toContain(',-122.8011,');
+      expect(csv).not.toContain("'-122.8011");
+    });
+  });
+
+  // Minor 6 (ronda de corrección final): un `\r` solitario (sin `\n`) no
+  // estaba cubierto por el chequeo original. Un parser que trate `\r` como
+  // fin de registro partiría la fila si el campo no se cita.
+  it('cita un valor que contiene un \\r solitario', () => {
+    const { entries } = buildListingFeed(
+      [makeInput({ propertyName: 'Surrey\rCrossing' })],
+      NOW,
+      BASE,
+    );
+    const csv = serializeListingFeedCsv(entries);
+    // El campo serializado es `name` (`${propertyName} — ${unitName}`), y
+    // debe quedar citado enteramente por contener el \r.
+    expect(csv).toContain('"Surrey\rCrossing — Suite 204"');
+  });
 });

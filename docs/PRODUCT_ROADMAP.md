@@ -253,7 +253,7 @@ Balance = Σ RENT_INCOME − Σ UTILITY_BILL − Σ REPAIR_EXPENSE − MANAGEMEN
 ### 4.1 Meta Real Estate Catalog Sync — parcialmente entregado
 
 > Entregado: el feed CSV de sindicación de listados
-> (`GET /api/public/listing-feed?tenant=<tenantId>`, sin autenticar — mismos
+> (`GET ${API_URL}/public/listing-feed?tenant=<tenantId>`, sin autenticar — mismos
 > datos que la vitrina pública de unidades), que omite las unidades cuya
 > propiedad no tiene año de construcción y coordenadas, o que no tienen
 > fotos (`packages/core/src/listing-feed.ts`). Y la visibilidad de esa

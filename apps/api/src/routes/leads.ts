@@ -535,6 +535,12 @@ publicRouter.get('/listing-feed', async (req, res, next) => {
     const { csv } = await getListingFeed(tenantId, new Date());
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', 'inline; filename="listings.csv"');
+    // Minor 7 (ronda de corrección final): ruta pública sin token, consumida
+    // por un poller de portal que la consulta en ciclo, con `findMany` sin
+    // `take` y hasta 10 fotos por unidad. 5 minutos es holgado frente al
+    // ritmo típico de consulta (por hora) y evita que un crawler agresivo
+    // golpee la base en cada request.
+    res.setHeader('Cache-Control', 'public, max-age=300');
     res.send(csv);
   } catch (err) {
     next(err);

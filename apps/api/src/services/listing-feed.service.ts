@@ -1,5 +1,6 @@
 import {
   buildListingFeed,
+  MAX_FEED_IMAGES,
   serializeListingFeedCsv,
   type ListingFeedInput,
   type SkippedListing,
@@ -29,7 +30,7 @@ export async function getListingFeed(
       },
       listingPhotos: {
         orderBy: [{ isPrimary: 'desc' }, { createdAt: 'asc' }],
-        take: 10,
+        take: MAX_FEED_IMAGES,
       },
     },
     orderBy: { rentCents: 'asc' },

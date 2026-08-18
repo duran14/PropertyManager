@@ -159,6 +159,11 @@ export function PropertiesPage() {
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['properties'] });
+      // Important 2 (ronda de corrección final): yearBuilt/latitude/longitude
+      // se editan en este mismo formulario y determinan si una unidad entra
+      // al feed. Sin esto, el panel de sindicación sigue mostrando el conteo
+      // y las omisiones de antes del guardado hasta que el PM recarga.
+      queryClient.invalidateQueries({ queryKey: ['syndication-status'] });
       setProperty(emptyProperty);
       setEditingPropertyId(null);
     },
@@ -185,6 +190,11 @@ export function PropertiesPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['properties'] });
       queryClient.invalidateQueries({ queryKey: ['units'] });
+      // Important 2 (ronda de corrección final): crear/editar una unidad
+      // cambia `isActive`, y editarla puede ser justo la corrección que el
+      // PM hace en respuesta a una omisión del feed — debe reflejarse sin
+      // recargar la página.
+      queryClient.invalidateQueries({ queryKey: ['syndication-status'] });
       setUnit(emptyUnit);
       setEditingUnitId(null);
     },
@@ -853,8 +863,23 @@ function getExtractionStatusClass(status: KnowledgeDocument['extractionStatus'])
 // Fase 4.1: explica en texto accionable qué le falta a una unidad omitida
 // del feed de sindicación, para que el property manager sepa exactamente
 // qué campo completar.
+//
+// Minor 5 (ronda de corrección final): `switch` exhaustivo con un `default`
+// que fuerza `reason` a `never`. Si `core` agrega un motivo nuevo, esto rompe
+// la compilación del web hasta que se le dé una etiqueta — en vez de caer
+// silenciosamente en una rama equivocada (antes, el último `return` sin
+// condición absorbía cualquier motivo no reconocido).
 function skippedReasonLabel(reason: SkippedListingReason): string {
-  if (reason === 'missing_year_built') return 'add the year built';
-  if (reason === 'missing_coordinates') return 'add latitude and longitude';
-  return 'add at least one photo';
+  switch (reason) {
+    case 'missing_year_built':
+      return 'add the year built';
+    case 'missing_coordinates':
+      return 'add latitude and longitude';
+    case 'missing_photos':
+      return 'add at least one photo';
+    default: {
+      const _exhaustive: never = reason;
+      throw new Error(`Unhandled skipped listing reason: ${_exhaustive}`);
+    }
+  }
 }

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { prisma } from '../config/db.js';
 import { getListingFeed } from '../services/listing-feed.service.js';
 import {
+  buildFeedUrl,
   buildPropertyCreateData,
   propertySchema,
   resolveOwnerId,
@@ -232,6 +233,30 @@ describe('buildPropertyCreateData', () => {
     for (const key of ['yearBuilt', 'latitude', 'longitude', 'managementFeePercentBps', 'reserveFundTargetCents'] as const) {
       expect(data[key]).toBeDefined();
     }
+  });
+});
+
+/**
+ * Important 1 (ronda de corrección final): la URL que el PM copia y pega en
+ * el portal de sindicación debe apuntar al host de la API, sin el prefijo
+ * `/api` que solo existía por el proxy de desarrollo de Vite. Fijar la forma
+ * acá evita que la variable equivocada (o el prefijo de más) vuelvan a
+ * colarse sin que ningún test lo note.
+ */
+describe('buildFeedUrl', () => {
+  it('apunta al host de la API, sin prefijo /api', () => {
+    expect(buildFeedUrl('https://api.jorge.com', 't1'))
+      .toBe('https://api.jorge.com/public/listing-feed?tenant=t1');
+  });
+
+  it('quita diagonales finales', () => {
+    expect(buildFeedUrl('https://api.jorge.com///', 't1'))
+      .toBe('https://api.jorge.com/public/listing-feed?tenant=t1');
+  });
+
+  it('codifica el tenant', () => {
+    expect(buildFeedUrl('https://api.jorge.com', 'a b&c'))
+      .toBe('https://api.jorge.com/public/listing-feed?tenant=a%20b%26c');
   });
 });
 

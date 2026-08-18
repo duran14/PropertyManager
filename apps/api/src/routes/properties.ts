@@ -93,15 +93,27 @@ propertiesRouter.get('/', requireAuth, async (req, res, next) => {
 // RFC 4180 que traiga un salto de línea, ej. una dirección multilínea).
 // `getListingFeed` devuelve `syndicatedCount` ya calculado desde el arreglo
 // de entradas, antes de serializar.
+// Fix (Important 1, ronda de corrección final): la ruta del feed vive en la
+// API (`app.ts` monta `publicRouter` en `/public`), así que su URL real es
+// `${API_URL}/public/listing-feed` — no `${WEB_URL}/api/public/...`. Ese
+// `/api` venía del proxy de desarrollo de Vite (que además hace `rewrite`
+// quitándolo); en producción no hay ningún proxy que lo resuelva, así que
+// publicar esa forma le da al PM una URL que un crawler externo no puede
+// alcanzar. Extraída a función pura para poder fijar la forma con un test
+// sin depender de Express ni de env vars reales.
+export function buildFeedUrl(apiUrl: string, tenantId: string): string {
+  const base = apiUrl.replace(/\/+$/, '');
+  return `${base}/public/listing-feed?tenant=${encodeURIComponent(tenantId)}`;
+}
+
 propertiesRouter.get('/syndication-status', requireAuth, async (req, res, next) => {
   try {
     const user = requireUser(req);
     const { syndicatedCount, skipped } = await getListingFeed(user.tenantId, new Date());
-    const base = getEnv().WEB_URL.replace(/\/+$/, '');
     res.json({
       syndicated: syndicatedCount,
       skipped,
-      feedUrl: `${base}/api/public/listing-feed?tenant=${encodeURIComponent(user.tenantId)}`,
+      feedUrl: buildFeedUrl(getEnv().API_URL, user.tenantId),
     });
   } catch (err) {
     next(err);

@@ -259,4 +259,14 @@ describe('feed de sindicación', () => {
   it('la ruta vive en publicRouter, no en leadsRouter', () => {
     expect(routeSource).toContain("publicRouter.get('/listing-feed'");
   });
+
+  // Minor 7 (ronda de corrección final): sin token, `findMany` sin `take`, y
+  // el consumidor previsto es un poller en ciclo — sin Cache-Control un
+  // crawler agresivo golpea la base en cada request.
+  it('la ruta fija Cache-Control para el poller del portal', () => {
+    const idx = routeSource.indexOf("'/listing-feed'");
+    const handler = routeSource.slice(idx, idx + 1200);
+    expect(handler).toContain("'Cache-Control'");
+    expect(handler).toContain('max-age=300');
+  });
 });

@@ -1,5 +1,13 @@
 /** Tipos compartidos frontend — espejo de los de backend (zod-validated). */
 
+// Minor 5 (ronda de corrección final): antes redefinidos acá en vez de
+// importados de `core`, que ya los exporta por el subpath `listing-feed` (ver
+// `packages/core/package.json`). Una copia local no se entera cuando `core`
+// agrega un motivo nuevo — TypeScript del web no se quejaría y la UI seguiría
+// mostrando una etiqueta vieja para un motivo que ya no existe.
+import type { SkippedListing, SkippedListingReason } from '@property-manager/core/listing-feed';
+export type { SkippedListing, SkippedListingReason };
+
 export interface AuthUser {
   id: string;
   email: string;
@@ -227,16 +235,6 @@ export interface PropertyRecord {
   latitude: number | null;
   longitude: number | null;
   units: PropertyUnit[];
-}
-
-// Fase 4.1: por qué una unidad no entró al feed de sindicación de listados.
-export type SkippedListingReason = 'missing_year_built' | 'missing_coordinates' | 'missing_photos';
-
-export interface SkippedListing {
-  unitId: string;
-  unitName: string;
-  propertyName: string;
-  reason: SkippedListingReason;
 }
 
 export interface SyndicationStatus {
