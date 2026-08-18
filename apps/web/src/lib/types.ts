@@ -229,6 +229,22 @@ export interface PropertyRecord {
   units: PropertyUnit[];
 }
 
+// Fase 4.1: por qué una unidad no entró al feed de sindicación de listados.
+export type SkippedListingReason = 'missing_year_built' | 'missing_coordinates' | 'missing_photos';
+
+export interface SkippedListing {
+  unitId: string;
+  unitName: string;
+  propertyName: string;
+  reason: SkippedListingReason;
+}
+
+export interface SyndicationStatus {
+  syndicated: number;
+  skipped: SkippedListing[];
+  feedUrl: string;
+}
+
 export interface Owner {
   id: string;
   firstName: string;

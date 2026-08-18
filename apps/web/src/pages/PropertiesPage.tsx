@@ -7,6 +7,8 @@ import type {
   ObsidianExportFile,
   Owner,
   PropertyRecord,
+  SkippedListingReason,
+  SyndicationStatus,
   TenantOnboardingProfile,
 } from '../lib/types';
 
@@ -110,6 +112,11 @@ export function PropertiesPage() {
     queryKey: ['webhook-config'],
     queryFn: () => apiFetch('/webhook-config'),
   });
+  const { data: syndicationStatus } = useQuery<SyndicationStatus>({
+    queryKey: ['syndication-status'],
+    queryFn: () => apiFetch('/properties/syndication-status'),
+  });
+  const [feedUrlCopied, setFeedUrlCopied] = useState(false);
 
   const profile = onboardingData?.profile;
   const properties = propertiesData?.properties ?? [];
@@ -230,6 +237,13 @@ export function PropertiesPage() {
       aiTone: profile.aiTone ?? '',
       aiInstructions: profile.aiInstructions ?? '',
     });
+  }
+
+  async function copyFeedUrl() {
+    if (!syndicationStatus) return;
+    await navigator.clipboard.writeText(syndicationStatus.feedUrl);
+    setFeedUrlCopied(true);
+    setTimeout(() => setFeedUrlCopied(false), 2000);
   }
 
   function onSaveOnboarding(event: FormEvent) {
@@ -641,6 +655,53 @@ export function PropertiesPage() {
         </section>
       </div>
 
+      {syndicationStatus && (
+        <section className="rounded-lg border border-slate-200 bg-white">
+          <div className="border-b border-slate-200 px-4 py-3">
+            <h2 className="font-medium">Listing syndication</h2>
+            <p className="text-xs text-slate-500">
+              {syndicationStatus.syndicated} listing{syndicationStatus.syndicated === 1 ? '' : 's'} in the feed
+            </p>
+          </div>
+          <div className="space-y-3 p-4">
+            <div>
+              <p className="mb-1 text-xs text-slate-500">
+                Paste this URL into the syndication portal (Facebook Marketplace, RentLinx, ListHub) to publish your listings.
+              </p>
+              <div className="flex items-center gap-2">
+                <input
+                  readOnly
+                  value={syndicationStatus.feedUrl}
+                  onFocus={(event) => event.target.select()}
+                  className="w-full rounded-md border border-slate-300 bg-slate-50 px-3 py-2 text-xs text-slate-700"
+                />
+                <button
+                  type="button"
+                  onClick={copyFeedUrl}
+                  className="shrink-0 rounded-md border border-slate-200 px-3 py-2 text-xs font-medium text-slate-600 hover:bg-slate-50"
+                >
+                  {feedUrlCopied ? 'Copied!' : 'Copy'}
+                </button>
+              </div>
+            </div>
+            {syndicationStatus.skipped.length > 0 && (
+              <div className="rounded-md border border-amber-200 bg-amber-50 p-3">
+                <p className="mb-2 text-xs font-medium text-amber-800">
+                  {syndicationStatus.skipped.length} unit{syndicationStatus.skipped.length === 1 ? '' : 's'} not in the feed
+                </p>
+                <ul className="space-y-1 text-xs text-amber-800">
+                  {syndicationStatus.skipped.map((item) => (
+                    <li key={item.unitId}>
+                      {item.propertyName} / {item.unitName}: {skippedReasonLabel(item.reason)}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        </section>
+      )}
+
       <section className="rounded-lg border border-slate-200 bg-white">
         <div className="border-b border-slate-200 px-4 py-3">
           <h2 className="font-medium">Inventory</h2>
@@ -787,4 +848,13 @@ function getExtractionStatusClass(status: KnowledgeDocument['extractionStatus'])
   if (status === 'completed') return 'bg-green-50 text-green-700';
   if (status === 'failed') return 'bg-red-50 text-red-700';
   return 'bg-amber-50 text-amber-700';
+}
+
+// Fase 4.1: explica en texto accionable qué le falta a una unidad omitida
+// del feed de sindicación, para que el property manager sepa exactamente
+// qué campo completar.
+function skippedReasonLabel(reason: SkippedListingReason): string {
+  if (reason === 'missing_year_built') return 'add the year built';
+  if (reason === 'missing_coordinates') return 'add latitude and longitude';
+  return 'add at least one photo';
 }

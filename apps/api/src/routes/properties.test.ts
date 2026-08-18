@@ -1,6 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { prisma } from '../config/db.js';
-import { buildPropertyCreateData, propertySchema, resolveOwnerId } from './properties.js';
+import { getListingFeed } from '../services/listing-feed.service.js';
+import {
+  buildPropertyCreateData,
+  countSyndicatedRows,
+  propertySchema,
+  resolveOwnerId,
+} from './properties.js';
 
 /**
  * Fix de seguridad (post-review de Task 6): `Property.ownerId` es una FK
@@ -225,5 +231,107 @@ describe('buildPropertyCreateData', () => {
     for (const key of ['yearBuilt', 'latitude', 'longitude', 'managementFeePercentBps', 'reserveFundTargetCents'] as const) {
       expect(data[key]).toBeDefined();
     }
+  });
+});
+
+/**
+ * Fase 4.1: `GET /properties/syndication-status` delega en `getListingFeed`
+ * (que ya tiene sus propios tests de integración en
+ * `listing-feed.service.test.ts`, Task 3). Lo que falta cubrir acá es la
+ * lógica propia de la ruta: el conteo derivado del CSV y la construcción de
+ * la `feedUrl` — extraída a `countSyndicatedRows` para poder testearla sin
+ * `supertest` (este repo no lo tiene, ver leads.test.ts).
+ */
+describe('countSyndicatedRows', () => {
+  it('no cuenta el encabezado', () => {
+    expect(countSyndicatedRows('home_listing_id,name\nu1,Casa\nu2,Depa\n')).toBe(2);
+  });
+
+  it('devuelve 0 con solo encabezado', () => {
+    expect(countSyndicatedRows('home_listing_id,name\n')).toBe(0);
+  });
+
+  it('devuelve 0 con cadena vacía', () => {
+    expect(countSyndicatedRows('')).toBe(0);
+  });
+});
+
+const TENANT_SYND_STATUS = 'tenant_test_syndication_status';
+
+/** Crea propiedad + unidad + fotos en un solo paso (copiado de listing-feed.service.test.ts: archivo distinto, sin helpers compartidos entre tests). */
+async function seedListing(opts: {
+  tenantId: string;
+  slug: string;
+  yearBuilt?: number | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  isActive?: boolean;
+  photos?: { originalUrl: string; enhancedUrl?: string | null }[];
+}) {
+  const property = await prisma.property.create({
+    data: {
+      tenantId: opts.tenantId,
+      name: `Prop ${opts.slug}`,
+      address: `1 ${opts.slug} Rd`,
+      city: 'Surrey',
+      province: 'BC',
+      yearBuilt: opts.yearBuilt === undefined ? 1998 : opts.yearBuilt,
+      latitude: opts.latitude === undefined ? 49.1044 : opts.latitude,
+      longitude: opts.longitude === undefined ? -122.8011 : opts.longitude,
+    },
+  });
+  const unit = await prisma.unit.create({
+    data: {
+      tenantId: opts.tenantId,
+      propertyId: property.id,
+      name: 'Suite 204',
+      rentCents: 250000,
+      bedrooms: 2,
+      bathrooms: 1,
+      slug: opts.slug,
+      isActive: opts.isActive ?? true,
+    },
+  });
+  for (const photo of opts.photos ?? [{ originalUrl: 'https://cdn.example.com/a.jpg' }]) {
+    await prisma.listingPhoto.create({
+      data: {
+        tenantId: opts.tenantId,
+        unitId: unit.id,
+        originalUrl: photo.originalUrl,
+        enhancedUrl: photo.enhancedUrl ?? null,
+        isPrimary: true,
+      },
+    });
+  }
+  return { property, unit };
+}
+
+describe('estado de sindicación', () => {
+  async function cleanup() {
+    await prisma.listingPhoto.deleteMany({ where: { tenantId: TENANT_SYND_STATUS } });
+    await prisma.unit.deleteMany({ where: { tenantId: TENANT_SYND_STATUS } });
+    await prisma.property.deleteMany({ where: { tenantId: TENANT_SYND_STATUS } });
+  }
+
+  beforeEach(async () => {
+    await cleanup();
+    await prisma.tenant.upsert({
+      where: { id: TENANT_SYND_STATUS },
+      update: {},
+      create: { id: TENANT_SYND_STATUS, name: 'Syndication Status Test', province: 'BC' },
+    });
+  });
+
+  afterEach(cleanup);
+
+  it('cuenta solo las sindicables y detalla las omitidas', async () => {
+    await seedListing({ tenantId: TENANT_SYND_STATUS, slug: 'sync-status-complete' });
+    await seedListing({ tenantId: TENANT_SYND_STATUS, slug: 'sync-status-no-year', yearBuilt: null });
+
+    const { csv, skipped } = await getListingFeed(TENANT_SYND_STATUS, new Date());
+
+    expect(countSyndicatedRows(csv)).toBe(1);
+    expect(skipped).toHaveLength(1);
+    expect(skipped[0]?.reason).toBe('missing_year_built');
   });
 });

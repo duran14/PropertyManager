@@ -3,8 +3,10 @@ import { z } from 'zod';
 import type { Prisma } from '@prisma/client';
 import { requireAuth, requireRole, requireUser } from '../auth/context.js';
 import { prisma } from '../config/db.js';
+import { getEnv } from '../config/env.js';
 import { parseListInput, slugifyUnit } from '../services/property-inventory.service.js';
 import { closeOwnerStatement, previewOwnerStatement } from '../services/owner-statement.service.js';
+import { getListingFeed } from '../services/listing-feed.service.js';
 
 export const propertiesRouter = Router();
 
@@ -71,6 +73,38 @@ propertiesRouter.get('/', requireAuth, async (req, res, next) => {
       },
     });
     res.json({ properties });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** Filas del CSV menos el encabezado. Un feed vacío trae solo esa línea. */
+export function countSyndicatedRows(csv: string): number {
+  const trimmed = csv.trim();
+  if (trimmed === '') return 0;
+  return Math.max(0, trimmed.split('\n').length - 1);
+}
+
+// Fase 4.1: qué está y qué no está entrando al feed de sindicación. Sin
+// esto la omisión es silenciosa y el PM cree que sindica más de lo que
+// sindica.
+//
+// Ojo con el orden de rutas de Express: esta ruta es estática
+// (`/syndication-status`) y debe declararse ANTES de cualquier
+// `propertiesRouter.get('/:propertyId', ...)` que exista en este router, o
+// Express tomaría "syndication-status" como si fuera un `propertyId` y esta
+// ruta jamás se ejecutaría.
+propertiesRouter.get('/syndication-status', requireAuth, async (req, res, next) => {
+  try {
+    const user = requireUser(req);
+    const { csv, skipped } = await getListingFeed(user.tenantId, new Date());
+    const syndicated = countSyndicatedRows(csv);
+    const base = getEnv().WEB_URL.replace(/\/+$/, '');
+    res.json({
+      syndicated,
+      skipped,
+      feedUrl: `${base}/api/public/listing-feed?tenant=${encodeURIComponent(user.tenantId)}`,
+    });
   } catch (err) {
     next(err);
   }

@@ -250,7 +250,33 @@ Balance = Σ RENT_INCOME − Σ UTILITY_BILL − Σ REPAIR_EXPENSE − MANAGEMEN
 
 **Objetivo:** Publicar una vacante una sola vez y distribuirla a Facebook Marketplace y portales inmobiliarios.
 
-### 4.1 Meta Real Estate Catalog Sync
+### 4.1 Meta Real Estate Catalog Sync — parcialmente entregado
+
+> Entregado: el feed CSV de sindicación de listados
+> (`GET /api/public/listing-feed?tenant=<tenantId>`, sin autenticar — mismos
+> datos que la vitrina pública de unidades), que omite las unidades cuya
+> propiedad no tiene año de construcción y coordenadas, o que no tienen
+> fotos (`packages/core/src/listing-feed.ts`). Y la visibilidad de esa
+> omisión: `GET /properties/syndication-status` (autenticada, por tenant)
+> devuelve cuántas unidades están en el feed y el detalle de las omitidas
+> con el motivo (`missing_year_built` / `missing_coordinates` /
+> `missing_photos`); la pantalla de Properties la muestra con la URL del
+> feed lista para copiar y pegar en el portal de sindicación.
+>
+> Bloqueado, sin código que lo desbloquee:
+> - **Publicar gratis en Facebook Marketplace** requiere el **Marketplace
+>   Partner Program** de Meta: aprobación restringida por partnership, sin
+>   API pública de autoservicio. No es algo que se resuelva con más
+>   implementación — depende de que Meta apruebe a la agencia como partner.
+> - El catálogo de bienes raíces al que este feed en teoría alimenta
+>   (Graph API de Meta) sirve en la práctica para **anuncios pagados**, no
+>   para publicación orgánica gratuita, y requiere que el usuario tenga su
+>   propio **Business Manager** de Meta configurado antes de conectar nada.
+>
+> Es decir: la parte construible de 4.1 (el feed y su visibilidad) está
+> entregada; la sincronización automática con Meta descrita abajo sigue sin
+> empezar porque depende de aprobaciones externas fuera del control de este
+> repo.
 
 - Implementar generación de XML/JSON bajo estándar RESO (Real Estate Standards Organization).
 - Conectar con Graph API de Meta para sincronización automática con el catálogo de bienes raíces de la Facebook Page de la agencia.
