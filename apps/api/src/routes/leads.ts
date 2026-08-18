@@ -38,6 +38,7 @@ import {
 } from '../services/rental-application.service.js';
 import { resolveStorageKeyWithinRoot } from '../services/document-storage.service.js';
 import { approveScreening, recordManualScreeningReport } from '../services/screening.service.js';
+import { getListingFeed } from '../services/listing-feed.service.js';
 import { actorFromUser, writeAudit } from '../services/audit.service.js';
 
 export const publicRouter = Router();
@@ -514,6 +515,30 @@ publicRouter.post('/units/:slug/schedule', async (req, res, next) => {
     const unitAddress = `${unit.property.address}, ${unit.property.city}, ${unit.property.province}`;
     res.json({ scheduledAt: booked.scheduledAt, unitLabel, unitAddress });
   } catch (err) { next(err); }
+});
+
+// Fase 4.1: feed de sindicación de listados. Lo consume un crawler de un
+// portal (Meta, RentLinx, ListHub), que hace un GET plano y no puede mandar
+// headers personalizados — por eso el tenant va en la query y no en
+// `x-tenant-id` como el resto de las rutas públicas.
+//
+// Sin token a propósito: expone exactamente los mismos datos que
+// `GET /public/units?tenant=`, que ya es público. Los listados de renta son
+// públicos por definición; un token acá sería teatro de seguridad.
+publicRouter.get('/listing-feed', async (req, res, next) => {
+  try {
+    const tenantId = req.query.tenant;
+    if (typeof tenantId !== 'string' || tenantId === '') {
+      res.status(400).json({ error: 'tenant query parameter is required' });
+      return;
+    }
+    const { csv } = await getListingFeed(tenantId, new Date());
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'inline; filename="listings.csv"');
+    res.send(csv);
+  } catch (err) {
+    next(err);
+  }
 });
 
 // =============== RUTAS PRIVADAS ===============

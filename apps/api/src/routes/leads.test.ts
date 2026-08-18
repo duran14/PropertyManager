@@ -235,3 +235,28 @@ describe('audit trail en descargas de PII', () => {
     }
   });
 });
+
+describe('feed de sindicación', () => {
+  const routeSource = readFileSync(join(process.cwd(), 'src', 'routes', 'leads.ts'), 'utf8');
+
+  it('la ruta lee el tenant de la query, no del header', () => {
+    const idx = routeSource.indexOf("'/listing-feed'");
+    expect(idx).toBeGreaterThan(-1);
+    const handler = routeSource.slice(idx, idx + 1200);
+    expect(handler).toContain('req.query.tenant');
+    expect(handler).not.toContain("x-tenant-id");
+  });
+
+  it('la ruta responde text/csv y delega en getListingFeed', () => {
+    const idx = routeSource.indexOf("'/listing-feed'");
+    const handler = routeSource.slice(idx, idx + 1200);
+    expect(handler).toContain('getListingFeed(tenantId, new Date())');
+    expect(handler).toContain("'text/csv; charset=utf-8'");
+  });
+
+  // Es una ruta pública a propósito, pero no debe colgarse del router
+  // autenticado por accidente.
+  it('la ruta vive en publicRouter, no en leadsRouter', () => {
+    expect(routeSource).toContain("publicRouter.get('/listing-feed'");
+  });
+});
