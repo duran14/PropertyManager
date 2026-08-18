@@ -596,9 +596,15 @@ describe('chatbot conversation identity', () => {
   it('treats ASAP as an immediate availability requirement', () => {
     expect(extractContextualConversationSlots('asap', { budget: '2600' }))
       .toMatchObject({ move_in_date: 'As soon as possible' });
+    // Fechas relativas a "ahora", no quemadas: `parseMoveInDeadline` resuelve
+    // "as soon as possible" a `new Date()`, así que un fixture con fechas fijas
+    // caduca solo. La versión previa usaba 2026-07-31 y 2026-08-15, y empezó a
+    // fallar el 15 de agosto de 2026 cuando la segunda fecha quedó en el pasado
+    // y la unidad "later" pasó a estar disponible de inmediato.
+    const DAY_MS = 24 * 60 * 60 * 1000;
     const units = [
-      { id:'now', name:'Now', propertyName:'A', city:'Surrey', rentCents:200000, bedrooms:1, bathrooms:1, availableFrom:new Date('2026-07-31T00:00:00Z'), petPolicy:'Cats allowed' },
-      { id:'later', name:'Later', propertyName:'B', city:'Surrey', rentCents:200000, bedrooms:1, bathrooms:1, availableFrom:new Date('2026-08-15T00:00:00Z'), petPolicy:'Cats allowed' },
+      { id:'now', name:'Now', propertyName:'A', city:'Surrey', rentCents:200000, bedrooms:1, bathrooms:1, availableFrom:new Date(Date.now() - 30 * DAY_MS), petPolicy:'Cats allowed' },
+      { id:'later', name:'Later', propertyName:'B', city:'Surrey', rentCents:200000, bedrooms:1, bathrooms:1, availableFrom:new Date(Date.now() + 30 * DAY_MS), petPolicy:'Cats allowed' },
     ];
     expect(filterQualifiedUnits(units, { move_in_date:'As soon as possible', pets:'cat' }).map((unit)=>unit.id)).toEqual(['now']);
   });
