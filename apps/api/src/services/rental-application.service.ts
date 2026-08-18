@@ -9,6 +9,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { ChatChannel, MessagingAdapter } from '@property-manager/adapters';
+import { isAllowedIdDocumentMimeType } from '@property-manager/core';
 import { prisma } from '../config/db.js';
 import { getEnv } from '../config/env.js';
 import { getReplyAddressFromConversation, sendWithRetry } from './chatbot.service.js';
@@ -193,12 +194,9 @@ const MAX_ID_DOCUMENT_BASE64_LENGTH = 1_500_000;
 // antes de persistir) y de nuevo en getIdDocumentForDownload al servir (no
 // confía en que la fila ya esté limpia — puede haber quedado un valor
 // envenenado de antes de este fix).
-const ALLOWED_ID_DOCUMENT_MIME_TYPES = new Set([
-  'image/jpeg',
-  'image/png',
-  'image/webp',
-  'application/pdf',
-]);
+// La lista en sí ahora vive en `@property-manager/core/id-document`, para que
+// el formulario público (ApplyPage.tsx) la consuma también y no vuelva a
+// desalinearse con esta validación.
 
 /**
  * Tope de espera del disparo del screening dentro del request HTTP. Muy por
@@ -277,8 +275,8 @@ export async function submitRentalApplication(
     return { ok: false, status: 400, error: 'A photo ID document is required' };
   }
   // Critical 1 (revisión final): allowlist estricta, no un chequeo truthy —
-  // ver el comentario largo junto a ALLOWED_ID_DOCUMENT_MIME_TYPES arriba.
-  if (!ALLOWED_ID_DOCUMENT_MIME_TYPES.has(input.idDocumentMimeType)) {
+  // ver el comentario largo arriba sobre el origen de esta validación.
+  if (!isAllowedIdDocumentMimeType(input.idDocumentMimeType)) {
     return { ok: false, status: 400, error: 'Unsupported ID document file type' };
   }
   if (input.idDocumentBase64.length > MAX_ID_DOCUMENT_BASE64_LENGTH) {
@@ -407,7 +405,7 @@ export async function getIdDocumentForDownload(
   // persistido. Se re-valida contra la MISMA allowlist que usa el lado de
   // recepción arriba; cualquier valor fuera de ella (incluye null legacy)
   // cae al fallback seguro, igual que ya hacía el caso null.
-  const contentType = application.idDocumentMimeType && ALLOWED_ID_DOCUMENT_MIME_TYPES.has(application.idDocumentMimeType)
+  const contentType = isAllowedIdDocumentMimeType(application.idDocumentMimeType)
     ? application.idDocumentMimeType
     : 'application/octet-stream';
   return { ok: true, file, contentType };

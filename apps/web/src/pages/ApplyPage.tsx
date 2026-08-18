@@ -1,6 +1,7 @@
 import { type ChangeEvent, type FormEvent, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { useMutation, useQuery } from '@tanstack/react-query';
+import { ALLOWED_ID_DOCUMENT_MIME_TYPES, isAllowedIdDocumentMimeType } from '@property-manager/core/id-document';
 import { apiFetch } from '../lib/apiClient';
 
 type ApplicationSummary = {
@@ -27,6 +28,11 @@ const MAX_ID_DOCUMENT_BASE64_LENGTH = 1_500_000;
 const MAX_ID_DOCUMENT_BYTES = Math.floor((MAX_ID_DOCUMENT_BASE64_LENGTH * 3) / 4);
 const MAX_ID_DOCUMENT_MB = (MAX_ID_DOCUMENT_BYTES / (1024 * 1024)).toFixed(1);
 
+// Derivado de la allowlist compartida, no una cadena literal: cuando estaban
+// duplicadas, el `accept` quedó ofreciendo tipos que el servidor rechazaba.
+const ID_DOCUMENT_ACCEPT = ALLOWED_ID_DOCUMENT_MIME_TYPES.join(',');
+const ID_DOCUMENT_FORMATS_LABEL = 'JPEG, PNG, WebP or PDF';
+
 // Export nombrado, no default: es la convención de las páginas de este
 // repo (ver ShortlistPage).
 export function ApplyPage() {
@@ -47,6 +53,17 @@ export function ApplyPage() {
 
   function handleIdFileChange(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0] ?? null;
+    // `accept` es solo una sugerencia — arrastrar-y-soltar y algunos
+    // selectores de Android lo ignoran. Esto es UX, no seguridad: el
+    // servidor revalida con la misma allowlist compartida.
+    if (file && !isAllowedIdDocumentMimeType(file.type)) {
+      setError(
+        `That file type isn't supported. Please upload your ID as ${ID_DOCUMENT_FORMATS_LABEL}. If you're on an iPhone, choosing the photo from your photo library converts it automatically.`,
+      );
+      setIdFile(null);
+      event.target.value = '';
+      return;
+    }
     if (file && file.size > MAX_ID_DOCUMENT_BYTES) {
       setError(
         `That file is too large (max ~${MAX_ID_DOCUMENT_MB} MB). Try taking the photo at a lower resolution, or upload a smaller image.`,
@@ -140,7 +157,7 @@ export function ApplyPage() {
           <input
             type="file"
             required
-            accept="image/*,application/pdf"
+            accept={ID_DOCUMENT_ACCEPT}
             onChange={handleIdFileChange}
             className="mt-1 w-full text-sm"
           />
