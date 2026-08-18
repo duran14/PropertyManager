@@ -1,9 +1,10 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { prisma } from '../config/db.js';
 import { getListingFeed } from '../services/listing-feed.service.js';
 import {
   buildPropertyCreateData,
-  countSyndicatedRows,
   propertySchema,
   resolveOwnerId,
 } from './properties.js';
@@ -238,24 +239,12 @@ describe('buildPropertyCreateData', () => {
  * Fase 4.1: `GET /properties/syndication-status` delega en `getListingFeed`
  * (que ya tiene sus propios tests de integración en
  * `listing-feed.service.test.ts`, Task 3). Lo que falta cubrir acá es la
- * lógica propia de la ruta: el conteo derivado del CSV y la construcción de
- * la `feedUrl` — extraída a `countSyndicatedRows` para poder testearla sin
- * `supertest` (este repo no lo tiene, ver leads.test.ts).
+ * lógica propia de la ruta: la construcción de la `feedUrl` y el conteo,
+ * que la ruta consume directo de `syndicatedCount` (calculado por
+ * `getListingFeed` a partir del arreglo de entradas, no del CSV — ver
+ * ronda de corrección 1: contar líneas físicas del CSV se infla con
+ * cualquier campo citado por RFC 4180 que traiga un salto de línea).
  */
-describe('countSyndicatedRows', () => {
-  it('no cuenta el encabezado', () => {
-    expect(countSyndicatedRows('home_listing_id,name\nu1,Casa\nu2,Depa\n')).toBe(2);
-  });
-
-  it('devuelve 0 con solo encabezado', () => {
-    expect(countSyndicatedRows('home_listing_id,name\n')).toBe(0);
-  });
-
-  it('devuelve 0 con cadena vacía', () => {
-    expect(countSyndicatedRows('')).toBe(0);
-  });
-});
-
 const TENANT_SYND_STATUS = 'tenant_test_syndication_status';
 
 /** Crea propiedad + unidad + fotos en un solo paso (copiado de listing-feed.service.test.ts: archivo distinto, sin helpers compartidos entre tests). */
@@ -328,10 +317,39 @@ describe('estado de sindicación', () => {
     await seedListing({ tenantId: TENANT_SYND_STATUS, slug: 'sync-status-complete' });
     await seedListing({ tenantId: TENANT_SYND_STATUS, slug: 'sync-status-no-year', yearBuilt: null });
 
-    const { csv, skipped } = await getListingFeed(TENANT_SYND_STATUS, new Date());
+    const { syndicatedCount, skipped } = await getListingFeed(TENANT_SYND_STATUS, new Date());
 
-    expect(countSyndicatedRows(csv)).toBe(1);
+    expect(syndicatedCount).toBe(1);
     expect(skipped).toHaveLength(1);
     expect(skipped[0]?.reason).toBe('missing_year_built');
+  });
+});
+
+/**
+ * Important (Task 4, ronda de corrección 1): ningún test ejercitaba el
+ * handler en sí — el único test de la lógica llama a `getListingFeed(...)`
+ * directo, saltándose `requireUser(req).tenantId`. El revisor mutó la ruta
+ * para pasar un tenant fijo y los 21 tests previos siguieron pasando. Este
+ * repo no tiene `supertest`, así que se usa la misma convención de grep
+ * sobre el código fuente que ya usa `leads.test.ts`.
+ */
+describe('wiring de GET /properties/syndication-status', () => {
+  const routeSource = readFileSync(
+    join(process.cwd(), 'src', 'routes', 'properties.ts'),
+    'utf8',
+  );
+
+  it('pasa el tenant del usuario autenticado, no un valor fijo', () => {
+    const idx = routeSource.indexOf("'/syndication-status'");
+    expect(idx).toBeGreaterThan(-1);
+    const handler = routeSource.slice(idx, idx + 900);
+    expect(handler).toContain('requireUser(req)');
+    expect(handler).toContain('getListingFeed(user.tenantId');
+  });
+
+  it('exige autenticación', () => {
+    const idx = routeSource.indexOf("'/syndication-status'");
+    const declaration = routeSource.slice(idx, idx + 120);
+    expect(declaration).toContain('requireAuth');
   });
 });

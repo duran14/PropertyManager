@@ -17,7 +17,7 @@ import { getEnv } from '../config/env.js';
 export async function getListingFeed(
   tenantId: string,
   now: Date,
-): Promise<{ csv: string; skipped: SkippedListing[] }> {
+): Promise<{ csv: string; syndicatedCount: number; skipped: SkippedListing[] }> {
   const units = await prisma.unit.findMany({
     where: { tenantId, isActive: true },
     include: {
@@ -60,5 +60,11 @@ export async function getListingFeed(
     tenantId,
   });
 
-  return { csv: serializeListingFeedCsv(entries), skipped };
+  // Fase 4.1 fix (Task 4, ronda de corrección 1): el conteo se deriva de
+  // `entries.length`, no de partir el CSV por saltos de línea. El
+  // serializador cita correctamente (RFC 4180) los campos con saltos de
+  // línea — una dirección multilínea produce una fila lógica válida que
+  // ocupa varias líneas físicas, así que contar líneas del CSV infla el
+  // resultado.
+  return { csv: serializeListingFeedCsv(entries), syndicatedCount: entries.length, skipped };
 }

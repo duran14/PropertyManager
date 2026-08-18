@@ -123,4 +123,21 @@ describe('getListingFeed', () => {
     expect(csv).toContain('https://cdn.example.com/nice.jpg');
     expect(csv).not.toContain('https://cdn.example.com/raw.jpg');
   });
+
+  // Ronda de corrección 1 (Task 4): `syndicatedCount` se deriva de
+  // `entries.length`, no de contar líneas físicas del CSV serializado.
+  it('cuenta filas lógicas, no líneas físicas, con una dirección multilínea', async () => {
+    // Una dirección con salto de línea produce una fila CSV válida que ocupa
+    // dos líneas físicas. El conteo debe seguir siendo 1.
+    await seedListing({ tenantId: TENANT_A, slug: 'a-multiline' });
+    await prisma.property.updateMany({
+      where: { tenantId: TENANT_A },
+      data: { address: '123 Main St\nApt 4B' },
+    });
+    const { csv, syndicatedCount } = await getListingFeed(TENANT_A, NOW);
+    expect(syndicatedCount).toBe(1);
+    // Y confirma que el CSV efectivamente ocupa más líneas físicas que filas:
+    // si no, el test no está probando lo que dice.
+    expect(csv.trim().split('\n').length).toBeGreaterThan(2);
+  });
 });

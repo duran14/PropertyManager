@@ -78,13 +78,6 @@ propertiesRouter.get('/', requireAuth, async (req, res, next) => {
   }
 });
 
-/** Filas del CSV menos el encabezado. Un feed vacío trae solo esa línea. */
-export function countSyndicatedRows(csv: string): number {
-  const trimmed = csv.trim();
-  if (trimmed === '') return 0;
-  return Math.max(0, trimmed.split('\n').length - 1);
-}
-
 // Fase 4.1: qué está y qué no está entrando al feed de sindicación. Sin
 // esto la omisión es silenciosa y el PM cree que sindica más de lo que
 // sindica.
@@ -94,14 +87,19 @@ export function countSyndicatedRows(csv: string): number {
 // `propertiesRouter.get('/:propertyId', ...)` que exista en este router, o
 // Express tomaría "syndication-status" como si fuera un `propertyId` y esta
 // ruta jamás se ejecutaría.
+//
+// Fix (Task 4, ronda de corrección 1): el conteo NO se deriva del CSV
+// (contar líneas físicas infla el resultado con cualquier campo citado por
+// RFC 4180 que traiga un salto de línea, ej. una dirección multilínea).
+// `getListingFeed` devuelve `syndicatedCount` ya calculado desde el arreglo
+// de entradas, antes de serializar.
 propertiesRouter.get('/syndication-status', requireAuth, async (req, res, next) => {
   try {
     const user = requireUser(req);
-    const { csv, skipped } = await getListingFeed(user.tenantId, new Date());
-    const syndicated = countSyndicatedRows(csv);
+    const { syndicatedCount, skipped } = await getListingFeed(user.tenantId, new Date());
     const base = getEnv().WEB_URL.replace(/\/+$/, '');
     res.json({
-      syndicated,
+      syndicated: syndicatedCount,
       skipped,
       feedUrl: `${base}/api/public/listing-feed?tenant=${encodeURIComponent(user.tenantId)}`,
     });
