@@ -65,6 +65,44 @@ describe('buildListingFeed — qué entra y qué se omite', () => {
   });
 });
 
+describe('buildListingFeed — precedencia cuando fallan varios criterios a la vez', () => {
+  it('año de construcción y coordenadas ausentes: reporta missing_year_built', () => {
+    const result = buildListingFeed(
+      [makeInput({ yearBuilt: null, latitude: null })],
+      NOW,
+      BASE,
+    );
+    expect(result.skipped[0]?.reason).toBe('missing_year_built');
+  });
+
+  it('año de construcción y fotos ausentes: reporta missing_year_built', () => {
+    const result = buildListingFeed(
+      [makeInput({ yearBuilt: null, photoUrls: [] })],
+      NOW,
+      BASE,
+    );
+    expect(result.skipped[0]?.reason).toBe('missing_year_built');
+  });
+
+  it('coordenadas y fotos ausentes: reporta missing_coordinates', () => {
+    const result = buildListingFeed(
+      [makeInput({ latitude: null, photoUrls: [] })],
+      NOW,
+      BASE,
+    );
+    expect(result.skipped[0]?.reason).toBe('missing_coordinates');
+  });
+
+  it('los tres criterios ausentes a la vez: reporta missing_year_built', () => {
+    const result = buildListingFeed(
+      [makeInput({ yearBuilt: null, latitude: null, longitude: null, photoUrls: [] })],
+      NOW,
+      BASE,
+    );
+    expect(result.skipped[0]?.reason).toBe('missing_year_built');
+  });
+});
+
 describe('buildListingFeed — mapeo de campos', () => {
   it('convierte centavos a unidades de moneda y fija CAD/CA', () => {
     const [entry] = buildListingFeed([makeInput({ rentCents: 250000 })], NOW, BASE).entries;
